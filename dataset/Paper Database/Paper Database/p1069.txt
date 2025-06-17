@@ -1,0 +1,588 @@
+Tokens-to-Token ViT: Training Vision Transformers from Scratch on ImageNet
+Li Yuan1*, Yunpeng Chen2, Tao Wang1,3∗, Weihao Yu1, Yujun Shi1,
+Zihang Jiang1, Francis E.H. Tay1, Jiashi Feng1, Shuicheng Yan1
+1 National University of Singapore
+2 YITU Technology
+3 Institute of Data Science, National University of Singapore
+ , , 
+Transformers, which are popular for language modeling,
+have been explored for solving vision tasks recently, e.g.,
+the Vision Transformer (ViT) for image classiﬁcation. The
+ViT model splits each image into a sequence of tokens with
+ﬁxed length and then applies multiple Transformer layers
+to model their global relation for classiﬁcation. However,
+ViT achieves inferior performance to CNNs when trained
+from scratch on a midsize dataset like ImageNet. We ﬁnd
+it is because: 1) the simple tokenization of input images
+fails to model the important local structure such as edges
+and lines among neighboring pixels, leading to low training sample efﬁciency; 2) the redundant attention backbone
+design of ViT leads to limited feature richness for ﬁxed computation budgets and limited training samples. To overcome
+such limitations, we propose a new Tokens-To-Token Vision Transformer (T2T-ViT), which incorporates 1) a layerwise Tokens-to-Token (T2T) transformation to progressively
+structurize the image to tokens by recursively aggregating
+neighboring Tokens into one Token (Tokens-to-Token), such
+that local structure represented by surrounding tokens can
+be modeled and tokens length can be reduced; 2) an ef-
+ﬁcient backbone with a deep-narrow structure for vision
+transformer motivated by CNN architecture design after
+empirical study. Notably, T2T-ViT reduces the parameter
+count and MACs of vanilla ViT by half, while achieving
+more than 3.0% improvement when trained from scratch on
+ImageNet. It also outperforms ResNets and achieves comparable performance with MobileNets by directly training
+on ImageNet. For example, T2T-ViT with comparable size
+to ResNet50 (21.5M parameters) can achieve 83.3% top1
+accuracy in image resolution 384×384 on ImageNet. 1
+1. Introduction
+Self-attention models for language modeling like Transformers have been recently applied to vision tasks,
+including image classiﬁcation , object detec-
+*Work done during an internship at Yitu Tech.
+1Code: 
+Figure 1. Comparison between T2T-ViT with ViT, ResNets and
+MobileNets when trained from scratch on ImageNet. Left: performance curve of MACs vs. top-1 accuracy. Right: performance
+curve of model size vs. top-1 accuracy.
+tion and image processing like denoising, superresolution and deraining .
+Among them, the Vision
+Transformer (ViT) is the ﬁrst full-transformer model
+that can be directly applied for image classiﬁcation. In particular, ViT splits each image into 14×14 or 16×16 patches
+(a.k.a., tokens) with ﬁxed length; then following practice of
+the transformer for language modeling, ViT applies transformer layers to model the global relation among these tokens for classiﬁcation.
+Though ViT proves the full-transformer architecture is
+promising for vision tasks, its performance is still inferior
+to that of similar-sized CNN counterparts (e.g. ResNets)
+when trained from scratch on a midsize dataset (e.g., ImageNet). We hypothesize that such performance gap roots
+in two main limitations of ViT: 1) the straightforward tokenization of input images by hard split makes ViT unable
+to model the image local structure like edges and lines,
+and thus it requires signiﬁcantly more training samples (like
+JFT-300M for pretraining) than CNNs for achieving similar
+performance; 2) the attention backbone of ViT is not welldesigned as CNNs for vision tasks, which contains redundancy and leads to limited feature richness and difﬁculties
+in model training.
+To verify our hypotheses, we conduct a pilot study to
+investigate the difference in the learned features of ViT-
+L/16 and ResNet50 through visualization in Fig. 2.
+We observe the features of ResNet capture the desired local
+ 
+ResNet50: conv1
+ViT-L/16: block24
+ResNet50: conv25
+ViT-L/16: block12
+T2T-ViT-24: block12
+T2T-ViT-24: block24
+ResNet50: conv49
+ViT-L/16: block1
+T2T-ViT-24: T2T block1
+Figure 2. Feature visualization of ResNet50, ViT-L/16 and our proposed T2T-ViT-24 trained on ImageNet. Green boxes highlight
+learned low-level structure features such as edges and lines; red boxes highlight invalid feature maps with zero or too large values. Note the
+feature maps visualized here for ViT and T2T-ViT are not attention maps, but image features reshaped from tokens. For better visualization,
+we scale the input image to size 1024 × 1024 or 2048 × 2048.
+structure (edges, lines, textures, etc.) progressively from the
+bottom layer (conv1) to the middle layer (conv25). However, the features of ViT are quite different: the structure
+information is poorly modeled while the global relations
+(e.g., the whole dog) are captured by all the attention blocks.
+These observations indicate that the vanilla ViT ignores the
+local structure when directly splitting images to tokens with
+ﬁxed length. Besides, we ﬁnd many channels in ViT have
+zero value (highlighted in red in Fig. 2), implying the backbone of ViT is not efﬁcient as ResNets and offers limited
+feature richness when training samples are not enough.
+We are then motivated to design a new full-transformer
+vision model to overcome above limitations. 1) Instead of
+the naive tokenization used in ViT , we propose a progressive tokenization module to aggregate neighboring Tokens to one Token (named Tokens-to-Token module), which
+can model the local structure information of surrounding
+tokens and reduce the length of tokens iteratively. Speciﬁcally, in each Token-to-Token (T2T) step, the tokens output
+by a transformer layer are reconstructed as an image (restructurization) which is then split into tokens with overlapping (soft split) and ﬁnally the surrounding tokens are
+aggregated together by ﬂattening the split patches. Thus
+the local structure from surrounding patches is embedded
+into the tokens to be input into the next transformer layer.
+By conducting T2T iteratively, the local structure is aggregated into tokens and the length of tokens can be reduced
+by the aggregation process. 2) To ﬁnd an efﬁcient backbone for vision transformers, we explore borrowing some
+architecture designs from CNNs to build transformer layers for improving the feature richness, and we ﬁnd “deepnarrow” architecture design with fewer channels but more
+layers in ViT brings much better performance at comparable model size and MACs (Multi-Adds). Speciﬁcally, we
+investigate Wide-ResNets (shallow-wide vs deep-narrow
+structure) , DenseNet (dense connection) , ResneXt
+structure , Ghost operation and channel attention . We ﬁnd among them, deep-narrow structure 
+is the most efﬁcient and effective for ViT, reducing the parameter count and MACs signiﬁcantly with nearly no degradation in performance. This also indicates the architecture
+engineering of CNNs can beneﬁt the backbone design of
+vision transformers.
+Based on the T2T module and deep-narrow backbone architecture, we develop the Tokens-to-Token Vision Transformer (T2T-ViT), which signiﬁcantly boosts the performance when trained from scratch on ImageNet (Fig. 1), and
+is more lightweight than the vanilla ViT. As shown in Fig. 1,
+our T2T-ViT with 21.5M parameters and 4.8G MACs can
+achieve 81.5% top-1 accuracy on ImageNet, much higher
+than that of ViT with 48.6M parameters and 10.1G
+MACs (78.1%). This result is also higher than the popular CNNs of similar size, like ResNet50 with 25.5M parameters (76%-79%). Besides, we also design lite variants of
+T2T-ViT by simply adopting fewer layers, which achieve
+comparable results with MobileNets (Fig. 1).
+To sum up, our contributions are three-fold:
+• For the ﬁrst time, we show by carefully designing
+transformers architecture (T2T module and efﬁcient
+backbone), visual transformers can outperform CNNs
+at different complexities on ImageNet without pretraining on JFT-300M.
+• We develop a novel progressive tokenization for ViT
+and demonstrate its advantage over the simple tokenization approach by ViT, and we propose a T2T
+module that can encode the important local structure
+for each token.
+• We show the architecture engineering of CNNs can
+beneﬁt the backbone design of ViT to improve the feature richness and reduce redundancy. Through extensive experiments, we ﬁnd deep-narrow architecture design works best for ViT.
+2. Related Work
+Transformers in Vision
+Transformers are the models that entirely rely on the self-attention mechanism
+to draw global dependencies between input and output,
+and currently they have dominated natural language modelling .
+A transformer layer usually consists of a multi-head self-attention layer (MSA) and
+an MLP block.
+Layernorm (LN) is applied before each
+layer and residual connections in both the self-attention
+layer and MLP block. Recent works have explored applying transformers to various vision tasks: image classiﬁcation , object detection , segmentation , image enhancement , image generation , video processing , and 3D point cloud
+processing .
+Among them, the Vision Transformer
+(ViT) proves that a pure Transformer architecture can also
+attain state-of-the-art performance on image classiﬁcation.
+However, ViT heavily relies on large-scale datasets such as
+ImageNet-21k and JFT-300M (which is not publically available) for model pretraining, requiring huge computation resources. In contrast, our proposed T2T-ViT is more efﬁcient
+and can be trained on ImageNet without using those largescale datasets. A recent concurrent work DeiT applies
+Knowledge Distillation to improve the original ViT
+by adding a KD token along with the class token, which is
+orthogonal to our work, as our T2T-ViT focuses on the architecture design, and our T2T-ViT can achieve higher performance than DeiT without CNN as teacher model.
+Self-attention in CNNs
+Self-attention mechanism has
+been widely applied to CNNs in vision task .
+Among these
+works, the SE block applies attention to channel dimensions and non-local networks are designed for capturing long-range dependencies via global attention. Compared with most of the works exploring global attention on
+images , some works also explore
+self-attention in a local patch to reduce the memory and
+computation cost.
+More recently, SAN investigates
+both pairwise and patchwise self-attention for image recognition, where the patchwise self-attention is a generalization
+of convolution. In this work, we also replace the T2T module with multiple convolution layers in experiments and ﬁnd
+the convolution layers do not perform better than our designed T2T module.
+Tokens to Token
+T2T Transformer
+T2T Transformer
+T2T process
+step2: soft split1
+step1: re-structurization
+Figure 3. Illustration of T2T process.
+The tokens Ti are restructurized as an image Ii after transformation and reshaping;
+then Ii is split with overlapping to tokens Ti+1 again. Speciﬁcally,
+as shown in the pink panel, the four tokens (1,2,4,5) of the input
+Ii are concatenated to form one token in Ti+1. The T2T transformer can be a normal Transformer layer or other efﬁcient
+transformers like Performer layer at limited GPU memory.
+3. Tokens-to-Token ViT
+To overcome the limitations of simple tokenization and
+inefﬁcient backbone of ViT, we propose Tokens-to-Token
+Vision Transformer (T2T-ViT) which can progressively tokenize the image to tokens and has an efﬁcient backbone.
+Hence, T2T-ViT consists of two main components (Fig. 4):
+1) a layer-wise “Tokens-to-Token module” (T2T module)
+to model the local structure information of the image and
+reduce the length of tokens progressively; 2) an efﬁcient
+“T2T-ViT backbone” to draw the global attention relation
+on tokens from the T2T module. We adopt a deep-narrow
+structure for the backbone to reduce redundancy and improve the feature richness after exploring several CNNbased architecture designs. We now explain these components one by one.
+3.1. Tokens-to-Token: Progressive Tokenization
+The Token-to-Token (T2T) module aims to overcome the
+limitation of simple tokenization in ViT. It progressively
+structurizes an image to tokens and models the local structure information, and in this way the length of tokens can
+be reduced iteratively. Each T2T process has two steps: Restructurization and Soft Split (SS) (Fig. 3).
+Re-structurization
+As shown in Fig. 3, given a sequence
+of tokens T from the preceding transformer layer, it will
+be transformed by the self-attention block (the T2T transformer in Fig. 3):
+T ′ = MLP(MSA(T)),
+where MSA denotes the multihead self-attention operation
+with layer normalization and “MLP” is the multilayer perceptron with layer normalization in the standard Transformer . Then the tokens T ′ will be reshaped as an
+image in the spatial dimension,
+I = Reshape(T ′).
+Here “Reshape” re-organizes tokens T ′ ∈Rl×c to I ∈
+Rh×w×c, where l is the length of T ′, h, w, c are height,
+width and channel respectively, and l = h × w.
+Soft Split
+As shown in Fig. 3, after obtaining the restructurized image I, we apply the soft split on it to model
+local structure information and reduce length of tokens.
+Speciﬁcally, to avoid information loss in generating tokens
+from the re-structurizated image, we split it into patches
+with overlapping. As such, each patch is correlated with
+surrounding patches to establish a prior that there should
+be stronger correlations between surrounding tokens. The
+tokens in each split patch are concatenated as one token
+(Tokens-to-Token, Fig. 3), and thus the local information
+can be aggregated from surrounding pixels and patches.
+When conducting the soft split, the size of each patch is
+k×k with s overlapping and p padding on the image, where
+k−s is similar to the stride in convolution operation. So for
+the reconstructed image I ∈Rh×w×c, the length of output
+tokens To after soft split is
+h + 2p −k
+w + 2p −k
+Each split patch has size k × k × c. We ﬂatten all patches in
+spatial dimensions to tokens To ∈Rlo×ck2. After the soft
+split, the output tokens are fed for the next T2T process.
+T2T module
+By conducting the above Re-structurization
+and Soft Split iteratively, the T2T module can progressively
+reduce the length of tokens and transform the spatial structure of the image. The iterative process in T2T module can
+be formulated as
+i = MLP(MSA(Ti),
+Ii = Reshape(T ′
+Ti+1 = SS(Ii),
+i = 1...(n −1).
+For the input image I0, we apply a soft split at ﬁrst to split
+it to tokens: T1 = SS(I0). After the ﬁnal iteration, the
+output tokens Tf of the T2T module has ﬁxed length, so the
+backbone of T2T-ViT can model the global relation on Tf.
+Additionally, as the length of tokens in the T2T module
+is larger than the normal case (16 × 16) in ViT, the MACs
+and memory usage are huge. To address the limitations, in
+our T2T module, we set the channel dimension of the T2T
+layer small (32 or 64) to reduce MACs, and optionally adopt
+an efﬁcient Transformer such as Performer layer to reduce memory usage at limited GPU memory. We provide an
+ablation study on the difference between adopting standard
+Transformer layer and Performer layer in our experiments.
+3.2. T2T-ViT Backbone
+As many channels in the backbone of vanilla ViT are invalid (Fig. 2), we plan to ﬁnd an efﬁcient backbone for our
+T2T-ViT to reduce the redundancy and improve the feature
+richness. Thus we explore different architecture designs for
+ViT and borrow some designs from CNNs to improve the
+backbone efﬁciency and enhance the richness of the learned
+features. As each transformer layer has skip connection as
+ResNets, a straightforward idea is to apply dense connection as DenseNet to increase the connectivity and feature richness, or apply Wide-ResNets or ResNeXt structure
+to change the channel dimension and head number in the
+backbone of ViT. We explore ﬁve architecture designs from
+CNNs to ViT:
+1. Dense connection as DenseNet ;
+2. Deep-narrow vs. shallow-wide structure as in Wide-
+ResNets ;
+3. Channel attention as Squeeze-an-Excitation (SE) Networks ;
+4. More split heads in multi-head attention layer as
+ResNeXt ;
+5. Ghost operations as GhostNet .
+The details of these structure designs in ViT are given in the
+appendix. We conduct extensive experiments on the structures transferring in Sec. 4.2. We empirically ﬁnd that 1)
+by adopting a deep-narrow structure that simply decreases
+channel dimensions to reduce the redundancy in channels
+and increase layer depth to improve feature richness in ViT,
+both the model size and MACs are decreased but performance is improved; 2) the channel attention as SE block
+also improves ViT but is less effective than using the deepnarrow structure.
+Based on these ﬁndings, we design a deep-narrow architecture for our T2T-ViT backbone. Speciﬁcally, it has a
+small channel number and a hidden dimension d but more
+layers b. For tokens with ﬁxed length Tf from the last layer
+of T2T module, we concatenate a class token to it and then
+add Sinusoidal Position Embedding (PE) to it, the same as
+ViT to do classiﬁcation:
+Tf0 = [tcls; Tf] + E,
+E ∈R(l+1)×d
+Tfi = MLP(MSA(Tfi−1)),
+y = fc(LN(Tfb))
+where E is Sinusoidal Position Embedding, LN is layer normalization, fc is one fully-connected layer for classiﬁcation
+and y is the output prediction.
+Fixed Tokens
+Transformer layer
+Transformer layer
+T2T-ViT Backbone
+Tokens-to-Token module
+T2T Transformer
+T2T Transformer
+Figure 4. The overall network architecture of T2T-ViT. In the T2T module, the input image is ﬁrst soft split as patches, and then unfolded
+as a sequence of tokens T0. The length of tokens is reduced progressively in the T2T module (we use two iterations here and output Tf).
+Then the T2T-ViT backbone takes the ﬁxed tokens as input and outputs the predictions. The two T2T blocks are the same as Fig. 3 and PE
+is Position Embedding.
+Table 1. Structure details of T2T-ViT. T2T-ViT-14/19/24 have comparable model size with ResNet50/101/152. T2T-ViT-7/12 have comparable model size with MobileNetV1/V2. For T2T transformer layer, we adopt Transformer layer for T2T-ViTt-14 and Performer layer
+for T2T-ViT-14 at limited GPU memory. For ViT, ‘S’ means Small, ‘B’ is Base and ‘L’ is Large. ‘ViT-S/16’ is a variant from original
+ViT-B/16 with smaller MLP size and layer depth.
+Tokens-to-Token module
+T2T-ViT backbone
+Model size
+transformer
+ViT-S/16 
+ViT-B/16 
+ViT-L/16 
+T2T-ViT-14
+T2T-ViT-19
+T2T-ViT-24
+T2T-ViTt-14
+Transformer
+T2T-ViT-12
+3.3. T2T-ViT Architecture
+The T2T-ViT has two parts: the Tokens-to-Token (T2T)
+module and the T2T-ViT backbone (Fig. 4). There are various possible design choices for the T2T module. Here, we
+set n = 2 as shown in Fig. 4, which means there is n+1 = 3
+soft split and n = 2 re-structurization in T2T module. The
+patch size for the three soft splits is P = , and the
+overlapping is S = , which reduces size of the input
+image from 224 × 224 to 14 × 14 according to Eqn. (3).
+The T2T-ViT backbone takes tokens with ﬁxed length
+from the T2T module as input, the same as ViT; but has
+a deep-narrow architecture design with smaller hidden dimensions (256-512) and MLP size (512-1536) than ViT. For
+example, T2T-ViT-14 has 14 transformer layers in T2T-ViT
+backbone with 384 hidden dimensions, while ViT-B/16 has
+12 transformer layers and 768 hidden dimensions, which is
+3x larger than T2T-ViT-14 in parameters and MACs.
+To fairly compare with common hand-designed CNNs,
+we make T2T-ViT models have comparable size with
+ResNets and MobileNets.
+Speciﬁcally, we design three
+T2T-ViT-14, T2T-ViT-19 and T2T-ViT-24 of
+comparable parameters with ResNet50, ResNet101 and
+ResNet152 respectively. To compare with small models like
+MobileNets, we design two lite models: T2T-ViT-7, T2T-
+ViT-12 with comparable model size with MibileNetV1 and
+MibileNetV2. The two lite TiT-ViT have no special designs
+or tricks like efﬁcient convolution and simply reduce
+the layer depth, hidden dimension, and MLP ratio. The network details are summarized in Tab. 1.
+4. Experiments
+We conduct the following experiments with T2T-ViT for
+image classiﬁcation on ImageNet. a) We validate the T2T-
+ViT by training from scratch on ImageNet and compare it
+with some common convolutional neural networks such as
+ResNets and MobileNets of comparable size; we also transfer the pretrained T2T-ViT to downstream datasets such
+as CIFAR10 and CIFAR100 (Sec. 4.1). (b) We compare
+ﬁve T2T-ViT backbone architecture designs inspired from
+CNNs (Sec. 4.2). (c) We conduct ablation study to demonstrate effects of the T2T module and the deep-narrow architecture design of T2T-ViT (Sec. 4.3).
+4.1. T2T-ViT on ImageNet
+All experiments are conducted on ImageNet dataset ,
+with around 1.3 million images in training set and 50k images in validation set. We use batch size 512 or 1024 with 8
+NVIDIA GPUs for training. We adopt Pytorch library
+and Pytorch image models library (timm) to implement
+our models and conduct all experiments. For fair comparisons, we implement the same training scheme for the CNN
+models, ViT, and our T2T-ViT. Throughout the experiments
+on ImageNet, we set default image size as 224×224 except
+for some speciﬁc cases on 384 × 384, and adopt some common data augmentation methods such as mixup and
+cutmix for both CNN and ViT&T2T-ViT model
+training, because ViT models need more training data to
+reach reasonable performance. We train these models for
+310 epochs, using AdamW as the optimizer and cosine learning rate decay . The details of experiment setting are given in appendix. We also use both Transformer
+layer and Performer layer in T2T module for our models, resulting in T2T-ViTt-14/19/24 (Transformer) and T2T-ViT-
+14/19/24 (Performer).
+T2T-ViT vs. ViT
+We ﬁrst compare performance of T2T-
+ViT and ViT on ImageNet. The results are given in Tab. 2.
+Our T2T-ViT is much smaller than ViT in number of parameters and MACs, yet giving higher performance. For
+example, the small ViT model ViT-S/16 with 48.6M and
+10.1G MACs has 78.1% top-1 accuracy when trained from
+scratch on ImageNet, while our T2T-ViTt-14 with only
+44.2% parameters and 51.5% MACs achieves more than
+3.0% improvement (81.5%). If we compare T2T-ViTt-24
+with ViT-L/16, the former reduces parameters and MACs
+around 500% but achieves more than 1.0% improvement
+on ImageNet. Comparing T2T-ViT-14 with DeiT-small and
+DeiT-small-Distilled, our T2T-ViT can achieve higher accuracy without large CNN models as teacher to enhance ViT.
+We also adopt higher image resolution as 384×384 and get
+83.3% accuracy by our T2T-ViT-14↑384.
+T2T-ViT vs.
+For fair comparisons, we set up
+three T2T-ViT models that have similar model size and
+MACs with ResNet50, ResNet101 and ResNet152. The experimental results are given in Tab. 3. The proposed T2T-
+ViT achieves 1.4%-2.7% performance gain over ResNets
+with similar model size and MACs. For example, compared
+with ResNet50 of 25.5M parameters and 4.3G MACs, our
+T2T-ViT-14 have 21.5M parameters and 4.8G MACs obtain
+81.5% accuracy on ImageNet.
+T2T-ViT vs. MobileNets
+The T2T-ViT-7 and T2T-ViT-
+12 have similar model size with MobileNetV1 and Mo-
+Table 2. Comparison between T2T-ViT and ViT by training from
+scratch on ImageNet.
+Top1-Acc (%)
+ViT-S/16 
+DeiT-small 
+DeiT-small-Distilled 
+T2T-ViT-14
+T2T-ViT-14↑384
+ViT-B/16 
+ViT-L/16 
+T2T-ViT-24
+Table 3. Comparison between our T2T-ViT with ResNets on ImageNet. T2T-ViTt-14: using Transformer in T2T module. T2T-
+ViT-14: using Performer in T2T module. * means we train the
+model with our training scheme for fair comparisons.
+Top1-Acc (%)
+ResNet50 
+T2T-ViT-14
+T2T-ViTt-14
+ResNet101 
+ResNet101*
+T2T-ViT-19
+T2T-ViTt-19
+ResNet152 
+ResNet152*
+T2T-ViT-24
+T2T-ViTt-24
+bileNetV2 , but achieve comparable or higher performance than MobileNets (Tab. 4). For example, Our T2T-
+ViT-12 with 6.9M parameters achieves 76.5% top1 accuracy, which is higher than MobileNetsV21.4x by 0.9%. But
+we also note the MACs of our T2T-ViT are still larger than
+MobileNets because of the dense operations in Transformers. However, there are no special operations or tricks like
+efﬁcient convolution in current T2T-ViT-7 and T2T-
+ViT-12, and we only reduce model size by reducing the hidden dimension, MLP ratio and depth of layers, indicating
+T2T-ViT is also very promising as a lite model. We also apply knowledge distillation on our T2T-ViT as the concurrent
+work DeiT and ﬁnd that our T2T-ViT-7 and T2T-ViT-
+12 can be further improved by distillation. Overall, the experimental results show, our T2T-ViT can achieve superior
+performance when it has mid-size as ResNets and reasonable results when it has a small model size as MobileNets.
+Transfer learning
+We transfer our pretrained T2T-ViT to
+downstream datasets such as CIFAR10 and CIFAR100. We
+Table 4. Comparison between our lite T2T-ViT with MobileNets.
+Models with ’-Distilled’ are taught by teacher model with the
+method as DeiT .
+Top1-Acc (%)
+MobileNetV1 1.0x*
+T2T-ViT-7-Distilled
+MobileNetV2 1.0x*
+MobileNetV2 1.4x*
+MobileNetV3 (Searched)
+T2T-ViT-12
+T2T-ViT-12-Distilled
+Table 5. The results of ﬁne-tuning the pretrained T2T-ViT to downstream datasets: CIFAR10 and CIFAR100.
+Params (M)
+T2T-ViT-14
+T2T-ViT-19
+ﬁnetune the pretrained T2T-ViT-14/19 with 60 epochs by
+using SGD optimizer and cosine learning rate decay.The
+results are given in Tab. 5.
+We ﬁnd that our T2T-ViT
+can achieve higher performance than the original ViT with
+smaller model sizes on the downstream datasets.
+4.2. From CNN to ViT
+To ﬁnd an efﬁcient backbone for vision transformers,
+we experimentally apply DenseNet structure, Wide-ResNet
+structure (wide or narrow channel dimensions), SE block
+(channel attention), ResNeXt structure (more heads in multihead attention), and Ghost operation from CNN to ViT.
+The details of these architecture designs are given in the
+appendix. From experimental results on “CNN to ViT” in
+Tab. 6, we can ﬁnd both SE (ViT-SE) and Deep-Narrow
+structure (ViT-DN) beneﬁt the ViT but the most effective
+structure is deep-narrow structure, which decreases model
+size and MACs nearly 2x and brings 0.9% improvement on
+the baseline model ViT-S/16.
+We further apply these structures from CNN to our T2T-
+ViT, and conduct experiments on ImageNet under the same
+training scheme.
+We take ResNet50 as the baseline for
+CNN, ViT-S/16 for ViT, and T2T-ViT-14 for T2T-ViT. All
+experimental results are given in Tab. 6, and those on CNN
+and ViT&T2T-ViT are marked with the same colors. We
+summarize the effects of each CNN-based structure below.
+Deep-narrow structure beneﬁts ViT:
+The models ViT-
+DN (Deep-Narrow) and ViT-SW (Shallow-Wide) in Tab. 6
+are two opposite designs in channel dimension and layer
+depth, where ViT-DN has 384 hidden dimensions and 16
+layers and ViT-SW has 1,024 hidden dimensions and 4 layers. Compared with the baseline model ViT-S/16 with 768
+hidden dimensions and 8 layers, shallow-wide model ViT-
+SW has 8.2% decrease in performance while ViT-DN with
+only half of model size and MACs achieve 0.9% increase.
+These results validate our hypothesis that vanilla ViT with
+shallow-wide structure is redundant in channel dimensions
+and limited feature richness with shallow layers.
+Dense connection hurts performance of both ViT and
+Compared with the ResNet50, DenseNet201
+has smaller parameters and comparable MACs, while it has
+higher performance. However, the dense connection can
+hurt performance of ViT-Dense and T2T-ViT-Dense (dark
+blue rows in Tab. 6).
+SE block improves both ViT and T2T-ViT:
+rows in Tab. 6, we can ﬁnd SENets, ViT-SE and T2T-ViT-
+SE are higher than the corresponding baseline.
+module can improve performance on both CNN and ViT,
+which means applying attention to channels beneﬁts both
+CNN and ViT models.
+ResNeXt structure has few effects on ViT and T2T-ViT:
+ResNeXts adopt multi-head on ResNets, while Transformers are also multi-head attention structure. When we adopt
+more heads like 32, we can ﬁnd it has few effects on performance (red rows in Tab 6). However, adopting a large
+number of heads makes the GPU memory large, which is
+thus unnecessary in ViT and T2T-ViT.
+Ghost can further compress model and reduce MACs of
+Comparing experimental results of Ghost operation (magenta row in Tab. 6), the accuracy decreases
+2.9% on ResNet50, 2.0% on T2T-ViT, and 4.4% on ViT.
+So the Ghost operation can further reduce the parameters
+and MACs of T2T-ViT with smaller performance degradation than ResNet. But for the original ViT, it would cause
+more decrease than ResNet.
+Besides, for all ﬁve structures, the T2T-ViT performs
+better than ViT, which further validates the superiority of
+our proposed T2T-ViT. And we also wish this study of transferring CNN structure to ViT can motivate the network design of Transformers in vision tasks.
+4.3. Ablation study
+To further identify effects of T2T module and deepnarrow structure, we do ablation study on our T2T-ViT.
+T2T module
+To verify the effects of the proposed T2T
+module, we experimentally compare three different models:
+T2T-ViT-14, T2T-ViT-14wo T 2T , and T2T-ViTt-14, where
+T2T-ViT-14wo T 2T has the same T2T-ViT backbone but
+without T2T module. We can ﬁnd with similar model size
+and MACs, the T2T module can improve model performance by 2.0%-2.2% on ImageNet.
+As the soft split in T2T module is similar to convolution operation without convolution ﬁlters, we also replace
+the T2T module by 3 convolution layers with kernel size
+(7,3,3), stride size (4,2,2) respectively. Such a model with
+Table 6. Transfer of some common designs in CNN to ViT&T2T-ViT, including DenseNet, Wide-ResNet, SE module, ResNeXt, Ghost
+operation. The same color means the correspond transfer. All models are trained from scratch on ImageNet. * means we reproduce the
+model with our training scheme for fair comparisons.
+Model Type
+Top1-Acc (%)
+Params (M)
+Hidden dim
+Traditional CNN
+AlexNet 
+VGG11 
+Inception v3 
+Skip-connection CNN
+ResNet50 
+ResNet50* (Baseline)
+Wide-ResNet18x1.5*
+78.0 (-1.1)
+DenseNet201*
+77.5 (-1.6)
+80.3 (+1.2)
+ResNeXt50*
+79.9 (+0.8)
+ResNet50-Ghost*
+76.2 (-2.9)
+CNN to ViT
+ViT-S/16 (Baseline)
+79.0 (+0.9)
+69.9 (-8.2)
+76.8 (-1.3)
+78.4 (+0.3)
+ViT-ResNeXt
+78.0 (-0.1)
+73.7 (-4.4)
+CNN to T2T-ViT
+T2T-ViT-14 (Baseline)
+T2T-ViT-Wide
+77.9 (-3.4)
+T2T-ViT-Dense
+80.6 (-1.1)
+T2T-ViT-SE
+81.6 (+0.1)
+T2T-ViT-ResNeXt
+81.5 (+0.0)
+T2T-ViT-Ghost
+79.5 (-2.0)
+Table 7. Ablation study results on T2T module, Deep-Narrow(DN)
+structure.
+Ablation type
+T2T module
+T2T-ViT-14wo T 2T
+T2T-ViT-14
+81.5 (+2.0)
+T2T-ViTt-14
+81.7 (+2.2)
+T2T-ViTc-14
+80.8 (+1.3)
+DN Structure
+T2T-ViT-14
+T2T-ViT-d768-4
+78.8 (-2.7)
+convolution layers to build T2T module is denoted as T2T-
+From Tab. 7, we can ﬁnd the T2T-ViTc-14 is
+worse than T2T-ViT-14 and T2T-ViTt-14 by 0.5%-1.0% on
+ImageNet. We also note that the T2T-ViTc-14 is still higher
+than T2T-ViT-14wo T 2T , as the convolution layers in the
+early stage can also model the structure information. But
+our designed T2T module is better than the convolution layers as it can model both the global relation and the structure
+information of the images.
+Deep-narrow structure
+We use the deep-narrow structure with fewer hidden dimensions but more layers, rather
+than the shallow-wide one in the original ViT. We compare the T2T-ViT-14 and T2T-ViT-d768-4 to verify its effects. T2T-ViT-d768-4 is a shallow-wide structure with hidden dimension of 768 and 4 layers, with similar model size
+and MACs as T2T-ViT-14. From Tab. 7, we can ﬁnd after changing our deep-narrow to shallow-wide structure, the
+T2T-ViT-d768-4 has 2.7% decrease in top-1 accuracy, validating deep-narrow structure is crucial for T2T-ViT.
+5. Conclusion
+In this work, we propose a new T2T-ViT model that can
+be trained from scratch on ImageNet and achieve comparable or even better performance than CNNs. T2T-ViT effectively models the structure information of images and enhances feature richness, overcoming limitations of ViT. It
+introduces the novel tokens-to-token (T2T) process to progressively tokenize images to tokens and structurally aggregate tokens. We also explore various architecture design choices from CNNs for improving T2T-ViT performance, and empirically ﬁnd the deep-narrow architecture
+performs better than the shallow-wide structure. Our T2T-
+ViT achieves superior performance to ResNets and comparable performance to MobileNets with similar model size
+when trained from scratch on ImageNet. It paves the way
+for further developing transformer-based models for vision

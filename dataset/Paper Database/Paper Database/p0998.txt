@@ -1,0 +1,974 @@
+SUBMISSION TO IEEE TRANSACTIONS ON PATTERN ANALYSIS AND MACHINE INTELLIGENCE
+Fast Feature Pyramids for Object Detection
+Piotr Doll´ar, Ron Appel, Serge Belongie, and Pietro Perona
+Abstract—Multi-resolution image features may be approximated via extrapolation from nearby scales, rather than being computed
+explicitly. This fundamental insight allows us to design object detection algorithms that are as accurate, and considerably faster, than
+the state-of-the-art. The computational bottleneck of many modern detectors is the computation of features at every scale of a ﬁnelysampled image pyramid. Our key insight is that one may compute ﬁnely sampled feature pyramids at a fraction of the cost, without
+sacriﬁcing performance: for a broad family of features we ﬁnd that features computed at octave-spaced scale intervals are sufﬁcient to
+approximate features on a ﬁnely-sampled pyramid. Extrapolation is inexpensive as compared to direct feature computation. As a result,
+our approximation yields considerable speedups with negligible loss in detection accuracy. We modify three diverse visual recognition
+systems to use fast feature pyramids and show results on both pedestrian detection (measured on the Caltech, INRIA, TUD-Brussels
+and ETH datasets) and general object detection (measured on the PASCAL VOC). The approach is general and is widely applicable
+to vision algorithms requiring ﬁne-grained multi-scale analysis. Our approximation is valid for images with broad spectra (most natural
+images) and fails for images with narrow band-pass spectra (e.g. periodic textures).
+Index Terms—visual features, object detection, image pyramids, pedestrian detection, natural image statistics, real-time systems
+INTRODUCTION
+Multi-resolution multi-orientation decompositions are
+one of the foundational techniques of image analysis.
+The idea of analyzing image structure separately at
+every scale and orientation originated from a number of
+sources: measurements of the physiology of mammalian
+visual systems , , , principled reasoning about
+the statistics and coding of visual information , ,
+ , (Gabors, DOGs, and jets), harmonic analysis ,
+ (wavelets), and signal processing , (multirate
+ﬁltering). Such representations have proven effective for
+visual processing tasks such as denoising , image
+enhancement , texture analysis , stereoscopic correspondence , motion ﬂow , , attention ,
+boundary detection and recognition , , .
+It has become clear that such representations are best
+at extracting visual information when they are overcomplete, i.e. when one oversamples scale, orientation
+and other kernel properties. This was suggested by the
+architecture of the primate visual system , where
+striate cortical cells (roughly equivalent to a wavelet expansion of an image) outnumber retinal ganglion cells (a
+representation close to image pixels) by a factor ranging
+from 102 to 103. Empirical studies in computer vision
+provide increasing evidence in favor of overcomplete
+representations , , , , . Most likely
+the robustness of these representations with respect to
+changes in viewpoint, lighting, and image deformations
+is a contributing factor to their superior performance.
+• P. Doll´ar is with the Interactive Visual Media Group at Microsoft Research,
+• R. Appel and P. Perona are with the Department of Electrical Engineering,
+California Institute of Technology, Pasadena.
+• S. Belongie is with Cornell NYC Tech and the Cornell Computer Science
+Department.
+To understand the value of richer representations, it is
+instructive to examine the reasons behind the breathtaking progress in visual category detection during the past
+ten years. Take, for instance, pedestrian detection. Since
+the groundbreaking work of Viola and Jones (VJ) ,
+ , false positive rates have decreased two orders of
+magnitude. At 80% detection rate on the INRIA pedestrian dataset , VJ outputs over 10 false positives per
+image (FPPI), HOG outputs
+∼1 FPPI, and more
+recent methods , output well under 0.1 FPPI
+(data from , ). In comparing the different detection schemes one notices the representations at the front
+end are progressively enriched (e.g. more channels, ﬁner
+scale sampling, enhanced normalization schemes); this
+has helped fuel the dramatic improvements in detection
+accuracy witnessed over the course of the last decade.
+Unfortunately, improved detection accuracy has been
+accompanied by increased computational costs. The VJ
+detector ran at ∼15 frames per second (fps) over a decade
+ago, on the other hand, most recent detectors require
+multiple seconds to process a single image as they compute richer image representations . This has practical
+importance: in many applications of visual recognition,
+such as robotics, human computer interaction, automotive safety, and mobile devices, fast detection rates and
+low computational requirements are of the essence.
+Thus, while increasing the redundancy of the representation offers improved detection and false-alarm
+rates, it is paid for by increased computational costs.
+Is this a necessary trade-off? In this work we offer the
+hoped-for but surprising answer: no.
+We demonstrate how to compute richer representations without paying a large computational price. How
+is this possible? The key insight is that natural images
+have fractal statistics , , that we can exploit to
+reliably predict image structure across scales. Our anal-
+SUBMISSION TO IEEE TRANSACTIONS ON PATTERN ANALYSIS AND MACHINE INTELLIGENCE
+ysis and experiments show that this makes it possible to
+inexpensively estimate features at a dense set of scales
+by extrapolating computations carried out expensively,
+but infrequently, at a coarsely sampled set of scales.
+Our insight leads to considerably decreased run-times
+for state-of-the-art object detectors that rely on rich representations, including histograms of gradients , with
+negligible impact on their detection rates. We demonstrate the effectiveness of our proposed fast feature
+pyramids with three distinct detection frameworks including integral channel features , aggregate channel
+features (a novel variant of integral channel features),
+and deformable part models . We show results for
+both pedestrian detection (measured on the Caltech ,
+INRIA , TUD-Brussels and ETH datasets)
+and general object detection (measured on the PASCAL
+VOC ). Demonstrated speedups are signiﬁcant and
+impact on accuracy is relatively minor.
+Building on our work on fast feature pyramids (ﬁrst
+presented in ), a number of systems show state-ofthe-art accuracy while running at frame rate on 640×480
+images. Aggregate channel features, described in this paper, operate at over 30 fps while achieving top results on
+pedestrian detection. Crosstalk cascades use fast feature pyramids and couple detector evaluations of nearby
+windows to achieve speeds of 35-65 fps. Benenson et al.
+ implemented fast feature pyramids on a GPU, and
+with additional innovations achieved detection rates of
+over 100 fps. In this work we examine and analyze
+feature scaling and its effect on object detection in far
+more detail than in our previous work .
+The rest of this paper is organized as follows. We
+review related work in §2. In §3 we show that it is
+possible to create high ﬁdelity approximations of multiscale gradient histograms using gradients computed at
+a single scale. In §4 we generalize this ﬁnding to a broad
+family of feature types. We describe our efﬁcient scheme
+for computing ﬁnely sampled feature pyramids in §5.
+In §6 we show applications of fast feature pyramids to
+object detection, resulting in considerable speedups with
+minor loss in accuracy. We conclude in §7.
+RELATED WORK
+Signiﬁcant research has been devoted to scale space
+theory , including real time implementations of octave and half-octave image pyramids , . Sparse
+image pyramids often sufﬁce for certain approximations,
+e.g. shows how to recover a disk’s characteristic
+scale using half-octave pyramids. Although only loosely
+related, these ideas provide the intuition that ﬁnely
+sampled feature pyramids can perhaps be approximated.
+Fast object detection has been of considerable interest
+in the community. Notable recent efforts for increasing
+detection speed include work by Felzenszwalb et al.
+ and Pedersoli et al. on cascaded and coarseto-ﬁne deformable part models, respectively, Lampert
+et al.’s application of branch and bound search for
+detection, and Doll´ar et al.’s work on crosstalk cascades
+ . Cascades , , , , , coarse-to-ﬁne
+search , distance transforms , etc., all focus on optimizing classiﬁcation speed given precomputed image
+features. Our work focuses on fast feature pyramid construction and is thus complementary to such approaches.
+An effective framework for object detection is the
+sliding window paradigm , . Top performing
+methods on pedestrian detection and the PASCAL
+VOC are based on sliding windows over multiscale
+feature pyramids , , ; fast feature pyramids
+are well suited for such sliding window detectors. Alternative detection paradigms have been proposed ,
+ , , , , . Although a full review is outside
+the scope of this work, the approximations we propose
+could potentially be applicable to such schemes as well.
+As mentioned, a number of state-of-the-art detectors
+have recently been introduced that exploit our fast feature pyramid construction to operate at frame rate including and . Alternatively, parallel implementation using GPUs , , can achieve fast detection
+while using rich representations but at the cost of added
+complexity and hardware requirements. Zhu et al. 
+proposed fast computation of gradient histograms using
+integral histograms ; the proposed system was real
+time for single-scale detection only. In scenarios such
+as automotive applications, real time systems have also
+been demonstrated , . The insights outlined in
+this paper allow for real time multiscale detection in
+general, unconstrained settings.
+MULTISCALE GRADIENT HISTOGRAMS
+We begin by exploring a simple question: given image
+gradients computed at one scale, is it possible to approximate
+gradient histograms at a nearby scale solely from the computed
+gradients? If so, then we can avoid computing gradients
+over a ﬁnely sampled image pyramid. Intuitively, one
+would expect this to be possible, as signiﬁcant image
+structure is preserved when an image is resampled. We
+begin with an in-depth look at a simple form of gradient
+histograms and develop a more general theory in §4.
+A gradient histogram measures the distribution of the
+gradient angles within an image. Let I(x, y) denote an
+m × n discrete signal, and ∂I/∂x and ∂I/∂y denote
+the discrete derivatives of I (typically 1D centered ﬁrst
+differences are used). Gradient magnitude and orientation are deﬁned by: M(i, j)2 =
+∂x(i, j)2 + ∂I
+and O(i, j) = arctan
+∂y(i, j)/ ∂I
+. To compute the
+gradient histogram of an image, each pixel casts a
+vote, weighted by its gradient magnitude, for the bin
+corresponding to its gradient orientation. After the orientation O is quantized into Q bins so that O(i, j) ∈
+{1, Q}, the qth bin of the histogram is deﬁned by: hq =
+i,j M(i, j)1 [O(i, j) = q], where 1 is the indicator function. In the following everything that holds for global
+histograms also applies to local histograms (deﬁned
+identically except for the range of the indices i and j).
+DOLL ´AR et al.: FAST FEATURE PYRAMIDS FOR OBJECT DETECTION
+(a) upsampling gradients (2x)
+probability
+pedestrians (µ=1.97, σ=.052)
+probability
+natural imgs (µ=1.99, σ=.061)
+(b) downsampling gradients (2x)
+probability
+pedestrians (µ=0.33, σ=.039)
+probability
+natural imgs (µ=0.34, σ=.059)
+(c) downsampling normalized gradients (2x)
+probability
+pedestrians (µ=0.26, σ=.020)
+probability
+natural imgs (µ=0.27, σ=.040)
+Fig. 1. Behavior of gradient histograms in images resampled by a factor of two. (a) Upsampling gradients: Given images I and
+I′ where I′ denotes I upsampled by two, and corresponding gradient magnitude images M and M ′, the ratio ΣM/ΣM ′ should be
+approximately 2. The middle/bottom panels show the distribution of this ratio for gradients at ﬁxed orientation over pedestrian/natural
+images. In both cases the mean µ ≈2, as expected, and the variance is relatively small. (b) Downsampling gradients: Given
+images I and I′ where I′ denotes I downsampled by two, the ratio ΣM/ΣM ′ ≈.34, not .5 as might be expected from (a) as
+downsampling results in loss of high frequency content. (c) Downsampling normalized gradients: Given normalized gradient
+magnitude images f
+M ′, the ratio Σf
+M ′ ≈.27. Instead of trying to derive analytical expressions governing the scaling
+properties of various feature types under different resampling factors, in §4 we describe a general law governing feature scaling.
+Gradient Histograms in Upsampled Images
+Intuitively the information content of an upsampled
+image is similar to that of the original, lower-resolution
+image (upsampling does not create new structure). Assume I is a continuous signal, and let I′ denote I
+upsampled by a factor of k: I′(x, y) ≡I(x/k, y/k).
+Using the deﬁnition of a derivative, one can show that
+∂x (i, j) =
+∂x(i/k, j/k), and likewise for
+∂y , which
+simply states the intuitive fact that the rate of change in
+the upsampled image is k times slower the rate of change
+in the original image. While not exact, the above also
+holds approximately for interpolated discrete signals.
+Let M ′(i, j) ≈
+kM(⌈i/k⌉, ⌈j/k⌉) denote the gradient
+magnitude in an upsampled discrete image. Then:
+M ′(i, j) ≈
+k M(⌈i/k⌉, ⌈j/k⌉)
+k M(i, j) = k
+Thus, the sum of gradient magnitudes in the original
+and upsampled image should be related by about a
+factor of k. Angles should also be mostly preserved since
+∂y (i, j) ≈∂I
+∂x(i/k, j/k)
+∂y(i/k, j/k). Therefore,
+according to the deﬁnition of gradient histograms, we
+expect the relationship between hq (computed over I)
+q (computed over I′) to be: h′
+q ≈khq. This allows
+us to approximate gradient histograms in an upsampled
+image using gradients computed at the original scale.
+Experiments: One may verify experimentally that in
+images of natural scenes, upsampled using bilinear interpolation, the approximation h′
+q ≈khq is reasonable.
+We use two sets of images for these experiments, one
+class speciﬁc and one class independent. First, we use
+the 1237 cropped pedestrian images from the INRIA
+pedestrians training dataset . Each image is 128 × 64
+and contains a pedestrian approximately 96 pixels tall.
+The second image set contains 128×64 windows cropped
+at random positions from the 1218 images in the INRIA
+negative training set. We sample 5000 windows but
+exclude nearly uniform windows, i.e. those with average
+gradient magnitude under .01, resulting in 4280 images.
+We refer to the two sets as ‘pedestrian images’ and
+‘natural images’, although the latter is biased toward
+scenes that may (but do not) contain pedestrians.
+In order to measure the ﬁdelity of this approximation,
+we deﬁne the ratio rq = h′
+q/hq and quantize orientation
+into Q = 6 bins. Figure 1(a) shows the distribution of
+rq for one bin on the 1237 pedestrian and 4280 natural
+images given an upsampling of k = 2 (results for other
+bins were similar). In both cases the mean is µ ≈2, as
+expected, and the variance is relatively small, meaning
+the approximation is unbiased and reasonable.
+Thus, although individual gradients may change, gradient histograms in an upsampled and original image
+will be related by a multiplicative constant roughly equal
+to the scale change between them. We examine gradient
+histograms in downsampled images next.
+SUBMISSION TO IEEE TRANSACTIONS ON PATTERN ANALYSIS AND MACHINE INTELLIGENCE
+Fig. 2. Approximating gradient histograms in images resampled by a factor of two. For each image set, we take the original
+image (green border) and generate an upsampled (blue) and downsampled (orange) version. At each scale we compute a gradient
+histogram with 8 bins, multiplying each bin by .5 and 1/.34 in the upsampled and downsampled histogram, respectively. Assuming
+the approximations from §3 hold, the three normalized gradient histograms should be roughly equal (the blue, green, and orange
+bars should have the same height at each orientation). For the ﬁrst four cases, the approximations are fairly accurate. In the last
+two cases, showing highly structured Brodatz textures with signiﬁcant high frequency content, the downsampling approximation
+fails. The ﬁrst four images are representative, the last two are carefully selected to demonstrate images with atypical statistics.
+Gradient Histograms in Downsampled Images
+While the information content of an upsampled image
+is roughly the same as that of the original image, information is typically lost during downsampling. However,
+we ﬁnd that the information loss is consistent and the resulting approximation takes on a similarly simple form.
+If I contains little high frequency energy, then the
+approximation h′
+q ≈khq derived in §3.1 should apply. In
+general, however, downsampling results in loss of high
+frequency content which can lead to measured gradients
+undershooting the extrapolated gradients. Let I′ now
+denote I downsampled by a factor of k. We expect that
+hq (computed over I) and h′
+q (computed over I′) will
+satisfy h′
+q ≤hq/k. The question we seek to answer here
+is whether the information loss is consistent.
+Experiments: As before, deﬁne rq = h′
+q/hq. In Figure 1(b) we show the distribution of rq for a single bin
+on the pedestrian and natural images given a downsampling factor of k = 2. Observe that the information
+loss is consistent: rq is normally distributed around
+µ ≈.34 < .5 for natural images (and similarly µ ≈.33
+for pedestrians). This implies that h′
+q ≈µhq could serve
+as a reasonable approximation for gradient histograms
+in images downsampled by k = 2.
+In other words, similarly to upsampling, gradient
+histograms computed over original and half resolution
+images tend to differ by a multiplicative constant (although the constant is not the inverse of the sampling
+factor). In Figure 2 we show the quality of the above
+approximations on example images. The agreement between predictions and observations is accurate for typical images (but fails for images with atypical statistics).
+Histograms of Normalized Gradients
+Suppose we replaced the gradient magnitude M by the
+normalized gradient magnitude f
+M deﬁned as f
+M(i, j)/(M(i, j)+.005), where M is the average gradient
+magnitude in each 11 × 11 image patch (computed by
+convolving M with an L1 normalized 11 × 11 triangle
+ﬁlter). Using the normalized gradient f
+M gives improved
+results in the context of object detection (see §6). Observe
+that we have now introduced an additional nonlinearity
+to the gradient computation; do the previous results for
+gradient histograms still hold if we use f
+M instead of M?
+In Figure 1(c) we plot the distribution of rq = h′
+for histograms of normalized gradients given a downsampling factor of k = 2. As with the original gradient histograms, the distributions of rq are normally
+distributed and have similar means for pedestrian and
+natural images (µ ≈.26 and µ ≈.27, respectively).
+Observe, however, that the expected value of rq for
+normalized gradient histograms is quite different than
+for the original histograms (Figure 1(b)).
+Deriving analytical expressions governing the scaling
+properties of progressively more complex feature types
+would be difﬁcult or even impossible. Instead, in §4 we
+describe a general law governing feature scaling.
+DOLL ´AR et al.: FAST FEATURE PYRAMIDS FOR OBJECT DETECTION
+STATISTICS OF MULTISCALE FEATURES
+To understand more generally how features behave in
+resampled images, we turn to the study of natural image
+statistics , . The analysis below provides a deep
+understanding of the behavior of multiscale features.
+The practical result is a simple yet powerful approach
+for predicting the behavior of gradients and other lowlevel features in resampled images without resorting to
+analytical derivations that may be difﬁcult except under
+the simplest conditions.
+We begin by deﬁning a broad family of features. Let
+Ωbe any low-level shift invariant function that takes
+an image I and creates a new channel image C = Ω(I)
+where a channel C is a per-pixel feature map such that
+output pixels in C are computed from corresponding
+patches of input pixels in I (thus preserving overall
+image layout). C may be downsampled relative to I
+and may contain multiple layers k. We deﬁne a feature
+fΩ(I) as a weighted sum of the channel C = Ω(I):
+ijk wijkC(i, j, k). Numerous local and global
+features can be written in this form including gradient
+histograms, linear ﬁlters, color statistics, and others .
+Any such low-level shift invariant Ωcan be used, making
+this representation quite general.
+Let Is denote I at scale s, where the dimensions hs×ws
+of Is are s times the dimensions of I. For s > 1, Is (which
+denotes a higher resolution version of I) typically differs
+from I upsampled by s, while for s < 1 an excellent
+approximation of Is can be obtained by downsampling
+I. Next, for simplicity we redeﬁne fΩ(Is) as1:
+Cs(i, j, k) where Cs = Ω(Is).
+In other words fΩ(Is) denotes the global mean of Cs
+computed over locations ij and layers k. Everything in
+the following derivations based on global means also
+holds for local means (e.g. local histograms).
+Our goal is to understand how fΩ(Is) behaves as a
+function of s for any choice of shift invariant Ω.
+Power Law Governs Feature Scaling
+Ruderman and Bialek , explored how the statistics of natural images behave as a function of the scale at
+which an image ensemble was captured, i.e. the visual
+angle corresponding to a single pixel. Let φ(I) denote an
+arbitrary (scalar) image statistic and E[·] denote expectation over an ensemble of natural images. Ruderman and
+Bialek made the fundamental discovery that the ratio of
+E[φ(Is1)] to E[φ(Is2)], computed over two ensembles of
+natural images captured at scales s1 and s2, respectively,
+depends only on the ratio of s1/s2 and is independent
+of the absolute scales s1 and s2 of the ensembles.
+1. The deﬁnition of fΩ(Is) in Eqn. (2) differs from our previous deﬁnition in , where f(I, s) denoted the channel sum after resampling
+by 2s. The new deﬁnition and notation allow for a cleaner derivation,
+and the exponential scaling law becomes a more intuitive power law.
+Ruderman and Bialek’s ﬁndings imply that E[φ(Is)]
+follows a power law2:
+E[φ(Is1)]/E[φ(Is2)] = (s1/s2)−λφ
+Every statistic φ will have its own corresponding λφ. In
+the context of our work, for any channel type Ωwe can
+use the scalar fΩ(I) in place of φ(I) and λΩin place
+of λφ. While Eqn. (3) gives the behavior of fΩw.r.t. to
+scale over an ensemble of images, we are interested in
+the behavior of fΩfor a single image.
+We observe that a single image can itself be considered
+an ensemble of image patches (smaller images). Since Ω
+is shift invariant, we can interpret fΩ(I) as computing
+the average of fΩ(Ik) over every patch Ik of I and
+therefore Eqn. (3) can be applied directly for a single
+image. We formalize this below.
+We can decompose an image I into K smaller images
+I1 . . . IK such that I = [I1 · · · IK]. Given that Ωmust
+be shift invariant and ignoring boundary effects gives
+Ω(I) = Ω([I1 · · · IK]) ≈[Ω(I1) · · · Ω(IK)], and substituting into Eqn. (2) yields fΩ(I) ≈ΣfΩ(Ik)/K. However,
+we can consider I1 · · · IK as a (small) image ensemble,
+and fΩ(I) ≈E[fΩ(Ik)] an expectation over that ensemble. Therefore, substituting fΩ(Is1) ≈E[fΩ(Ik
+fΩ(Is2) ≈E[fΩ(Ik
+s2)] into Eqn. (3) yields:
+fΩ(Is1)/fΩ(Is2) = (s1/s2)−λΩ+ E ,
+where we use E to denote the deviation from the power
+law for a given image. Each channel type Ωhas its own
+corresponding λΩ, which we can determine empirically.
+In §4.2 we show that on average Eqn. (4) provides
+a remarkably good ﬁt for multiple channel types and
+image sets (i.e. we can ﬁt λΩsuch that E[E] ≈0). Additionally, experiments in §4.3 indicate that the magnitude
+of deviation for individual images, E[E2], is reasonable
+and increases only gradually as a function of s1/s2.
+Estimating λ
+We perform a series of experiments to verify Eqn. (4)
+and estimate λΩfor numerous channel types Ω.
+To estimate λΩfor a given Ω, we ﬁrst compute:
+for N images Ii and multiple values of s < 1, where
+s is obtained by downsampling Ii
+1 = Ii. We use two
+image ensembles, one of N = 1237 pedestrian images
+and one of N = 4280 natural images (for details see
+2. Let F(s) = E[φ(Is)]. We can rewrite the observation by saying
+there exists a function R such that F(s1)/F(s2) = R(s1/s2). Applying
+repeatedly gives F(s1)/F(1) = R(s1), F(1)/F(s2) = R(1/s2), and
+F(s1)/F(s2) = R(s1/s2). Therefore R(s1/s2) = R(s1)R(1/s2). Next,
+let R′(s) = R(es) and observe that R′(s1 + s2) = R′(s1)R′(s2) since
+R(s1s2) = R(s1)R(s2). If R′ is also continuous and non-zero, then it
+must take the form R′(s) = e−λs for some constant λ . This implies
+R(s) = R′(ln(s)) = e−λ ln(s) = s−λ. Therefore, E[φ(Is)] must follow
+a power law (see also Eqn. (9) in ).
+SUBMISSION TO IEEE TRANSACTIONS ON PATTERN ANALYSIS AND MACHINE INTELLIGENCE
+log2(scale)
+pedestrians [0.037]
+natural imgs [0.018]
+best−fit: λ=0.406
+(a) histograms of gradients
+log2(scale)
+pedestrians [0.026]
+natural imgs [0.006]
+best−fit: λ=0.101
+(b) histograms of normalized gradients
+log2(scale)
+pedestrians [0.019]
+natural imgs [0.013]
+best−fit: λ=0.974
+(c) difference of gaussians (DoG)
+log2(scale)
+pedestrians [0.000]
+natural imgs [0.000]
+best−fit: λ=0.000
+(d) grayscale images
+log2(scale)
+pedestrians [0.044]
+natural imgs [0.025]
+best−fit: λ=0.358
+(e) local standard deviation
+log2(scale)
+pedestrians [0.019]
+natural imgs [0.004]
+best−fit: λ=0.078
+(f) HOG 
+Fig. 3. Power Law Feature Scaling: For each of six channel types we plot µs =
+1) for s ≈2−1
+8 , . . . , 2−24
+log-log plot for both pedestrian and natural image ensembles. Plots of fΩ(Is1)/fΩ(Is2) for 20 randomly selected pedestrian images
+are shown as faint gray lines. Additionally the best-ﬁt line to µs for the natural images is shown. The resulting λ and expected
+error |E[E]| are given in the plot legends. In all cases the µs follow a power law as predicted by Eqn. (4) and are nearly identical
+for both pedestrian and natural images, showing the estimate of λ is robust and generally applicable. The tested channels are:
+(a) histograms of gradients described in §3; (b) histograms of normalized gradients described in §3.3; (c) a difference of gaussian
+(DoG) ﬁlter (with inner and outer σ of .71 and 1.14, respectively); (d) grayscale images (with λ = 0 as expected); (e) pixel standard
+deviation computed over local 5 × 5 neighborhoods C(i, j) =
+E[I(i, j)2] −E[I(i, j)]; (f) HOG with 4 × 4 spatial bins (results
+were averaged over HOG’s 36 channels). Code for generating such plots is available (see chnsScaling.m in Piotr’s Toolbox).
+§3.1). According to Eqn. (4), µs = s−λΩ+ E[E]. Our goal
+is to ﬁt λΩaccordingly and verify the ﬁdelity of Eqn. (4)
+for various channel types Ω(i.e. verify that E[E] ≈0).
+For each Ω, we measure µs according to Eqn. (5)
+across three octaves with eight scales per octave for a
+total of 24 measurements at s = 2−1
+8 , . . . , 2−24
+image dimensions are rounded to the nearest integer,
+we compute and use s′ =
+hsws/hw, where h × w
+and hs × ws are the dimensions of the original and
+downsampled images, respectively.
+In Figure 3 we plot µs versus s′ using a log-log plot
+for six channel types for both the pedestrian and natural
+images3. In all cases µs follows a power law with all
+measurements falling along a line on the log-log plots, as
+predicted. However, close inspection shows µs does not
+start exactly at 1 as expected: downsampling introduces
+a minor amount of blur even for small downsampling
+factors. We thus expect µs to have the form µs = aΩs−λΩ,
+with aΩ̸= 1 as an artifact of the interpolation. Note that
+aΩis only necessary for estimating λΩfrom downsampled images and is not used subsequently. To estimate
+aΩand λΩ, we use a least squares ﬁt of log2(µs′) =
+Ω−λΩlog2(s′) to the 24 measurements computed over
+natural images (and set aΩ= 2a′
+Ω). Resulting estimates
+of λΩare given in plot legends in Figure 3.
+There is strong agreement between the resulting best-
+ﬁt lines and the observations. In legend brackets in
+Figure 3 we report expected error |E[E]| = |µs −aΩs−λΩ|
+3. Figure 3 generalizes the results shown in Figure 1. However, by
+switching from channel sums to channel means, µ1/2 in Figures 3(a)
+and 3(b) is 4× larger than µ in Figures 1(b) and 1(c), respectively.
+for both natural and pedestrian images averaged over
+s (using aΩand λΩestimated using natural images).
+For basic gradient histograms |E[E]| = .018 for natural
+images and |E[E]| = .037 for pedestrian images. Indeed,
+for every channel type Eqn. (4) is an excellent ﬁt to the
+observations µs for both image ensembles.
+The derivation of Eqn. (4) depends on the distribution
+of image statistics being stationary with respect to scale;
+that this holds for all channel types tested, and with
+nearly an identical constant for both pedestrian and
+natural images, shows the estimate of λΩis robust and
+generally applicable.
+Deviation for Individual Images
+In §4.2 we veriﬁed that Eqn. (4) holds for an ensemble
+of images; we now examine the magnitude of deviation
+from the power law for individual images. We study the
+effect this has in the context of object detection in §6.
+Plots of fΩ(Is1)/fΩ(Is2) for randomly selected images
+are shown as faint gray lines in Figure 3. The individual
+curves are relatively smooth and diverge only somewhat
+from the best-ﬁt line. We quantify their deviation by
+deﬁning σs analogously to µs in Eqn. (5):
+σs = stdev[fΩ(Ii
+1)] = stdev[E],
+where ‘stdev’ denotes the sample standard deviation
+(computed over N images) and E is the error associated
+with each image and scaling factor as deﬁned in Eqn. (4).
+In §4.2 we conﬁrmed that E[E] ≈0, our goal now is to
+understand how σs = stdev[E] ≈
+E[E2] behaves.
+DOLL ´AR et al.: FAST FEATURE PYRAMIDS FOR OBJECT DETECTION
+log2(scale)
+pedestrians [0.11]
+natural imgs [0.16]
+(a) histograms of gradients
+log2(scale)
+pedestrians [0.03]
+natural imgs [0.05]
+(b) histograms of normalized gradients
+log2(scale)
+pedestrians [0.03]
+natural imgs [0.03]
+(c) difference of gaussians (DoG)
+log2(scale)
+pedestrians [0.00]
+natural imgs [0.00]
+(d) grayscale images
+log2(scale)
+pedestrians [0.10]
+natural imgs [0.16]
+(e) local standard deviation
+log2(scale)
+pedestrians [0.07]
+natural imgs [0.07]
+(f) HOG 
+Fig. 4. Power Law Deviation for Individual Images: For each of the six channel types described in Figure 3 we plot σs versus s
+where σs =
+E[E2] and E is the deviation from the power law for a single image as deﬁned in Eqn. (4). In brackets we report σ1/2
+for both natural and pedestrian images. σs increases gradually as a function of s, meaning that not only does Eqn. (4) hold for an
+ensemble of images but also the deviation from the power law for individual images is low for small s.
+In Figure 4 we plot σs as a function of s for the same
+channels as in Figure 3. In legend brackets we report σs
+2 for both natural and pedestrian images; for
+all channels studied σ1/2 < .2. In all cases σs increases
+gradually with increasing s and the deviation is low
+for small s. The expected magnitude of E varies across
+channels, for example histograms of normalized gradients (Figure 4(b)) have lower σs than their unnormalized
+counterparts (Figure 4(a)). The trivial grayscale channel
+(Figure 4(d)) has σs = 0 as the approximation is exact.
+Observe that often σs is greater for natural images
+than for pedestrian images. Many of the natural images
+contain relatively little structure (e.g. a patch of sky),
+for such images fΩ(I) is small for certain Ω(e.g. simple
+gradient histograms) resulting in more variance in the
+ratio in Eqn. (4). For HOG channels (Figure 4(f)), which
+have additional normalization, this effect is minimized.
+Miscellanea
+We conclude this section with additional observations.
+Interpolation Method: Varying the interpolation algorithm for image resampling does not have a major effect.
+In Figure 5(a), we plot µ1/2 and σ1/2 for normalized
+gradient histograms computed using nearest neighbor,
+bilinear, and bicubic interpolation. In all three cases both
+µ1/2 and σ1/2 remain essentially unchanged.
+Window Size: All preceding experiments were performed on 128 × 64 windows. In Figure 5(b) we plot the
+effect of varying the window size. While µ1/2 remains
+relatively constant, σ1/2 increases with decreasing window size (see also the derivation of Eqn. (4)).
+Upsampling: The power law can predict features in
+higher resolution images but not upsampled images. In
+practice, though, we want to predict features in higher
+resolution as opposed to (smooth) upsampled images.
+(a) interpolation algorithm
+(b) window size
+Effect of the interpolation algorithm and window size
+on channel scaling. We plot µ1/2 (bar height) and σ1/2 (error
+bars) for normalized gradient histograms (see §3.3) . (a) Varying
+the interpolation algorithm for resampling does not have a major
+effect on either µ1/2 or σ1/2. (b) Decreasing window size leaves
+µ1/2 relatively unchanged but results in increasing σ1/2.
+Robust Estimation: In preceding derivations, when
+computing fΩ(Is1)/fΩ(Is2) we assumed that fΩ(Is2) ̸= 0.
+For the Ω’s considered this was the case after windows
+of near uniform intensity were excluded (see §3.1). Alternatively, we have found that excluding I with fΩ(I) ≈0
+when estimating λ results in more robust estimates.
+Sparse Channels: For sparse channels where frequently fΩ(I) ≈0, e.g., the output of a sliding-window
+object detector, σ will be large. Such channels may not
+be good candidates for the power law approximation.
+One-Shot Estimates: We can estimate λ as described in
+§4.2 using a single image in place of an ensemble (N = 1).
+Such estimates are noisy but not entirely unreasonable;
+e.g., on normalized gradient histograms (with λ ≈.101)
+the mean of 4280 single image estimates of λ if .096 and
+the standard deviation of the estimates is .073.
+Scale Range: We expect the power law to break down
+at extreme scales not typically encountered under natural viewing conditions (e.g. under high magniﬁcation).
+SUBMISSION TO IEEE TRANSACTIONS ON PATTERN ANALYSIS AND MACHINE INTELLIGENCE
+Fig. 6. Feature channel scaling. Suppose we have computed
+C = Ω(I); can we predict Cs = Ω(Is) at a new scale s? Top:
+the standard approach is to compute Cs = Ω(R(I, s)), ignoring
+the information contained in C = Ω(I). Bottom: instead, based
+on the power law introduced in §4, we propose to approximate
+Cs by R(C, s) · s−λΩ. This approach is simple, general, and
+accurate, and allows for fast feature pyramid construction.
+FAST FEATURE PYRAMIDS
+We introduce a novel, efﬁcient scheme for computing
+feature pyramids. First, in §5.1 we outline an approach
+for scaling feature channels. Next, in §5.2 we show its
+application to constructing feature pyramids efﬁciently
+and we analyze computational complexity in §5.3.
+Feature Channel Scaling
+We propose an extension of the power law governing
+feature scaling introduced in §4 that applies directly to
+channel images. As before, let Is denote I captured at
+scale s and R(I, s) denote I resampled by s. Suppose
+we have computed C = Ω(I); can we predict the channel
+image Cs = Ω(Is) at a new scale s using only C?
+The standard approach is to compute Cs = Ω(R(I, s)),
+ignoring the information contained in C = Ω(I). Instead,
+we propose the following approximation:
+Cs ≈R(C, s) · s−λΩ
+A visual demonstration of Eqn. (7) is shown in Figure 6.
+Eqn. (7) follows from Eqn. (4). Setting s1 = s, s2 = 1,
+and rearranging Eqn. (4) gives fΩ(Is) ≈fΩ(I)s−λΩ. This
+relation must hold not only for the original images but
+also for any pair of corresponding windows ws and w
+in Is and I, respectively. Expanding yields:
+fΩ(Iw)s−λΩ
+C(i, j)s−λΩ
+R(C, s)s−λΩ
+The ﬁnal line follows because if for all corresponding
+ws C′/|ws| ≈P
+w C/|w|, then C′ ≈R(C, s).
+On a per-pixel basis, the approximation of Cs in Eqn. (7)
+may be quite noisy. The standard deviation σs of the ratio
+s )/fΩ(Iw) depends on the size of the window w:
+σs increases as w decreases (see Figure 5(b)). Therefore,
+the accuracy of the approximation for Cs will improve
+if information is aggregated over multiple pixels of Cs.
+Fast Feature Pyramids. Color and grayscale icons
+represent images and channels; horizontal and vertical arrows
+denote computation of R and Ω. Top: The standard pipeline for
+constructing a feature pyramid requires computing Is = R(I, s)
+followed by Cs = Ω(Is) for every s. This is costly. Bottom:
+We propose computing Is = R(I, s) and Cs = Ω(Is) for only
+a sparse set of s (once per octave). Then, at intermediate
+scales Cs is computed using the approximation in Eqn. (7):
+Cs ≈R(Cs′, s/s′)(s/s′)−λΩwhere s′ is the nearest scale for
+which we have Cs′ = Ω(Is′). In the proposed scheme, the
+number of computations of R is constant while (more expensive)
+computations of Ωare reduced considerably.
+A simple strategy for aggregating over multiple pixels and thus improving robustness is to downsample
+and/or smooth Cs relative to Is (each pixel in the
+resulting channel will be a weighted sum of pixels in the
+original full resolution channel). Downsampling Cs also
+allows for faster pyramid construction (we return to this
+in §5.2). For object detection, we typically downsample
+channels by 4× to 8× (e.g. HOG uses 8 × 8 bins).
+Fast Feature Pyramids
+A feature pyramid is a multi-scale representation of an
+image I where channels Cs = Ω(Is) are computed at
+every scale s. Scales are sampled evenly in log-space,
+starting at s = 1, with typically 4 to 12 scales per octave
+(an octave is the interval between one scale and another
+with half or double its value). The standard approach
+to constructing a feature pyramid is to compute Cs =
+Ω(R(I, s)) for every s, see Figure 7 (top).
+The approximation in Eqn. (7) suggests a straightforward method for efﬁcient feature pyramid construction.
+We begin by computing Cs = Ω(R(I, s)) at just one scale
+per octave (s ∈{1, 1
+4, . . .}). At intermediate scales,
+Cs is computed using Cs ≈R(Cs′, s/s′)(s/s′)−λΩwhere
+4, . . .} is the nearest scale for which we have
+Cs′ = Ω(Is′), see Figure 7 (bottom).
+Computing Cs = Ω(R(I, s)) at one scale per octave
+provides a good tradeoff between speed and accuracy.
+The cost of evaluating Ωis within 33% of computing Ω(I)
+at the original scale (see §5.3) and channels do not need
+to be approximated beyond half an octave (keeping error
+low, see §4.3). While the number of evaluations of R is
+constant (evaluations of R(I, s) are replaced by R(C, s)),
+if each Cs is downsampled relative to Is as described in
+§5.1, evaluating R(C, s) is faster than R(I, s).
+DOLL ´AR et al.: FAST FEATURE PYRAMIDS FOR OBJECT DETECTION
+Fig. 8. Overview of the ACF detector. Given an input image I, we compute several channels C = Ω(I), sum every block of pixels
+in C, and smooth the resulting lower resolution channels. Features are single pixel lookups in the aggregated channels. Boosting
+is used to learn decision trees over these features (pixels) to distinguish object from background. With the appropriate choice of
+channels and careful attention to design, ACF achieves state-of-the-art performance in pedestrian detection.
+Alternate schemes, such as interpolating between two
+nearby scales s′ for each intermediate scale s or evaluating Ωmore densely, could result in even higher pyramid
+accuracy (at increased cost). However, the proposed
+approach proves sufﬁcient for object detection (see §6).
+Complexity Analysis
+The computational savings of computing approximate
+feature pyramids is signiﬁcant. Assume the cost of computing Ωis linear in the number of pixels in an n × n
+image (as is often the case). The cost of constructing a
+feature pyramid with m scales per octave is:
+n22−2k/m = n2
+(4−1/m)k =
+1 −4−1/m ≈mn2
+The second equality follows from the formula for a
+sum of a geometric series; the last approximation is
+valid for large m (and follows from l’Hˆopital’s rule). In
+the proposed approach we compute Ωonce per octave
+(m = 1). The total cost is 4
+3n2, which is only 33% more
+than the cost of computing single scale features. Typical
+detectors are evaluated on 8 to 12 scales per octave ,
+thus according to (8) we achieve an order of magnitude
+savings over computing Ωdensely (and intermediate Cs
+are computed efﬁciently through resampling afterward).
+APPLICATIONS TO OBJECT DETECTION
+We demonstrate the effectiveness of fast feature pyramids in the context of object detection with three distinct detection frameworks. First, in §6.1 we show the
+efﬁcacy of our approach with a simple yet state-of-theart pedestrian detector we introduce in this work called
+Aggregated Channel Features (ACF). In §6.2 we describe an
+alternate approach for exploiting approximate multiscale
+features using integral images computed over the same
+channels (Integral Channel Features or ICF), much as in
+our previous work , . Finally, in §6.3 we approximate HOG feature pyramids for use with Deformable Part
+Models (DPM) .
+Aggregated Channel Features (ACF)
+The ACF detection framework is conceptually straightforward (Figure 8). Given an input image I, we compute
+several channels C = Ω(I), sum every block of pixels in
+C, and smooth the resulting lower resolution channels.
+Features are single pixel lookups in the aggregated channels. Boosting is used to train and combine decision trees
+over these features (pixels) to distinguish object from
+background and a multiscale sliding-window approach
+is employed. With the appropriate choice of channels
+and careful attention to design, ACF achieves state-ofthe-art performance in pedestrian detection.
+Channels: ACF uses the same channels as : normalized gradient magnitude, histogram of oriented gradients (6 channels), and LUV color channels. Prior
+to computing the 10 channels, I is smoothed with a
+[1 2 1]/4 ﬁlter. The channels are divided into 4 × 4
+blocks and pixels in each block are summed. Finally the
+channels are smoothed, again with a [1 2 1]/4 ﬁlter. For
+640 × 480 images, computing the channels runs at over
+100 fps on a modern PC. The code is optimized but runs
+on a single CPU; further gains could be obtained using
+multiple cores or a GPU as in .
+Pyramid: Computation of feature pyramids at octavespaced scale intervals runs at
+∼75 fps on 640 × 480
+images. Meanwhile, computing exact feature pyramids
+with eight scales per octave slows to ∼15 fps, precluding
+real-time detection. In contrast, our fast pyramid construction (see §5) with 7 of 8 scales per octave approximated runs at nearly 50 fps.
+Detector: For pedestrian detection, AdaBoost is
+used to train and combine 2048 depth-two trees over the
+128 · 64 · 10/16 = 5120 candidate features (channel pixel
+lookups) in each 128×64 window. Training with multiple
+rounds of bootstrapping takes ∼10 minutes (a parallel
+implementation reduces this to ∼3 minutes). The detector
+has a step size of 4 pixels and 8 scales per octave.
+For 640 × 480 images, the complete system, including
+fast pyramid construction and sliding-window detection,
+runs at over 30 fps allowing for real-time uses (with
+exact feature pyramids the detector slows to 12 fps).
+Code: Code for the ACF framework is available online4. For more details on the channels and detector used
+in ACF, including exact parameter settings and training
+framework, we refer users to the source code.
+Accuracy: We report accuracy of ACF with exact and
+fast feature pyramids in Table 1. Following the methodology of , we summarize performance using the logaverage miss rate (MR) between 10−2 and 100 false positives per image. Results are reported on four pedestrian
+datasets: INRIA , Caltech , TUD-Brussels and
+4. Code: 
+SUBMISSION TO IEEE TRANSACTIONS ON PATTERN ANALYSIS AND MACHINE INTELLIGENCE
+INRIA 
+Caltech 
+Shapelet 
+PoseInv 
+HikSvm 
+HogLbp 
+MF+CSS 
+MF+Motion 
+LatSvmV2 
+ChnFtrs 
+Crosstalk 
+VeryFast 
+MultiResC 
+ICF-Exact §6.2
+ACF-Exact §6.1
+MRs of leading approaches for pedestrian detection on four
+datasets. For ICF and ACF exact and approximate detection
+results are shown with only small differences between them.
+For the latest pedestrian detection results please see .
+ETH . MRs for 16 competing methods are shown.
+ACF outperforms competing approaches on nearly all
+datasets. When averaged over the four datasets, the
+MR of ACF is 40% with exact feature pyramids and
+41% with fast feature pyramids, a negligible difference,
+demonstrating the effectiveness of our approach.
+Speed: MR versus speed for numerous detectors is
+shown in Figure 10. ACF with fast feature pyramids
+runs at ∼32 fps. The only two faster approaches are
+Crosstalk cascades and the VeryFast detector from
+Benenson et al. . Their additional speedups are based
+on improved cascade strategies and combining multiresolution models with a GPU implementation, respectively, and are orthogonal to the gains achieved by using
+approximate multiscale features. Indeed, all the detectors
+that run at 5 fps and higher exploit the power law
+governing feature scaling.
+Pyramid parameters: Detection performance on IN-
+RIA with fast feature pyramids under varying settings is shown in Figure 11. The key result is given in Figure 11(a): when approximating 7 of 8 scales per octave,
+the MR for ACF is .169 which is virtually identical to
+the MR of .166 obtained using the exact feature pyramid.
+Even approximating 15 of every 16 scales increases MR
+only somewhat. Constructing the channels without correcting for power law scaling, or using an incorrect value
+of λ, results in markedly decreased performance, see
+Figure 11(b). Finally, we observe that at least 8 scales per
+octave must be used for good performance (Figure 11(c)),
+making the proposed scheme crucial for achieving detection results that are both fast and accurate.
+(a) A standard pipeline for performing multiscale detection is to create a densely sampled feature pyramid. (b) Viola
+and Jones used simple shift and scale invariant features, allowing a detector to be placed at any location and scale without
+relying on a feature pyramid. (c) ICF can use a hybrid approach
+of constructing an octave-spaced feature pyramid followed by
+approximating detector responses within half an octave of each
+pyramid level.
+Integral Channel Features (ICF)
+Integral Channel Features (ICF) are a precursor to
+the ACF framework described in §6.1. Both ACF and ICF
+use the same channel features and boosted classiﬁers; the
+key difference between the two frameworks is that ACF
+uses pixel lookups in aggregated channels as features
+while ICF uses sums over rectangular channel regions
+(computed efﬁciently with integral images).
+Accuracy of ICF with exact and fast feature pyramids
+is shown in Table 1. ICF achieves state-of-the-art results:
+inferior to ACF but otherwise outperforming most competing approaches. The MR of ICF averaged over the
+four datasets is 42% with exact feature pyramids and
+45% with fast feature pyramids. The gap of 3% is larger
+than the 1% gap for ACF but still small. With fast feature
+pyramids ICF runs at ∼16 fps, see Figure 10. ICF is
+slower than ACF due to construction of integral images
+and more expensive features (rectangular sums computed via integral images versus single pixel lookups).
+For more details on ICF, see , . The variant tested
+here uses identical channels to ACF.
+Detection performance with fast feature pyramids under varying settings is shown in Figure 12. The plots
+mirror the results shown in Figure 11 for ACF. The key
+result is given in Figure 12(a): when approximating 7 of
+8 scales per octave, the MR for ICF is 2% worse than the
+MR obtained with exact feature pyramids.
+The ICF framework allows for an alternate application
+of the power law governing feature scaling: instead of
+rescaling channels as discussed in §5, one can instead
+rescale the detector. Using the notation from §4, rectangular channel sums (features used in ICF) can be written
+as AfΩ(I), where A denotes rectangle area. As such,
+Eqn. (4) can be applied to approximate features at nearby
+scales and given integral channel images computed at
+one scale, detector responses can be approximated at
+nearby scales. This operation can be implemented by
+rescaling the detector itself, see . As the approximation degrades with increasing scale offsets, a hybrid approach is to construct an octave-spaced feature pyramid
+followed by approximating detector responses at nearby
+scales, see Figure 9. This approach was extended in .
+DOLL ´AR et al.: FAST FEATURE PYRAMIDS FOR OBJECT DETECTION
+frames per second
+log−average miss rate
+MultiFtr+CSS
+[20.0%/0.6fps] LatSvm−V2
+[22.0%/1.2fps] ChnFtrs
+[21.0%/6.5fps] FPDW
+[19.7%/16.4fps] ICF
+[17.0%/31.9fps] ACF
+[20.1%/45.4fps] Crosstalk
+[16.0%/50.0fps] VeryFast
+Fig. 10. Log-average miss rate (MR) on the INRIA pedestrian dataset versus frame rate on 640 × 480 images for
+multiple detectors. Method runtimes were obtained from , see also for citations for detectors A-L. Numbers
+in brackets indicate MR/fps for select approaches, sorted by speed. All detectors that run at 5 fps and higher are
+based on our fast feature pyramids; these methods are also the most accurate. They include: (M) FPDW which is
+our original implementation of ICF, (N) ICF [§6.2], (O) ACF [§6.1], (P) crosstalk cascades , and (Q) the VeryFast
+detector from Benenson et al. . Both (P) and (Q) use the power law governing feature scaling described in this
+work; the additional speedups in (P) and (Q) are based on improved cascade strategies, multi-resolution models and
+a GPU implementation, and are orthogonal to the gains achieved by using approximate multiscale features.
+(a) fraction approximated scales
+(b) λ for normalized gradient channels
+(c) scales per octave
+Fig. 11. Effect of parameter setting of fast feature pyramids on the ACF detector [§6.1]. We report log-average miss
+rate (MR) averaged over 25 trials on the INRIA pedestrian dataset . Orange diamonds denote default parameter
+settings: 7/8 scales approximated per octave, λ ≈.17 for the normalized gradient channels, and 8 scales per octave
+in the pyramid. (a) The MR stays relatively constant as the fraction of approximated scales increases up to 7/8
+demonstrating the efﬁcacy of the proposed approach. (b) Sub-optimal values of λ when approximating the normalized
+gradient channels cause a marked decrease in performance. (c) At least 8 scales per octave are necessary for good
+performance, making the proposed scheme crucial for achieving detection results that are both fast and accurate.
+(a) fraction approximated scales
+(b) λ for normalized gradient channels
+(c) scales per octave
+Fig. 12. Effect of parameter setting of fast feature pyramids on the ICF detector [§6.2]. The plots mirror the results
+shown in Figure 11 for the ACF detector, although overall performance for ICF is slightly lower. (a) When approximating
+7 of every 8 scales in the pyramid, the MR for ICF is .195 which is only slightly worse than the MR of .176 obtained
+using exact feature pyramids. (b) Computing approximate channels with an incorrect value of λ results in decreased
+performance (although using a slightly larger λ than predicted appears to improve results marginally). (c) Similarly to
+the ACF framework, at least 8 scales per octave are necessary to achieve good results.
+SUBMISSION TO IEEE TRANSACTIONS ON PATTERN ANALYSIS AND MACHINE INTELLIGENCE
+horse moto person plant sheep
+Average precision scores for deformable part models with exact
+(DPM) and approximate (∼DPM) feature pyramids on PASCAL.
+Deformable Part Models (DPM)
+Deformable Part Models (DPM) from Felzenszwalb et al.
+ are an elegant approach for general object detection
+that have consistently achieved top results on the PAS-
+CAL VOC challenge . DPMs use a variant of HOG
+features as their image representation, followed
+by classiﬁcation with linear SVMs. An object model is
+composed of multiple parts, a root model, and optionally
+multiple mixture components. For details see .
+Recent approaches for increasing the speed of DPMs
+include work by Felzenszwalb et al. and Pedersoli
+et al. on cascaded and coarse-to-ﬁne deformable part
+models, respectively. Our work is complementary as we
+focus on improving the speed of pyramid construction.
+The current bottleneck of DPMs is in the classiﬁcation
+stage, therefore pyramid construction accounts for only
+a fraction of total runtime. However, if fast feature pyramids are coupled with optimized classiﬁcation schemes
+ , , DPMs have the potential to have more competitive runtimes. We focus on demonstrating DPMs
+can achieve good accuracy with fast feature pyramids
+and leave the coupling of fast feature pyramids and
+optimized classiﬁcation schemes to practitioners.
+DPM code is available online . We tested pretrained DPM models on the 20 PASCAL 2007 categories
+using exact HOG pyramids and HOG pyramids with 9
+of 10 scales per octave approximated using our proposed
+approach. Average precision (AP) scores for the two
+approaches, denoted DPM and ∼DPM, respectively, are
+shown in Table 2. The mean AP across the 20 categories
+is 26.6% for DPMs and 24.5% for ∼DPMs. Using fast
+HOG feature pyramids only decreased mean AP 2%,
+demonstrating the validity of the proposed approach.
+CONCLUSION
+Improvements in the performance of visual recognition
+systems in the past decade have in part come from
+the realization that ﬁnely sampled pyramids of image
+features provide a good front-end for image analysis. It
+is widely believed that the price to be paid for improved
+performance is sharply increased computational costs.
+We have shown that this is not necessarily so. Finely
+sampled pyramids may be obtained inexpensively by
+extrapolation from coarsely sampled ones. This insight
+decreases computational costs substantially.
+Our insight ultimately relies on the fractal structure of
+much of the visual world. By investigating the statistics
+of natural images we have demonstrated that the behavior of image features can be predicted reliably across
+scales. Our calculations and experiments show that this
+makes it possible to estimate features at a given scale
+inexpensively by extrapolating computations carried out
+at a coarsely sampled set of scales. While our results do
+not hold under all circumstances, for instance, on images
+of textures or white noise, they do hold for images
+typically encountered in the natural world.
+In order to validate our ﬁndings we studied the performance of three end-to-end object detection systems.
+We found that detection rates are relatively unaffected
+while computational costs decrease considerably. This
+has led to the ﬁrst detectors that operate at frame rate
+while using rich feature representations.
+Our results are not restricted to object detection nor
+to visual recognition. The foundations we have developed should readily apply to other computer vision
+tasks where a ﬁne-grained scale sampling of features is
+necessary as the image processing front end.
+ACKNOWLEDGMENTS
+We would like to thank Peter Welinder and Rodrigo Benenson for helpful comments and suggestions. P. Doll´ar,
+R. Appel, and P. Perona were supported by MURI-
+ONR N00014-10-1-0933 and ARO/JPL-NASA Stennis
+NAS7.03001. R. Appel was also supported by NSERC
+420456-2012 and The Moore Foundation. S. Belongie was
+supported by NSF CAREER Grant 0448615, MURI-ONR
+N00014-08-1-0638 and a Google Research Award.

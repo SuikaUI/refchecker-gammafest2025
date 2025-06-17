@@ -1,0 +1,1229 @@
+IEEE TRANSACTIONS ON COMPUTERS
+VecQ: Minimal Loss DNN Model Compression
+With Vectorized Weight Quantization
+Cheng Gong, Yao Chen, Ye Lu, Tao Li, Cong Hao, Deming Chen, Fellow, IEEE
+Abstract—Quantization has been proven to be an effective method for reducing the computing and/or storage cost of DNNs. However,
+the trade-off between the quantization bitwidth and ﬁnal accuracy is complex and non-convex, which makes it difﬁcult to be optimized
+directly. Minimizing direct quantization loss (DQL) of the coefﬁcient data is an effective local optimization method, but previous works
+often neglect the accurate control of the DQL, resulting in a higher loss of the ﬁnal DNN model accuracy. In this paper, we propose a
+novel metric, called Vector Loss. Using this new metric, we decompose the minimization of the DQL to two independent optimization
+processes, which signiﬁcantly outperform the traditional iterative L2 loss minimization process in terms of effectiveness, quantization
+loss as well as ﬁnal DNN accuracy. We also develop a new DNN quantization solution called VecQ, which provides minimal direct
+quantization loss and achieve higher model accuracy. In order to speed up the proposed quantization process during model training,
+we accelerate the quantization process with a parameterized probability estimation method and template-based derivation calculation.
+We evaluate our proposed algorithm on MNIST, CIFAR, ImageNet, IMDB movie review and THUCNews text data sets with numerical
+DNN models. The results demonstrate that our proposed quantization solution is more accurate and effective than the state-of-the-art
+approaches yet with more ﬂexible bitwidth support. Moreover, the evaluation of our quantized models on Saliency Object Detection
+(SOD) tasks maintains comparable feature extraction quality with up to 16× weight size reduction.
+Index Terms—DNN compression, DNN quantization, vectorized weight quantization, low bitwidth, vector loss.
+INTRODUCTION
+EEP Neural Networks (DNNs) have been widely
+adopted in machine learning based applications ,
+ . However, besides DNN training, DNN inference is also
+a computation-intensive task which affects the effectiveness
+of DNN based solutions , , . Neural network quantization employs low precision and low bitwidth data instead
+of high precision data for the model execution. Compared to
+the DNNs with ﬂoating point with 32-bit width (FP32), the
+quantized model can achieve up to 32× compression rate
+with an extremely low-bitwidth quantization . The lowbitwidth processing, which reduces the cost of the inference
+by using less memory and reducing the complexity of the
+Cheng Gong is with the College of Computer Science, Nankai University,
+Tianjin, China, and the Tianjin Key Laboratory of Network and Data
+Security Technology. E-mail: .
+Yao Chen is with Advanced Digital Sciences Center, Singapore. E-mail:
+ .
+Tao Li is with the College of Computer Science, Nankai University,
+Tianjin, China, and the Tianjin Key Laboratory of Network and Data
+Security Technology. E-mail: .
+Ye Lu is with the College of Cyber Science, Nankai University, Tianjin,
+China. E-mail: .
+Cong Hao is with the Electrical and Computer Engineering, the Grainger
+College of Engineering, University of Illinois at Urbana-Champaign, IL,
+USA. E-mail: .
+Deming Chen is with the Electrical and Computer Engineering, the
+Grainger College of Engineering, University of Illinois at Urbana-
+Champaign and Advanced Digital Sciences Center, Singapore. E-mail:
+ .
+Manuscript received Oct 15, 2019; revised March 08, 2020.
+(Corresponding authors: Ye Lu, Tao Li and Deming Chen.)
+Recommended for acceptance by the SI on Machine Learning Architectures
+Guest Editors.
+Digital Object Identiﬁer no. 10.1109/TC.2020.2995593
+multiply-accumulate operation, improves the efﬁciency of
+the execution of the model signiﬁcantly , .
+However, lowering the bitwidth of the data often brings
+accuracy degradation , , . This requires the quantization solution to balance between computing efﬁciency
+and ﬁnal model accuracy. However, the quantitative tradeoff is non-convex and hard to optimize – the impact of the
+quantization to the ﬁnal accuracy of the DNN models is hard to
+formulate.
+Previous methods neglect the quantitative analysis of
+the Direct Quantization Loss (DQL) of the weight data and
+make the quantization decision empirically while directly
+evaluating the ﬁnal model accuracy , , , , 
+thus only achieving unpredictable accuracy.
+In order to achieve higher training accuracy, ﬁnding an
+optimal quantization solution with minimal loss during the
+training of the learning kernels is effective and practical.
+One way of ﬁnding a local optimal solution is to minimize
+the DQL of the weight data, which is widely used in the
+current quantization solutions , , , , .
+As shown in Fig. 1, wf denotes the full-precision weight
+and wq is the value after quantization. Conventional quantization methods regard wf as a point (set as origin in Fig. 1)
+in Euclidean Space, and wq is a point which is close to wf
+in a discrete data space. The discrete data space contains a
+certain number of data points that can be represented by
+the selected bitwidth. Therefore, the Square of Euclidean
+Distance (Square 2-norm or called L2 distance ), represented as ||wf −wq||2
+2, between the original weight data
+and the quantized data is simply used as the loss of the
+quantization process, which is going to be reduced , ,
+ , .
+Although the L2 based solutions are proven to be effecarXiv:2005.08501v2 [cs.CV] 10 Jun 2020
+IEEE TRANSACTIONS ON COMPUTERS
+Square L2 distance
+ωq ൌ𝑄ሺ𝜔𝑓, 𝛼ሻ
+Quantization scaling factor
+Fig. 1: Uncertainty of using L2 to evaluate the quantization
+loss. α∗is the optimal scaling factor for the quantization in
+the range of [αl, αu]. The optimal distance and achievable
+distance are denoted as r2 and R2.
+tive and provide good training results in terms of accuracy
+of the model and bitwidth of the weight data, such solutions still have some major issues. (1) Traditional L2 based
+optimizations generally rely on iterative search methods
+and can get stuck at local optima. As shown in Fig. 1, the
+quantized results usually fall into the sub-optimal space
+(Sub-Q) instead of the optimal value (Opt-Q). Even with an
+additional quantization scaling factor α, which could help to
+reduce the differences between the original and quantized
+data, traditional methods still can not avoid considerable accuracy loss during the quantization process. (2) The process
+of L2 based quantization focuses on each of the individual
+weight data and neglects the distribution and correlations
+among these data points in a kernel or a layer.
+To address the issues above, instead of directly minimizing L2 loss, we propose a more accurate quantization loss
+evaluation metric called Vector Loss. Minimizing vector loss
+is much efﬁcient than directly and iteratively minimizing L2,
+and results in higher ﬁnal DNN accuracy; we also propose
+an algorithm to guide the quantization of the weight data
+effectively. We construct the weights into a vector wf rather
+than scalar data, to take advantage of the characteristic that
+the loss between vectors can be decomposed into orientation
+loss and modulus loss, which are independent of each other.
+As a result, we are able to achieve the minimal loss of the
+weight quantization for DNN training.
+In this paper, we will demonstrate that using vectorization loss as an optimization objective is better than directly
+optimizing the L2 distance of the weights before and after
+quantization. Based on our proposed vectorized quantization loss measurement, we further propose a Vectorized
+Quantization method (VecQ) to better explore the tradeoff between computing efﬁciency and the accuracy loss of
+quantization.
+In summary, our contributions are as follows:
+We propose a new metric, Vector Loss, as the loss
+function for DNN weight quantization, which can
+provide effective quantization solution compared to
+traditional methods.
+A new quantization training ﬂow based on the
+vectorized quantization process is proposed, named
+VecQ, which achieves better model accuracy for different bitwidth quantization target.
+Parametric estimation and computing template are
+proposed to reduce the cost of probability density estimation and derivative calculation of VecQ to speed
+up the quantization process in model training.
+Extensive experiments show that VecQ achieves a
+lower accuracy degradation under the same training
+settings when compared to the state-of-the-art quantization methods in the image classiﬁcation task with
+the same DNN models. The evaluations on Saliency
+Object Detection (SOD) task also show that our VecQ
+maintains comparable feature extraction quality with
+up to 16× weight size reduction.
+This paper is structured as follows. Section 2 introduces
+the related works. In Section 3, the theoretical analysis of the
+effectiveness of vector loss compared to L2 loss is presented.
+Section 4 presents the detailed approach of VecQ. Section
+5 proposes the fast solution for our VecQ quantization as
+well as the integration of VecQ into the DNN training ﬂow.
+Section 6 presents the experimental evaluations and Section
+7 concludes the paper.
+RELATED WORKS AND MOTIVATION
+As an effective way to compress DNNs, many quantization
+methods have been explored , , , , , , ,
+ , , , , , , , , , , , ,
+ , , . These quantization methods can be roughly
+categorized into 3 different types based on their objective
+functions for the quantization process:
+Methods based on heuristic guidance of the quantization, e.g., directly minimizing the ﬁnal accuracy
+Methods based on minimizing Euclidean Distance of
+weight data before and after quantization;
+Other methods such as training with discrete weights
+and teacher-student network.
+In this section, we ﬁrst introduce the existing related
+works based on their different categories and then present
+our motivation for vectorized quantization.
+Heuristic guidance
+The heuristic methods usually directly evaluate the impact
+of the quantization on the ﬁnal output accuracy. They often
+empirically iterate the training process to improve the ﬁnal
+accuracy. For example, the BNNs proposed a binary
+network for fast network inference. It quantizes all the
+weights and activations in a network to 2 values, {−1, +1},
+based on the sign of the data. Although it provides a DNN
+with 1-bit weights and activations, it is hard to converge
+without Batch Normalization layers and leads to a
+signiﬁcant accuracy degradation when compared to fullprecision networks. The Binary Connect and Ternary
+Connect sample the original weights into binary or
+ternary according to a sampling probability deﬁned by the
+value of the weights (after scaling to ). All these works
+do not quantify the loss during the quantization, so that
+only the ﬁnal accuracy is the guideline of the quantization.
+Quantization methods in , convert the fullprecision weights to ﬁxed-point representation by dropping
+the least signiﬁcant bits without quantifying the impact.
+INQ iteratively processes weight partition, quantization and re-training method until all the weights are
+quantized into powers-of-two or zeros.
+IEEE TRANSACTIONS ON COMPUTERS
+STC introduces a ternary quantization which ﬁrst
+scales the weights into the range of [−1, 1], and then quantizes all scaled weights into ternary by uniformly partitioning them. Thus, the values located in [−1, −1/3] and [1/3, 1]
+are quantized to -1, 1 and the rest of them are set to 0.
+TTQ introduces a ternary quantization which quantizes full-precision weights to ternary by a heuristic threshold but with two different scaling factors for positive and
+negative values, respectively. The scaling factors are optimized during the back propagation.
+The quantization method in (denoted as QAT) employs the afﬁne mapping of integers to real values with two
+constant parameters: Scale and Zero-point. It ﬁrst subtracts
+the Zero-point parameter from data (weights/activation),
+then divides the data by a scaling factor and obtains the
+quantized results with rounding operation and afﬁne mapping. The approach of TQT follows QAT but with the
+improvement of constraining the scale-factors into powerof-2 and relates them to trainable thresholds.
+Optimizing Euclidean Distance
+In order to provide better accuracy control, reducing the
+Euclidean Distance of the data before and after quantization
+becomes a popular solution.
+Xnor-Net adds a scaling factor on the basis of BNNs
+ and calculates the optimal scaling factor to minimize
+the distance of the weights before and after quantization.
+The scaling factor boosts the convergence of the model
+and improves the ﬁnal accuracy. The following residual
+quantization method in adopts Xnor-Net to further
+compensate the errors produced by single binary quantization to improve the accuracy of the quantized model.
+TWN proposes an additional threshold factor together with the scaling factor for ternary quantization. The
+optimal parameters (scaling factor and threshold factor) are
+still based on the optimization of the Euclidean distance of
+weights before and after quantization. TWN achieves better
+ﬁnal accuracy than Xnor-Net and BNNs.
+Extremely low bit method (ENN) proposed in quantizes the weights into the exponential values of 2 by iteratively optimizing the L2 distance of the weights before and
+after quantization.
+TSQ presents a two-step quantization method,
+which ﬁrst quantizes the activation to low-bit values, and
+then ﬁxes it and quantizes the weights into ternary. TSQ
+employs scaling factor for each of the kernel, resulting in a
+limited model size reduction.
+µL2Q ﬁrst shifts the weights of a layer to a standard
+normal distribution with a shifting parameter and then
+employs a linear quantization for the data. The uniform parameter considers the distribution of the weight data, which
+provides better loss control compared to simply optimizing
+the Euclidean Distance during the quantization.
+Several other works , adopt k-means with irregular non-linear quantization. Although the values are clustered before quantization, the ﬁnal results are still obtained
+with the optimization of the Euclidean distance between the
+original values and the quantized ones.
+Other works
+Besides the heuristic and Euclidean Distance approaches,
+there are still many other works focusing on low-precision
+DNN training.
+GXNOR-Net utilizes the discrete weights during
+training instead of the full-precision weights. It regards
+the discrete values as states and projects the gradients in
+backward propagation as the transition of the probabilities
+to update the weights directly, hence, providing a network
+with ternary weights.
+T-DLA quantizes the scaling factor of ternary weights
+and full-precision activation into ﬁxed-point numbers and
+constrains the quantization loss of activation values by
+adopting inﬁnite norms. Compared with , , it shifts
+the available bitwidth to the most effective data portion to
+make full use of the targeted bitwidth.
+In TNN , the authors design a method using ternary
+student network, which has the same network architecture
+as the full-precision teacher network, aiming to predict
+the output of the teacher network without training on the
+original datasets.
+In HAQ , the authors proposed a range parameter —
+all weights out of the range are truncated and the weights
+within the range are linearly mapped to discrete values. The
+optimal range parameter was obtained by solving the KLdivergence of the weights during the quantization.
+However, comparing to the heuristic guidance and Euclidean Distance based methods, the approaches above either focus on a speciﬁc bitwidth or perform worse in terms
+of the accuracy of the trained DNNs.
+Motivation of the VecQ Method
+For the sake of simplicity, in this paper, we will use L2
+distance to represent the squared L2 distance. We have witnessed the effectiveness of the L2 distance-based methods
+among all the existing approaches. However, as explained
+in the introduction, there are still two defects that lead to
+inaccurate DQL measurement.
+The ﬁrst defect is that the traditional way of using L2
+distance as the loss function for optimization usually cannot
+be solved accurately and efﬁciently , , , , ,
+even with an additional scaling factor α to scale the data
+into proper range. As shown in Fig. 1, the quantization
+function with the additional scaling factor α to improve
+the accuracy , is denoted as wq = Q(wf, α); the
+L2 distance curve between wf and wq with the change of
+α is drawn in blue. It has a theoretical optimal solution
+when α = α∗with a L2 distance of r2, shown as the
+green dot. However, only the solutions α ∈[αl, αu] with
+the L2 distance ranging in [r2, R2] could be obtained due
+to the lack of solvable expressions , , leading to an
+inefﬁcient and inaccurate quantization result. Additionally,
+even the methods involving k-means for clustering of the
+weights still fall into the sub-optimal solution space ,
+ . Their corresponding approximated quantized weights
+are located in the Sub-Q space colored with orange.
+The second defect of traditional methods is they neglect
+the correlation of the weights within the same kernel or
+layer, but only focus on the difference between single values.
+Even with the k-means based solutions, the distribution of
+IEEE TRANSACTIONS ON COMPUTERS
+Vector loss
+ሼ𝜶𝒊𝒕𝒓, ሾ𝟐, 𝟐ሿ𝑻ሽ
+ሼ𝜶𝒗,ሾ𝟐, 𝟏ሿ𝑻ሽ
+Solution found
+by L2 loss
+Solution found
+by Vector loss
+Fig. 2: The solutions based on L2 loss and Vector loss. (a)
+Solutions of different methods; (b) L2 Loss with different
+methods and α values.
+the weights in the same layer is ignored in the quantization
+process. However, the consideration of the distribution of
+the weight data is proven to be effective for the accuracy
+control in the existing approaches , .
+We discover that when we represent quantization loss
+of the weight for a kernel or a layer using vector distance
+instead of L2 distance, it will intrinsically solve the two
+problems mentioned above. We focus on two attributes of
+a vector, orientation and modulus. Meanwhile, we deﬁne
+a Quantization Angle that represents the intersection angle between the original weight vector and the quantized
+vector. As a result, the vector distance between the two
+is naturally determined by the Quantization Angle and
+their modulus. Therefore, in this work, we evaluate DQL
+with Vector Loss by leveraging the vector distance, which
+involves both quantization angle and vector modulus. Note
+the orientation of the vector is related to quantization angle.
+When the quantization angle is 0, the orientations of the two
+intersecting vectors are the same. When the angle is not 0,
+the orientations of the two vectors are different. For the sake
+of simplicity, in the rest of the paper, we will use orientation
+loss and modulus loss to represent the Vector Loss. To
+the best of our knowledge, there is no previous work that
+leverages the vector loss for DNN weight quantization.
+In this work, we demonstrate that the vector loss can
+provide effective quantization solution and hence achieve
+a smaller DQL for the weight data quantization during the
+model training, which helps for achieving a higher model
+accuracy. Based on this, we propose VecQ, which carries out
+the quantization process based on vector loss. We also propose a fast parameter estimation method and a computation
+template to speed up our vectorized quantization process
+for easier deployment of our solution.
+VECTOR LOSS VERSUS L2 LOSS
+Before introducing our vectorized quantization method, we
+ﬁrst explain the effectiveness of loss control with vector
+loss using two data points as an example for simplicity.
+Assume a DNN layer with only two weights, denoted as
+{wf1, wf2} whose values are {2.5, 1.75}. The weights will
+be quantized into k bits. The quantization loss based on
+L2 distance is denoted as Jl2 and the quantization solution
+set is expressed in the format of {α, (v1, v2)}, where α is the
+ﬂoating point scaling factor and v1, v2 are the discrete values
+in the quantization set {v1, v2} ∈Q = {−2k−1, −2k−1 +
+1, · · · , −1, 0, 1, · · · , 2k−1 −1}, then we get
+Jl2 = (wf1 −αv1)2 + (wf2 −αv2)2
+Let wf = [wf1, wf2]T be a vector from the origin point
+(0, 0), and its quantized value is wq = αv and v = [v1, v2]T .
+Jl2 could also be represented as the squared modulus of the
+distance between vector wf and wq. The Jl2 is calculated
+Jl2 = ||wf −α · v||2
+2, (vi ∈Q, i ∈[1, 2k])
+As shown in Fig. 2 (a), there are only two dimensions
+in the solution space, each representing one weight. Each
+dimension contains 2k possible values. The values of the
+possible solutions are located on the black dotted line in
+the Fig. 2 due to the full precision scaling factor α. The
+quantization angle between wf and the quantized version
+is denoted as θ.
+However, due to the non-convex characteristic of optimizing L2 loss under the k-bit constraint , the result
+based on the iterative method may be found as the red
+point in the ﬁgure with the solution of {αitr, vitr} =
+{1.0625, T } and an angle of θitr, which is the ﬁrst suboptimal solution point on the curve of the L2 loss vs α values
+in Fig. 2 (b), ignoring the solution with lower loss which is
+the second extreme value on the curve.
+Therefore, instead of directly using L2 distance as the
+quantization loss function, we use Vector Loss, denoted as
+Jv, to measure the difference between vectors: the original
+weight vector wf and the quantized weight vector wq,
+to obtain the quantization solution. We deﬁne the vector
+loss Jv = J(wf, wq) as a composition of two independent
+losses, orientation loss Jo and modulus loss Jm, and
+Jv = Jo + Jm.
+Jo and Jm are computed as:
+Jo = 1 −cos θ, (cos θ = αv
+= 1 −evewf
+Jm = ||wf −αv||2
+where ev and ewf represent the unit vector for v and wf.
+wf is a weight vector of a layer of a DNN containing d
+Given the deﬁnition of Jv, we now discuss the effectiveness of minimizing Jv.
+First, according to Eq. 4, the optimization of the orientation loss is only deﬁned by the unit vectors ev and
+ewf , where α value is not affected. Second, when the ev
+is determined, the optimization of the modulus loss is to
+ﬁnd the optimal value of α. Therefore, the optimization of
+Jo and Jm can be achieved independently. If both θ and
+α are continuous, both orientation and modulus loss minimizations are convex and can be solved with the optimal
+solutions. However, due to the integer constraints coming
+from the quantized bitwidth, we need to take the ﬂoatingpoint results and ﬁnd the corresponding integer values. As
+a result, the actual achievable θv of our solution can be
+IEEE TRANSACTIONS ON COMPUTERS
+different from the optimal value for it. Thus, our solution
+represents an approximated solution of the optimal solution.
+Furthermore, denote the quantization result of optimizing Jv as wv
+q, we have:
+q| = |wf| cos θv
+q | = |wf| cos θitr
+Typically, our approximated result can satisfy θv ≤θitr,
+then we could easily achieve:
+Jl2 =|wf −wv
+=|wf|2 + |wv
+q|2 −2|wf||wv
+=|wf|2 −|wf|2 cos2 θv
+≤|wf|2 −|wf|2 cos2 θitr
+=|wf −witr
+which shows that with vector loss, as long as we optimize
+the orientation loss to ﬁnd a better quantization angle, we
+could achieve an effective solution for weight quantization.
+Guided by the observation above, we have the ﬁnal optimal
+solution for the example points located on the blue solid line
+in the Fig. 2 as {αv, vv} = {1.35, T }, which provides a
+smaller DQL.
+Base on our proposed vector loss metric, we will discuss
+our algorithms to obtain the vector loss based quantization
+solution as well as the methods to speed up the algorithms
+for practical purpose.
+VECTORIZED QUANTIZATION
+VecQ is designed to follow the theoretical guideline we
+developed in Section 3. First of all, the vectorization of the
+weights is introduced. Then the adoption of the vector loss
+in VecQ is explained in detail. Finally, the process of VecQ
+quantization with two critical stages is presented.
+Vectorization of weights
+For the weight set Wf(l) of layer l, we ﬂatten and reshape
+them as a N × M × K2-dimension vector wf(l). N, M indicate the number of input channel and output channel for
+this layer, and K indicates the size of the kernel for this
+layer. For simplicity, we use wf to represent the weight
+vector of a certain layer before quantization.
+Loss function deﬁnition
+We use the vectorized loss instead of Euclidean distance
+during the quantization process. Since solving the orientation and modulus loss independently could achieve the
+optimized solution for each of them, we illustrate the quantization loss as is deﬁned in Equ. 3:
+J(wf, wq) = Jo(wf, wq) + Jm(wf, wq)
+to provide the constraint during the quantization process.
+Minimize the orientation loss
+Minimize the modulus loss
+Fig. 3: The overall ﬂow of quantization process, including
+both steering and driving stage.
+Overall process
+According to our analysis in Section 3, the orientation loss Jo
+indicates the optimized quantization angle and the modulus
+loss Jm indicates the optimized scale at this angle. Therefore, our quantization takes two stages to minimize the two
+losses independently, which are deﬁned as steering stage
+and driving stage as shown in Fig. 3. In the steering stage,
+we adjust the orientation of the weight vector to minimize
+the orientation loss. Then, we ﬁx the orientation and only
+scale the modulus of the vector at the driving stage to
+minimize the modulus loss.
+Let wf ∈RN×M×K2 be the weight vector of the layer
+of a DNN in the real space and the wq ∈QN×M×K2 be the
+quantized weight vector in the uniformly discrete subspace.
+First, steering wf to w′
+q = steer(wf)
+q is an orientation vector that disregards the modulus of the vector and only focuses on the orientation. Second,
+along with the determined orientation vector w′
+q, we search
+the position of the modulus and ”drive” to the best position
+with minimum modulus loss. The quantized vector wq is
+achieved by driving the w′
+wq = drive(w′
+The complete quantization process is the combination of
+the two stages. The ﬁnal target is reducing the loss between
+the original weight wf and the quantized results wq. The
+entire quantization process is represented as
+wq = Q(wf) = drive(steer(wf))
+Steering stage
+The purpose of the steering stage is to search for an optimized orientation vector, which has the least orientation
+loss with wf to minimize the Jo.
+𝑄𝑢𝑎𝑛𝑡𝑖𝑧𝑎𝑡𝑖𝑜𝑛
+Fig. 4: Linear quantization with interval λ.
+As shown in Fig. 4, wf is the weight in ﬂoating point
+representation and it would be quantized into k-bit representation. It means, there are total 2k values that can be
+used to represent the values in wf, where each of them
+IEEE TRANSACTIONS ON COMPUTERS
+is denoted as qi, i ∈[1, 2k]. We adopt linear quantization
+method, where an interval λ = qi −qi−1 is used to represent
+the distance between two quantized values.
+steer(wf, λ, k) = Clip{⌊wf
+λ −0.5⌉, −2k−1, 2k−1 −1} + 0.5
+The vector with ﬂoating data wf is quantized to a vector
+with discrete data by an rounding (⌊·⌉) operation for each of
+the values in the vector. The data are limited to the range of
+[−2k−1, 2k−1 −1] by extended clip (Clip()) operation. The
+subtraction of 0.5 is used to avoid aggregation at 0 position
+and guarantees the maximum number of rounding values
+Given a k for the number of bits as the quantization
+target, the intermediate quantized weight is
+q = steer(wf, λ, k)
+which has the minimized orientation loss with the λ as an
+interval parameter. When k is ﬁxed, λ decides the orientation loss between wf and w′
+q. In order to minimize the loss,
+we only need to ﬁnd the optimal λ:
+λ∗= arg min
+λ (Jo(wf, w′
+Finding the optimal λ requires several processes with
+high computational complexities; the detailed processes and
+the corresponding fast solution is presented in Section 5.
+Driving stage
+In the driving stage, we minimize the modulus loss Jm between the orientation vector w′
+q obtained from the steering
+stage and the original weight vector wf. Since we focus
+on the modulus in this stage, only the scaling factor α is
+Here we only need to ﬁnd the optimized α to minimize
+the modulus loss.
+α∗= arg min
+α (Jm(wf, wq))
+where α∗can be easily obtained by ﬁnding the extreme of
+T (wf −αw′
+and the value of α∗=
+Finally, with the two stages above, the quantized value
+of the wf is determined by λ and α:
+wq = Q(wf), (λ →λ∗, α∗= w′
+FAST QUANTIZATION
+With the proposed quantization method in Section 4, the
+minimum quantization loss is achieved when the optimal λ
+in Equ. (13) is found. However, as one of the most critical
+processes in the model training, the computational overhead
+of quantization leads to inefﬁcient training of the model. In
+order to address this issue, in this section, we ﬁrst analyze
+the computational complexity to calculate the value of λ.
+Then, we propose a fast solution based on our proposed
+fast probability estimation and computation template. In
+the end, the detailed implementation of our quantization
+solution together with the fast solver is integrated into our
+training ﬂow.
+Fig. 5: The illustration of quantization regions and symbols.
+Analysis of the optimal λ
+The most computational intensive process in our quantization is the steering stage, speciﬁcally, the process to solve
+Equ. (13). However, Equ. (13) can not be solved directly due
+to the clipping and rounding operations. Instead of directly
+using the values in wf, we involve the distribution of the
+values in wf to support a more general computation of the
+Jo. The probability density of the value t in wf is noted as
+According to the steering method in Equ. (11), each value
+t ∈wf is projected to a value q ∈w′
+q; the q values are
+linearly distributed into n (n = 2k) with a uniform distance
+deﬁned by interval λ. As shown in Fig. 5, the light blue
+curve is the distribution of values in wf and orange dots
+are the values after quantization, represented as q ∈w′
+p(qi) indicates the probability of qi in wf.
+Speciﬁcally, the data within range (si−1, si] (si −si−1 =
+λ, i = 1, · · · , n −1) is replaced by the single value qi and
+the data out of the range [q1, qn] are forced to be truncated
+and set to the nearest qi. As given in Equ. (11), q1 = −2k−1
+and qn = 2k−1 −1.
+We set s0 = −∞and sn = ∞to ease the formulation.
+Based on the distribution of data in wf, the expanding terms
+of Jo(wf, w′
+q) in Equ. (13) can be obtained as follows,
+−∞t2p(t) dt
+i p(t) dt)
+si−1 tqip(t) dt)
+The Jo(wf, w′
+q) is represented as
+si−1 tqip(t) dt)
+−∞t2p(t) dt ·
+i p(t) dt)
+Since the linear quantization is adopted with the ﬁxed
+interval of λ, qi and si can be easily derived by the following
+equations,
+qi = (i −n
+2 −0.5)λ, (i = 1, · · · , n)
+2 )λ, i = 1, · · · , n −1
+So Jo(wf, w′
+q) is only related to λ and Equ. (13) can be
+solved by solving
+dJo(wf, w′
+IEEE TRANSACTIONS ON COMPUTERS
+Concluding from the discussion above, for each wf,
+three steps are necessary:
+Estimating probability density of the values in wf.
+Solving Equ. (22) and getting the optimal λ.
+Using the optimal λ to obtain the ﬁnal quantization
+However, the ﬁrst two steps (probability density estimation and derivative calculation) are complex and costly in
+terms of CPU/GPU time and operations, which limit the
+training speed.
+Fast solver
+For the computation-intensive probability density estimation and derivative calculation, we propose two methods to
+speed up the processes, which are fast parametric estimation
+and computing template, respectively.
+Fast probability estimation
+There are two methods for probability density estimation:
+parametric estimation and non-parametric estimation.
+Non-parametric estimation is usually used for ﬁtting the
+distribution of data without prior knowledge. It requires all
+the density and probability of the data to be estimated individually, which will lead to a huge computational overhead.
+We take the widely adopted non-parametric estimation
+method, Kernel Density Estimation (KED) as an example, to
+illustrate the complexity of non-parametric estimation.
+Here p(t) is the probability density of t. n is the number of
+the samples and K(x) is the non-negative kernel function
+that satisﬁes K(x) ≥0 and
+´ K(x)dx = 1. h is the
+smoothing parameter. The time complexity of computing all
+probability densities p(x) is O(n2) and the space complexity
+is O(n) because all the probability densities need to be
+computed and stored.
+Parametric estimation is used for the data which have
+a known distribution and only computes some parameters
+of the distributions instead. It could be processed fast with
+the proper assumption of the distribution. Thus, we adopt a
+parametric estimation method in our solution.
+There is prior knowledge of the weights of the layers
+of DNNs, which assumes that they are obeying normal
+distribution with the mean value of 0 so that the training
+could be conducted easily and the model could provide
+better generalization ability , :
+wf ∼N(0, σ2)
+σ is the standard derivation of wf. Based on this prior
+knowledge, we can use parametric estimation to estimate
+the probability density of wf and the only parameter that
+is needed to be computed during the training is σ. The
+effectiveness of this prior distribution is also proven by the
+ﬁnal accuracy we obtain in the evaluations.
+With Equ. (24), we have
+Therefore, parametric estimation only requires the standard
+deviation σ, which could be calculated with
+f) −E(wf)2
+Here E(·) computes the expectation. Hence, the time complexity of computing σ is reduced to O(n) and the space
+complexity is reduced to O(1).
+Computing template
+After reducing the complexity of computing the probability,
+ﬁnding optimal λ is still complex and time-consuming. In
+order to improve the computing efﬁciency of this step, we
+propose a computing template-based method.
+Since the weights of a layer wf obey normal distribution,
+N(0, σ2), they can be transformed to the standard normal
+distribution:
+Then, we could use ϕ to compute Jo(ϕ, w′
+q) instead of using
+wf, because of:
+= 1 −(wf/σ)w′
+|wf/σ||w′q|
+= Jo(wf, w′
+Here, ϕ is the computing template for wf, because it has
+the same orientation loss with w′
+q as wf. By choosing this
+computing template, solving Equ. (22) is equivalent to solve
+the substitute equation Equ. (29).
+λ∗= arg min
+λ (Jo(ϕ, w′
+Fig. 6: The orientation loss (Jo(ϕ, w′
+Jo(λ, k)) with
+different k and λ values. The extrema are marked.
+Since ϕ ∼N(0, 1), the probability of value t is:
+After the probability p(t) is obtained, the orientation loss
+function Jo(ϕ, w′
+q) can be expressed as a function only relating to λ and the targeting bitwidth k for the quantization.
+q) ∼Jo(λ, k)
+IEEE TRANSACTIONS ON COMPUTERS
+&RQYORWLRQ
+FRQQHFWLRQ
+&RQYORWLRQ
+FRQQHFWLRQ
+&RQYORWLRQ
+FRQQHFWLRQ
+4XDQWL]HG
+8QLIRUPO\TXDQWL]LQJZHLJKWV
+WRGLVFUHWHYDOXHV
+GLVWULEXWLRQ
+/D\HU ݈IRUZDUG
+Fig. 7: Integrated quantization process in DNN training.
+q) is a convex function with the condition of k >
+1. However, it is constant when k = 1 because the angle
+between the weight vector and the vector constructed with
+the signs of values in the weights is constant. Due to its
+independence at k = 1, we set λ to 1 for the convenience
+of the following process. We plot the curve of Jo(λ, k) in
+Fig. 6 with the change of λ under different k bits.
+The optimal λ values for all bitwidth settings obtained
+by solving Equ. (31) is shown in Table 1. The loss is small
+enough when the targeted bitwidth is greater than 8, so
+we omit the results for them. With the template above, we
+only need to solve Jo(wf, w′
+q) once to ﬁnd the optimal
+λ, and then apply it to all quantization without repetitively calculating it. In other words, simply looking up the
+corresponding value in this table can obtain the optimal
+parameter thus reducing the complexity and intensity of
+the computation, which signiﬁcantly speeds up the training
+TABLE 1: Optimal value of λ for Jo(ϕ, w′
+q) with bitwidth k
+λ (0, ∞) 0.9957 0.5860 0.3352 0.1881 0.1041 0.0569 0.0308 6/2k
+DNN training integration
+We integrate our VecQ quantization into the DNN training
+ﬂow for both the weight data and the activation data, as
+shown in Fig. 7.
+Weight quantization: For layer l, during the forward
+propagation, we ﬁrst quantize the weights with full precision (wf(l)) into the quantized values (wq(l)), then use the
+quantized weights to compute the output (z(l)). During the
+backward propagation, the gradient is calculated with wq(l)
+instead of wf(l) and propagated. In the ﬁnal update process, the gradient g(l) of wq(l) is used to update wf(l) .
+Activation quantization: Inspired by the Batch Normalization (BN) technique, instead of using pre-deﬁned
+distribution, we compute the distribution parameter of the
+activation outputs p(t) and update it with Exponential
+Moving Average. During the inference, the distribution
+parameter is employed as a linear factor to the activation
+function . The A(l) is the activation output of layer l, and
+Activation(·) is the non-linear activation function following
+the convolution or fully-connected layers, such as Sigmoid,
+Tanh, ReLU.
+EVALUATIONS
+We choose Keras v2.2.4 as the baseline DNN training framework . The layers in Keras are rewritten to support
+our proposed quantization mechanism as presented in Section 5.3. Speciﬁcally, all the weight data in the DNNs are
+quantized to the same bitwidth in the evaluation of VecQ,
+including the ﬁrst and last layers. Our evaluations are
+conducted on two classic tasks: (1) image classiﬁcation and
+(2) salient object detection (SOD). The evaluation results for
+image classiﬁcation are compared to state-of-the-art results
+with the same bitwidth conﬁguration and the SOD results
+are compared to the state-of-the-art solutions that are conducted with the FP32 data type.
+Classiﬁcation
+Image classiﬁcation is the basis of many computer vision
+tasks, so the classiﬁcation accuracy of the quantized model is
+representative for the effectiveness of our proposed solution.
+Evaluation settings
+Datasets and DNN models. The MNIST, CIFAR10 and
+ImageNet datasets are selected for image classiﬁcation
+evaluations; the IMDB movie reviews and THUC-
+News for Chinese text datasets are selected for the
+sentiment and text classiﬁcation evaluations. The detailed
+information of the datasets are listed in Table 2 and Table 3.
+TABLE 2: The image classiﬁcation datasets attributes.
+Image size
+# of Classes
+# of Images
+# of Pixels (log10)
+TABLE 3: The sentiment and text classiﬁcation datasets.
+Objectives
+Movie reviews
+Text classiﬁcation
+# of Classes
+# of samples
+TABLE 4: The models for ImageNet.
+MobileNetV2
+Parameters (M)
+1Convs indicate the vanilla convolution layers, DepConvs are the
+depthwise convolution layers . BNs stand for the Batch
+Normalization layers and FCs are the full-connection layers.
+For MNIST dataset, Lenet5 with 32C5-BN-MP2-64C5-
+BN-MP2-512FC-10Softmax is used, where C stands for the
+IEEE TRANSACTIONS ON COMPUTERS
+TABLE 5: The accuracy and model size with different bitwidth targets.
+VGG-like 
+Alexnet 
+ResNet-18 
+MobileNetV2 
+60.01/81.902
+69.60/89.243
+71.30/90.104
+55.06/77.78
+65.58/86.24
+53.78/77.07
+59.31/81.01
+68.23/88.10
+64.67/85.24
+60.36/82.40
+68.79/88.45
+69.13/88.35
+61.21/82.94
+69.80/89.11
+71.89/90.38
+61.65/83.19
+69.98/89.15
+71.47/90.15
+62.01/83.32
+69.81/88.97
+72.23/90.61
+62.09/83.44
+70.17/89.09
+72.33/90.62
+62.22/83.54
+70.36/89.20
+72.24/90.66
+58.04/80.21
+67.91/88.30
+63.34/84.42
+61.22/83.24
+68.41/88.76
+71.40/90.41
+61.60/83.66
+69.86/88.90
+72.11/90.68
+1W/A denotes the quantizing bits of weights and activation respectively.
+2Results of AlexNet with Batch Normalization layers are cited from .
+3Results of ResNet18 are cited from .
+4Results are cited from the document of Keras .
+Convolutional layer and the number in front denotes the
+output feature channel number and the number behind is
+the kernal size; BN stands for the Batch Normalization layer;
+FC represents the Fully-connected layer and the output
+channel number is listed in front of it; MP indicates the max
+pooling layer followed with the size of the pooling kernel.
+The mini-batch size is 200 samples and the initial learning
+rate is 0.01 and it is divided by 10 at epoch 35 and epoch 50
+for a total of 55 training epochs.
+For CIFAR10 dataset, a VGG-like network with the
+architectural
+conﬁguration
+64C3-BN-64C3-BN-MP2-
+128C3-BN-128C3-BN-MP2-256C3-BN-256C3-BN-MP2-
+1024FC-10Softmax is selected. A simple data augmentation
+which pads 4 pixels on each side and randomly crops the
+32×32 patches from the padded image or its horizontal
+ﬂip is adopted during the training. Only the original 32 ×
+32 images are evaluated in the test phase. The network is
+trained with mini-batch size 128 for a total of 300 epoch.
+The initial learning rate is 0.01 and decays 10 times at epoch
+250 and 290.
+For the ImageNet dataset, we select 3 famous DNN models, which are AlexNet , ResNet-18 and MobileNetV2
+ . ImageNet dataset contains 1000 categories and the size
+of the image is relatively bigger , , , . We use
+the Batch Normalization (BN) layer instead of the original
+Local Response Normalization (LRN) layer in AlexNet for
+a fair comparison with , , . The numbers of the
+different layers and the parameter sizes are listed in Table 4.
+The architecture of the model for IMDB movie review sentiment classiﬁcation and the THUCNews 
+text classiﬁcation are 128E-64C5-MP4-70LSTM-1Sigmoid
+and 128E-128LSTM-128FC-10Softmax, where E denotes
+Embedding layer and the number in front of it represents
+its dimension; LSTM is the LSTM layer and the number
+in front is the number of the hidden units. In addition,
+we quantize all layers including Embedding layer, Convolutional layer, Fully-connected layer and LSTM layer for
+these two models. Speciﬁcally, for the LSTM layer, we
+quantize the input features, outputs and the weights, but
+left the intermediate state and activation of each timestamp
+untouched since the quantization of them will not help to
+TABLE 6: Evaluation results for LSTM based models.
+1The results of full precision model is from .
+reduce the size of the model.
+Evaluation Metrics The ﬁnal classiﬁcation accuracy results on the corresponding datasets are taken as the evaluation metrics in image classiﬁcation tasks as used in many
+other works , , , . Moreover, the Top1 and Top5
+classiﬁcation accuracy results are presented simultaneously
+on all the models for ImageNet dataset for comprehensive
+evaluation as used in , .
+Bitwidth ﬂexibility
+VecQ is designed to support a wide range of targeted
+bitwidths. We conduct a series of experiments to verify
+the impact of bitwidth on model accuracy and model size
+reduction. The bitwidth in the following evaluations ranges
+from 1 to 8.
+The accuracy results and model sizes for the image
+classiﬁcation models are shown in Table 5. We ﬁrst discuss weight quantization only. There is a relatively higher
+accuracy degradation when the bitwidth is set to 1. But
+starting from 2 bits and up, the accuracy of the models
+recovers to less than 1.37% drop when compared to the FP32
+version except MobileNetV2. With the increase of bitwidth,
+the accuracy of the quantized model is improved. The
+highest accuracy of LeNet-5 and VGG-like are 99.53% and
+93.52% at 2 bits and 7 bits, respectively, which outperform
+the accuracy results with FP32. The highest accuracy of
+AlexNet, ResNet-18 and MobileNetV2 are obtained at 8bit with 62.22% (Top1), 8-bit with 70.36% (Top1) and 7-bit
+with 72.33% (Top1), respectively, and all of them outperform
+IEEE TRANSACTIONS ON COMPUTERS
+Detailed settings of the quantization methods
+collected from the literature.
+Activation
+FConv IFC LFC
+Bits SFB SFN
+ReBNet 
+1 Weights and Activation denote the quantized data of the model. Bits
+refer to quantized bitwidth of methods; SFB is the bitwidth for the
+scaling-factor; SFN is the number of the scaling-factors. FConv, IFC
+and LFC represent whether the First Convolution layer, the Internal
+Fully-Connected layers and the Last Fully-Connected layer are
+quantized.
+2The results of DC are from .
+3HAQ is a mix-precision method; results here are from the
+experiments that only quantize the weight data.
+4TSQ introduces a ﬂoating-point scaling factor for each convolutional
+kernel, so the SFN equals to the number of kernels.
+the values obtained with FP32. Overall, the best accuracy
+improvement of the models when compared to the full
+precision versions for the ﬁve models are 0.13%, 0.03%,
+2.21%, 0.76% and 1.03%, at 2, 7, 8, 8 and 7 bits, respectively
+when activation is maintained as 32 bits. The table also
+contains the accuracy of the models with 8-bit activation
+quantization. Although the activation quantization leads to
+a degradation of the accuracy for most of the models (except
+VGG-like), the results are in general comparable with the
+models with FP32 data type.
+The accuracy and model size of the sentiment classiﬁcation and text classiﬁcation models are shown in Table 6.
+Our solution easily outperforms the models trained with
+FP32. Even with the activation quantization, the accuracy
+results are still well maintained. The results also indicate
+that adopting appropriate quantization of the weight data
+improves the ability of generalization of the DNN models.
+In another word, right quantization achieves higher classiﬁcation accuracy for the tests.
+Comparison with State-of-the-art results
+We collected the state-of-the-art accuracy results of DNNs
+quantized to different bitwidth with different quantization
+methods, and compared them to the results from VecQ with
+the same bitwidth target. The detailed bitwidth support of
+the comparison methods are listed in Table 7. Note here,
+when the quantization of the activations are not enabled,
+the SFB and SFN are not applicable to VecQ.
+The comparisons are shown in Table 8. The ﬁnal
+accuracy based on VecQ increased by up to 0.62% ,
+3.80% for LeNet-5 and VGG-like when compared with
+other quantization methods, respectively. There is also up
+to 3.26%/2.73% (top1/top5) improvement of the accuracy
+of AlexNet, 4.84%/2.84% of ResNet-18 and 6.60%/4.00% of
+MobileNetV2 when compared to the state-of-the-art methods. For all the 3 datasets and 5 models, the quantized
+models with VecQ achieve higher accuracy than almost all
+state-of-the-art methods with the same bitwidth. However,
+when bitwidth target is 1, the quantized models of AlexNet
+and Resnet-18 based on VecQ perform worse due to the
+reason that we have quantized all the weights into 1 bit,
+including ﬁrst and last layers, which are different from the
+counterparts that are using higher bitwidth for the ﬁrst or
+last layers. This also leads to more accuracy degradation
+at low bitwidth on the lightweight network MobiNetV2.
+This, however, allows us to provide an even smaller model
+size. Besides, the solution called BWN and ENN 
+for AlexNet has 61M parameters , while ours is 50.88M
+because eliminating the layer paddings in the intermediate
+layers leads to less weights for fully-connected layers. When
+compared to TWN, µL2Q and TSQ, VecQ achieves signiﬁcantly higher accuracy at the same targeted bitwidth, which
+also indicates that our vectorized quantization is superior to
+the L2 loss based solutions.
+Analysis of λ values
+In order to evaluate the accuracy of our theoretical λ in Table 1, we choose the last convolutional layers from different
+models to calculate the actual λ values. Since λ is the
+quantization interval, the range of (0,3] of it covers more
+than 99.74% of the layer data, so the actual λ is obtained by
+exhaustively searching the values in the range of (0,3] with
+the precision at 0.001. The comparison is shown in Table 9.
+As we can learn from Table 9, there are differences between
+the theoretical λs and the actual values. However, the ﬁnal
+results in terms of accuracy in the previous subsection is
+maintained and not effected by the small bias of λ, which
+proves the effectiveness of our solution.
+Salient object detection
+Salient object detection aims at standing out the region of the
+salient object in an image. It is an important evaluation that
+provides good visible results. Previous experiments show
+that 2 bits can achieve a good trade-off between accuracy
+and bitwidth reduction. In this section, only 2 bit quantization for the weights with VecQ is used as the quantization
+method for the DNN models.
+Evaluation settings
+Datasets All models are trained with the training data in
+the MSRA10K dataset (80% of the entire dataset) . After
+training, the evaluation is conducted on multiple datasets,
+including the MSRA10K (20% of the entire dataset), ECSSD
+ , HKU-IS , DUTs , DUT-OMRON and the
+images containing target objects and existing ground truth
+maps in the THUR15K . The details of the selected
+datasets are shown in Table 10. All images are resized to
+224 × 224 for the training and test.
+Models The famous end-to-end semantic segmentation
+models i.e., U-Net , FPN , LinkNet and UNet++
+IEEE TRANSACTIONS ON COMPUTERS
+TABLE 8: The comparison with other state-of-the-art quantization solutions.
+Datasets&Models
+Cifar10 
+ImageNet 
+VGG-like 
+AlexNet 
+ResNet18 
+MobileNetV2 
+60.01/81.90
+69.60/89.24
+71.30/90.10
+ReBNet 
+56.80/79.40
+60.80/83.00
+57.50/81.20
+57.00/79.70
+64.80/86.20
+66.24/86.00
+55.06/77.78
+65.58/86.24
+53.78/77.07
+3.32/-1.77
+57.50/79.801
+61.80/84.20
+57.50/79.70
+66.60/87.20
+66.02/87.13
+58.20/80.60
+67.00/87.50
+58.00/80.50
+65.60/86.12
+58.07/81.24
+59.31/81.01
+68.23/88.10
+64.67/85.24
+68.08/88.36
+60.00/82.20
+68.00/88.30
+68.00/87.96
+60.36/82.40
+68.79/88.45
+69.13/88.35
+68.89/89.01
+65.92/86.72
+71.24/89.93
+61.21/82.94
+69.80/89.11
+71.89/90.38
+57.39/80.46
+68.98/89.10
+61.65/83.19
+69.98/89.15
+71.47/90.15
+66.75/87.32
+62.01/83.32
+69.81/88.87
+72.23/90.61
+62.09/83.44
+70.17/89.09
+72.33/90.62
+65.52/86.36
+71.80/90.60
+62.22/83.54
+70.36/89.20
+72.24/90.66
+1The results of TWN on AlexNet are from .
+2ENN adopts 2 bits shifting results noted as {−4, +4} .
+3Mean-Imp denotes Mean of accuracy Improvement results compared to the state-of-the-art methods.
+4The results are from HAQ .
+5The results are from .
+TABLE 9: Optimal value of λ for Jo(ϕ, w′
+q) with bitwidth k.
+0.9700 0.5700 0.3300
+0.0600 0.0300
+1.0000 0.6100 0.3600
+0.0600 0.0300
+MobileNetV2 1.0000 0.5900 0.3400
+0.0600 0.0300
+0.0171 -0019 -0.0024 -0.0256 -0.0178 -0.0094 0.0023
+ are selected for the comprehensive comparison. Their
+detailed information is shown in Table 11. The models are
+based on the same ResNet-50 backbone as encoder and initialized with the weights trained on the ImageNet dataset.
+Evaluation Metrics We choose 4 widely used metrics
+for a comprehensive evaluation: (1) Mean Absolute Error
+TABLE 10: The datasets for salient object detection.
+10000 (80/20%)
+(MAE) , (2) Maximal F-measure (MaxF) , (3) Structural measure (S-measure) , and (4) Enhanced-alignment
+measure (E-measure) .
+The MAE measures the average pixel-wise absolute error
+IEEE TRANSACTIONS ON COMPUTERS
+TABLE 11: The models for salient object detection.
+Parameters (M)
+Model size (M)
+Q. size (M)1
+1Q. size (M) stands for the size of the VecQ quantized model.
+between the output map F and the ground-truth mask G.
+|Gk(i, j) −Fk(i, j)|)
+Here m is the number of the samples, Hk and Wk are the
+height and width of Gk.
+F-measure comprehensively evaluates the Precision
+and Recall with a weight parameter β.
+Fβ = (1 + β2)Precision + Recall
+β2Precision + Recall
+β2 is empirically set to 0.3 . The MaxF is the maximal Fβ
+S-measure considers the object-aware and region-aware
+structure similarities.
+E-measure is designed for binary map evaluations. It
+combines the local pixel-wise difference and the global
+mean value of map for comprehensive evaluation. In our
+evaluation, the output map is ﬁrst binarized to by
+comparing with the threshold of twice of its mean value
+ , then the binary map is evaluated with E-measure.
+We also involve direct visual comparison of the full
+precision and quantized weights of the selected model, to
+provide a more visible comparison.
+Results and analysis
+The quantitative comparison results are in Table 12. The ∗
+indicates the quantized model based on VecQ besides the
+full precision model. Note here, the output sizes of the last
+layer of FPN and FPN* are 56×56 and then resized to 224×
+224. Overall, the performance degradation of the quantized
+models based on VecQ is less than 0.01 in most metric for all
+models, but the size of the quantized model is reduced by
+more than 93% when compared to the models using FP32.
+As shown in Table 12, all the quantized models have a
+less than 0.01 degradation on MSRA10K with all evaluation
+metrics. This is because all the models are trained on the
+training subset of MSRA10K, so the features of the images
+in it are well extracted. The other 5 data sets are only used
+as testing datasets and there are more degradation with the
+evaluation metrics, especially in MaxF and S-measure, but
+the degradation is maintained within 0.02.
+Comparing the quantized models with their corresponding full-precision models, FPN* performs well on almost
+all the test sets with all the evaluation metrics (shown as
+bold italics numbers in Table 12), showing a better feature
+extraction capacity than the full precision version (FPN).
+Compared to other models, FPN outputs a relatively smaller
+prediction map (56×56). Although the backbone models are
+similar, the feature classiﬁcation tasks in the FPN work on a
+smaller feature map with a similar size of coefﬁcients. This
+provides a good chance for data quantization without effecting the detection ability because of the potential redundancy
+of the coefﬁcients.
+In order to further present the effectiveness of our proposed quantization solution, we print the weights of the
+convolution layers of the backbone model in Unet++ and
+Unet++*, as shown in Fig. 8. There are three sizes of kernels
+involved in this model, which are 7 × 7, 3 × 3 and 1 × 1. In
+addition, we also compare the full precision and quantized
+weights of the last convolution layer for the selected model,
+which directly outputs the results for the detection.
+In the ﬁrst 7 × 7 kernels, we notice a signiﬁcant structural similarity between the full precision weights and the
+quantized weights. Since the very ﬁrst layer of the backbone
+model extracts the overall features, the quantized weights
+provide a nice feature extraction ability. When the size of
+the kernels become smaller, we could still notice a good
+similarity between the full precision ones and quantized
+ones, Although the similarities are not signiﬁcant in the
+Conv 3x3 sets, they become obvious in the following Conv
+1x1 sets. The Last Conv group directly explains the comparable output results with the visible emphasized kernels and
+locations of the weights.
+Overall, the quantized weights show a good similarity to
+the full precision ones in terms of the value and the location
+which ensures the high accuracy output when compared to
+the original full precision model.
+CONCLUSION
+In this paper, we propose a new quantization solution called
+VecQ. Different from the existing works, it utilizes the vector
+loss instead of adopting L2 loss to measure the loss of
+quantization. VecQ quantizes the full-precision weight vector into a speciﬁc bitwidth with the least DQL and, hence,
+provides a better ﬁnal model accuracy. We further introduce
+the fast quantization algorithm based on a reasonable prior
+knowledge of normally distributed weights and reduces the
+complexity of the quantization process in model training.
+The integration of VecQ into Keras is also presented and
+used for our evaluations. The comprehensive evaluations
+have shown the effectiveness of VecQ on multiple datasets,
+models and tasks. The quantized low-bit models based on
+VecQ show comparable classiﬁcation accuracy to models
+with FP32 datatype and outperform all the state-of-the-art
+quantization methods when the targeted bitwidth of the
+weights is higher than 2. Moreover, the experiments on
+salient object detection also show that VecQ can greatly
+reduce the size of the models while maintaining the performance of feature extraction tasks.
+For future work, we will focus on the combination of non-linear quantization and illustrate an automated
+mixed-precision
+quantization
+performance
+improvement.
+code of the Keras built with VecQ could be found at
+ 
+ACKNOWLEDGMENT
+This work is partially supported by the National Natural
+Science Foundation (61872200), the National Key Research
+and Development Program of China (2018YFB2100304,
+2018YFB1003405), the Natural Science Foundation of Tianjin
+IEEE TRANSACTIONS ON COMPUTERS
+TABLE 12: The salient object detection results.
+MSRA10K-test
+Size (M) MAE ↓MaxF ↑S ↑
+E ↑MAE ↓MaxF ↑S ↑
+E ↑MAE ↓MaxF ↑S ↑
+E ↑MAE ↓MaxF ↑S ↑
+E ↑MAE ↓MaxF ↑S ↑
+E ↑MAE ↓MaxF ↑S ↑
+0.931 0.962
+0.886 0.914 0.045
+0.884 0.930 0.060
+0.865 0.874 0.070
+0.803 0.829
+0.807 0.816
+0.926 0.959
+0.871 0.906 0.050
+0.870 0.923 0.065
+0.852 0.871 0.071
+0.795 0.835
+0.797 0.815
+0.005 0.003 -0.007
+0.015 0.008 -0.005
+0.015 0.007 -0.005
+0.012 0.003 -0.001
+0.008 -0.006 -0.005
+0.010 0.001
+0.899 0.949
+0.854 0.901 0.059
+0.848 0.911 0.072
+0.835 0.861 0.081
+0.772 0.812
+0.778 0.804
+0.920 0.955
+0.866 0.897 0.059
+0.859 0.908 0.070
+0.850 0.859 0.080
+0.786 0.809
+0.789 0.796
+-0.015 -0.022 -0.006 0.000
+-0.007 -0.012 0.004 0.001
+-0.005 -0.011 0.004 0.002
+-0.003 -0.015 0.003 0.001
+0.004 -0.014 0.003 -0.002
+0.011 -0.011 0.007
+Linknet 109.8
+0.928 0.959
+0.882 0.911 0.048
+0.878 0.927 0.062
+0.861 0.871 0.071
+0.799 0.825
+0.803 0.814
+Linknet* 7.24
+0.923 0.959
+0.865 0.902 0.054
+0.860 0.920 0.068
+0.847 0.870 0.072
+0.787 0.833
+0.794 0.818
+0.004 0.001 -0.008
+0.017 0.008 -0.005
+0.018 0.006 -0.005
+0.014 0.001 -0.001
+0.012 -0.008 -0.002
+0.009 -0.004
+UNet++ 143.81
+0.933 0.964
+0.888 0.915 0.044
+0.887 0.930 0.059
+0.867 0.876 0.070
+0.805 0.829
+0.810 0.818
+UNet++* 9.35
+0.926 0.958
+0.872 0.905 0.052
+0.868 0.919 0.066
+0.854 0.867 0.075
+0.792 0.822
+0.797 0.811
+0.007 0.007 -0.009
+0.016 0.010 -0.008
+0.018 0.011 -0.007
+0.013 0.009 -0.005
+0.013 0.007 -0.006
+0.013 0.007
+1S and E stand for S-measure and E-measure, respectively. The ↑indicates that the higher value shows better results and the ↓is vise versa. The ∗
+indicates the quantized models with VecQ-2 and the quantized model sizes are marked in italics. Bias row lists the difference between the
+full-precision model and the quantized model. A negative value is better in S↑, E↑, and MaxF↑column but worse in the MAE↓column.
+First Conv 7x7
+Last Conv 3x3
+Full precision
+2 bit width
+Fig. 8: The comparison of weights of convolutional layers in Unet++ and Unet++*.
+(19JCZDJC31600, 19JCQNJC00600), the Open Project Fund
+of State Key Laboratory of Computer Architecture, Institute
+of Computing Technology, Chinese Academy of Sciences
+(CARCH201905). It is also partially supported by the National Research Foundation, Prime Minister’s Ofﬁce, Singapore under its Campus for Research Excellence and Technological Enterprise (CREATE) programme, and the IBM-
+Illinois Center for Cognitive Computing System Research
+(C3SR) - a research collaboration as part of IBM AI Horizons

@@ -1,0 +1,449 @@
+Published as a conference paper at ICLR 2022
+PSA-GAN: PROGRESSIVE SELF ATTENTION GANS
+FOR SYNTHETIC TIME SERIES
+Paul Jeha∗,†
+Technical University
+of Denmark
+ 
+Bohlke-Schneider∗
+AWS AI Labs
+ 
+Pedro Mercado
+AWS AI Labs
+ 
+Shubham Kapoor
+AWS AI Labs
+ 
+Rajbir Singh Nirwan
+AWS AI Labs
+ 
+Valentin Flunkert
+AWS AI Labs
+ 
+Jan Gasthaus
+AWS AI Labs
+ 
+Tim Januschowski†
+Zalando SE
+ 
+Realistic synthetic time series data of sufﬁcient length enables practical applications
+in time series modeling tasks, such as forecasting, but remains a challenge. In
+this paper, we present PSA-GAN, a generative adversarial network (GAN) that
+generates long time series samples of high quality using progressive growing of
+GANs and self-attention. We show that PSA-GAN can be used to reduce the error
+in several downstream forecasting tasks over baselines that only use real data. We
+also introduce a Frechet Inception distance-like score for time series, Context-FID,
+assessing the quality of synthetic time series samples. We ﬁnd that Context-FID is
+indicative for downstream performance. Therefore, Context-FID could be a useful
+tool to develop time series GAN models.
+INTRODUCTION
+In the past years, methods such as have consistently showcased the effectiveness of deep learning in time series analysis tasks.
+Although these deep learning based methods are effective when sufﬁcient and clean data is available,
+this assumption is not always met in practice. For example, sensor outages can cause gaps in IoT
+data, which might render the data unusable for machine learning applications .
+An additional problem is that time series panels often have insufﬁcient size for forecasting tasks,
+leading to research in meta-learning for forecasting . Cold starts are another
+common problem in time series forecasting where some time series have little and no data (like
+a new product in a demand forecasting use case). Thus, designing ﬂexible and task-independent
+models that generate synthetic, but realistic time series for arbitrary tasks are an important challenge.
+Generative adversarial networks (GAN) are a ﬂexible model family that has had success in other
+domains. However, for their success to carry over to time series, synthetic time series data must be
+of realistic length, which current state-of-the-art synthetic time series models struggle to generate
+because they often rely on recurrent networks to capture temporal dynamics .
+In this work, we make three contributions: i) We propose PSA-GAN a progressively growing,
+convolutional time series GAN model augmented with self-attention . PSA-GAN scales to long time series because the progressive growing architecture starts
+∗Equal contribution.
+†Work done while at Amazon/AWS AI Labs.
+ 
+Published as a conference paper at ICLR 2022
+modeling the coarse-grained time series features and moves towards modeling ﬁne-grained details
+during training. The self-attention mechanism captures long-range dependencies in the data . ii) We show empirically that PSA-GAN samples are of sufﬁcient quality and length to
+boost several downstream forecasting tasks: far-forecasting and data imputation during inference,
+data imputation of missing value stretches during training, forecasting under cold start conditions,
+and data augmentation. Furthermore, we show that PSA-GAN can be used as a forecasting model
+and has competitive performance when using the same context information as an established baseline.
+iii) Finally, we propose a Frechet Inception distance (FID)-like score , Context-
+FID, leveraging unsupervised time series embeddings . We show that the
+lowest scoring models correspond to the best-performing models in our downstream tasks and that
+the Context-FID score correlates with the downstream forecasting performance of the GAN model
+(measured by normalized root mean squared error). Therefore, the Context-FID could be a useful
+general-purpose tool to select GAN models for downstream applications.
+We structure this work as follows: We discuss the related work in Section 2 and introduce the model
+in Section 3. In Section 4, we evaluate our proposed GAN model using the proposed Context-FID
+score and through several downstream forecasting tasks. We also directly evaluate our model as a
+forecasting algorithm and perform an ablation study. Section 5 concludes this manuscript.
+RELATED WORK
+GANs are an active area of research that have recently been
+applied to the time series domain to synthesize data , and to forecasting tasks . Many time series GAN
+architectures use recurrent networks to model temporal dynamics . Modeling long-range dependencies and scaling recurrent networks to long
+sequences is inherently difﬁcult and limits the application of time series GANs to short sequence
+lengths (less than 100 time steps) . One way to achieve longer
+realistic synthetic time series is by employing convolutional and self-attention architectures . Convolutional
+architectures are able to learn relevant features from the raw time series data , but are ultimately limited to local receptive ﬁelds and
+can only capture long-range dependencies via many stacks of convolutional layers. Self-attention
+can bridge this gap and allow for modeling long-range dependencies from convolutional feature
+maps, which has been a successful approach in the image and time series
+forecasting domain . Another technique to achieve long sample sizes
+is progressive growing, which successively increases the resolution by adding layers to generator and
+discriminator during training . Our proposal, PSA-GAN, synthesizes progressive
+growing with convolution and self-attention into a novel architecture particularly geared towards time
+Another line of work in the time series ﬁeld is focused on developing suitable loss functions for
+modeling ﬁnancial time series with GANs where speciﬁc challenges include heavy tailed distributions,
+volatility clustering, absence of autocorrelations, among others . To this end, several models like QuantGAN , (Conditional) SigWGAN , and DAT-GAN have been proposed for review in this ﬁeld). This line of work targets its own challenges by developing new loss
+functions for ﬁnancial time series, which is orthogonal to our work, i.e. we focus on neural network
+architectures for time series GANs and show its usefulness in the context of time series forecasting.
+Another challenge is the evaluation of synthetic data. While the computer vision domain uses standard
+scores like the Inception Score and the Frechet Inception distance (FID) , such universally accepted scores do not exist in the time series ﬁeld. Thus, researchers
+rely on a Train on Synthetic–Test on Real setup and assess the quality of the synthetic time series
+in a downstream classiﬁcation and/or prediction task . In
+this work, we build on this idea and assess the GAN models through downstream forecasting tasks.
+Additionally, we suggest a Frechet Inception distance-like score that is based on unsupervised time
+series embeddings . Critically, we want to be able to score the ﬁt of our ﬁxed
+Published as a conference paper at ICLR 2022
+length synthetic samples into their context of (often much longer) true time series, which is taken
+into account by the contrastive training procedure in Franceschi et al. . As we will later show,
+the lowest scoring models correspond to the best performing models in downstream tasks.
+Problem formulation
+We denote the values of a time series dataset by zi,t ∈R, where i ∈
+{1, 2, . . . , N} is the index of the individual time series and t ∈{1, 2, . . . , T} is the time index.
+Additionally, we consider an associated matrix of time feature vectors X1:T = (x1, . . . , xT ) in
+RD×T . Our goal is to model a time series of ﬁxed length τ, ˆZi,t,τ = (ˆzi,t, . . . , ˆzi,t+τ−1), from this
+dataset using a conditional generator function G and a ﬁxed time point t. Thus, we aim to model
+ˆZi,t,τ = G(n, φ(i), Xt:t+τ−1), where n ∈Rτ is a noise vector drawn from a Gaussian distribution
+of mean zero and variance one; φ is an embedding function that maps the index of a time series to a
+vector representation, that is concatenated to each time step of Xt:t+τ−1. An overview of the model
+architecture is shown in Figure 1 and details about the time features are presented in Appendix A.
+Figure 1: Left: Architecture of our proposed model, PSA-GAN. The generator contains n blocks
+where each doubles the size of the output, by linear interpolation. It contains (dashed drawing) a
+multi layer perceptron block, that incorporates knowledge of the past in the generator. This block is
+used in the PSA-GAN-C model. The discriminator contains n blocks that halve the size of the input
+using average pooling. Right: The main block used in the generator and discriminator.
+Spectral Normalised Residual Self-Attention with Convolution
+The generator and discriminator
+use a main function m that is a composition of convolution, self-attention and spectral normalisation
+m ◦f : Rnf ×l →Rnf ×l
+x 7→γ SA(f(x)) + f(x)
+where f(x) = LR(SN(c(x))) and m(y) = γ SA(y)+y, c is a one dimensional convolution operator,
+LR the LeakyReLU operator , SN the spectral normalisation operator and SA the self-attention module. The variable nf is the number of in and out-channels of
+c, l is the length of the sequence. Following the work of , the parameter γ
+is learnable. It is initialized to zero to allow the network to learn local features directly from the
+building block f and is later enriched with distant features as the absolute value of gamma increases,
+hereby more heavily factoring the self-attention term SA. The module m is referenced as residual
+self-attention in Figure 1 (right).
+Downscaling and Upscaling
+The following sections mention upscaling (UP) and downscaling
+(DOWN) operators that double and halve the length of the time series, respectively. In this work, the
+upscaling operator is a linear interpolation and the downscaling operator is the average pooling.
+PSA-GAN PSA-GAN is a progressively growing GAN ; thus, trainable modules
+are added during training. Hereby, we model the generator and discriminator as a composition of
+functions: G = gL+1 ◦...◦g1 and D = d1 ◦...◦dL+1 where each function gi and di for i ∈[1, L+1]
+corresponds to a module of the generator and discriminator.
+Published as a conference paper at ICLR 2022
+As a preprocessing step, we ﬁrst map the concatenated input [n, φ(i), Xt:t+τ−1] from
+a sequence of length τ to a sequence of length 8, denoted by ˜Z0, using average pooling. Then, the
+ﬁrst layer of the generator g1 applies the main function m:
+g1 : Rnf ×23 →Rnf ×23
+˜Z0 7→˜Z1 = m ◦f( ˜Z0)
+For i ∈[2, L], gi maps an input sequence ˜Zi−1 to an output sequence ˜Zi by applying an upscaling of
+the input sequence and the function m ◦f:
+gi : Rnf ×2i+1 →Rnf ×2i+2
+˜Zi−1 7→˜Zi = m ◦f(UP( ˜Zi−1))
+The output of gi is concatenated back to the time features Xt:t+τ−1 and forwarded to the next block.
+Lastly, the ﬁnal layer of the generator gL+1 reshapes the multivariate sequence ˜ZL to a univariate time
+series ˆZi,t,τ of length τ = 2L+3 using a one dimensional convolution and spectral normalisation.
+DISCRIMINATOR
+The architecture of the discriminator mirrors the architecture of the generator. It
+maps the generator’s output ˆZi,t,τ and the time features Xt:t+τ−1 to a score d. The ﬁrst module of
+the discriminator dL+1 uses a one dimensional convolution c1 and a LeakyReLU activation function:
+L+1 : R1+D,τ →Rnf ,τ
+( ˜ZL+1, Xt:t+τ−1) 7→˜YL = SN(LR(c1( ˜ZL+1, Xt:t+τ−1))
+For i ∈[L + 1, 2], the module di applies a downscale operator and the main function m:
+di : Rnf ×2i+2 →Rnf ×2i+1
+Yi 7→Yi−1 = DOWN(m(Yi))
+The last module d1 turns its input sequence into a score:
+d1 : Rnf ×23 →R
+Y1 7→Y0 = SN(FC(LR(SN(c(m(Y1))))))
+where FC is a fully connected layer.
+PSA-GAN-C We introduce another instantiation of PSA-GAN in which we forward to each generator
+block gi knowledge about the past. The knowledge here is a sub-series ˆZi,t−LC,LC in the range
+[t −LC, t −1], with LC being the context length. The context ˆZi,t−LC,LC is concatenated along the
+feature dimension, i.e. at each time step, to the output sequence of gi. It is then passed through a two
+layers perceptron to reshape the feature dimension and then added back to the output of gi.
+LOSS FUNCTIONS
+PSA-GAN is trained via the LSGAN loss , since it has been shown to address mode
+collapse . Furthermore, least-squares type losses in embedding space have been
+shown to be effective in the time series domain . Additionally,
+we use an auxiliary moment loss to match the ﬁrst and second order moments between the batch of
+synthetic samples and a batch of real samples:
+where µ is the mean operator and σ is the standard deviation operator. The real and synthetic batches
+have their time index and time series index aligned. We found this combination to work well for
+PSA-GAN empirically. Note that the choice of loss function was not the main focus of this study and
+we think that our choice can be improved in future research.
+Published as a conference paper at ICLR 2022
+Training procedures
+GANs are notoriously difﬁcult to train, have hard-to-interpret learning curves,
+and are susceptible to mode collapse. The training procedure to address those issues together with
+other training and tuning details is presented in Appendix B–E.
+EXPERIMENTS
+The evaluation of synthetic time series data from GAN models is challenging and there is no widely
+accepted evaluation scheme in the time series community. We evaluate the GAN models by two
+guiding principles: i) Measuring to what degree the time series recover the statistics of the training
+dataset. ii) Measuring the performances of the GAN models in challenging, downstream forecasting
+scenarios.
+For i), we introduce the Context-FID (Context-Frechet Inception distance) score to measure whether
+the GAN models are able to recover the training set statistics. The FID score is widely used for
+evaluating synthetic data in computer vision and uses features from an inception
+network to compute the difference between the real and synthetic sample
+statistics in this feature space. In our case, we are interested in how well the the synthetic time series
+windows ”ﬁt” into the local context of the time series. Therefore, we use the time series embeddings
+from Franceschi et al. to learn embeddings of time series that ﬁt into the local context. Note
+that we train the embedding network for each dataset separately. This allows us to directly quantify
+the quality of the synthetic time series samples (see Appendix D for details).
+For ii), we set out to mimic several challenging time series forecasting tasks that are common for time
+series forecasting practitioners. These tasks often have in common that practitioners face missing
+or corrupted data during training or inference. Here, we set out to use the synthetic samples to
+complement an established baseline model, DeepAR, in these forecasting tasks. These tasks are:
+far-forecasting and missing values during inference, missing values during training, cold starts, and
+data augmentation. We evaluate these tasks by the normalized root mean squared distance (NRMSE).
+Additionally, we evaluate PSA-GAN model when used as a forecasting model. Note that, where
+applicable, we re-train our GAN models on the modiﬁed datasets to ensure that they have the same
+data available as the baseline model during the downstream tasks.
+We also considered NBEATS and Temporal Fusion Transformer (TFT) as alternative forecasting models. However, we found that DeepAR performed best in
+our experiments and therefore we report these results in the main text (see Appendix F for experiment
+details). Please refer to Appendix G for the evaluation of NBEATS and TFT (Tables S2–S6 and
+Figures S3–S6).
+In addition, we perform an ablation study of our model and discuss whether the Context-FID scores
+are indicative for downstream forecasting tasks.
+DATASETS AND BASELINES
+We use the following public, standard benchmark datasets in the time series domain: M4, hourly
+time series competition data (414 time series) ; Solar, hourly solar energy
+collection data in Alabama State (137 stations) ; Electricity, hourly electricity
+consumption data (370 customers) ; Trafﬁc: hourly occupancy
+rate of lanes in San Francisco (963 lanes) . Unless stated otherwise,
+we split all data into a training/test set with a ﬁxed date and use all data before that date for training.
+For testing, we use a rolling window evaluation with a window size of 32 and seven windows. We
+minmax scale each dataset to be within for all experiments in this paper (we scale the data
+back before evaluating the forecasting experiments). In lieu of ﬁnding public datasets that represent
+the downstream forecasting tasks, we modify each the datasets above to mimic each tasks for the
+respective experiment (see later sections for more details).
+We compare PSA-GAN with different GAN models from the literature and EBGAN ). In what follows PSA-GAN-C and PSA-GAN denote our
+proposed model with and without context, respectively. In the forecasting experiments, we use
+the GluonTS implementation of DeepAR which is a well-performing
+forecasting model and established baseline .
+Published as a conference paper at ICLR 2022
+Electricity
+0.018±0.009
+0.011±0.002
+0.022±0.01
+0.042±0.018
+0.036±0.02
+0.113±0.051
+0.158±0.088
+0.156±0.072
+0.356±0.125
+0.235±0.066
+Solar-Energy
+0.012±0.003
+0.004±0.001
+0.007±0.001
+0.002±0.001
+0.064±0.002
+0.004±0.001
+0.241±0.041
+0.058±0.009
+0.182±0.029
+0.044±0.005
+0.13±0.017
+0.488±0.027
+Table 1: Context FID-scores (lower is better) of PSA-GAN and baselines. We score 5120 randomly
+selected windows and report the mean and standard deviation.
+DIRECT EVALUATION WITH CONTEXT-FID SCORES
+Table 1 shows the Context-FID scores for PSA-GAN, PSA-GAN-C and baselines. For all sequence
+lengths, we ﬁnd that PSA-GAN or PSA-GAN-C consistently produce the lowest Context-FID scores.
+For a sequence length of 256 time steps, TIMEGAN is the second best performing model for all
+datasets. Note that even though using a context in the PSA-GAN model results in the best overall
+performance, we are interested to use the GAN in downstream tasks where the context is not available.
+Thus, the next section will use PSA-GAN without context, unless otherwise stated.
+EVALUATION ON FORECASTING TASKS
+In this section, we present the results of the forecasting tasks. We ﬁnd that synthetic samples do not
+improve over baselines in all cases. However, we view these results as a ﬁrst attempt to use GAN
+models in these forecasting tasks and believe that future research could improve over our results.
+Far-forecasting:
+In this experiment, we forecast far into the future by assuming that the data points
+between the training end time and the rolling evaluation window are not observed. For example, the
+last evaluation window would have 32 ∗6 unobserved values between the training end time and the
+forecast start date. This setup reﬂects two possible use cases: Forecasting far into the future (where
+no context data is available) and imputing missing data during inference because of a data outage just
+before forecasting. Neural network-based forecasting models such as DeepAR struggle under these
+conditions because they rely on the recent context and need to impute these values during inference.
+Furthermore, DeepAR only imputes values in the immediate context and not for the lagged values.
+Here, we use the GAN models during inference to ﬁll the missing observations with synthetic data.
+As a baseline, we use DeepAR and impute the missing observations of lagged values with a moving
+average (window size 10) during inference. Here, we ﬁnd that using the synthetic data from GAN
+models drastically improve over the DeepAR baseline and using samples from PSA-GAN results
+into the lowest NRMSE for three out of four datasets (see left Table in Figure 2). Figure 2 also shows
+the NRMSE as a function of the forecast window. Figure 3 shows an example of a imputed time
+series and the resulting forecast from the Electricity dataset when using PSA-GAN.
+Missing Value Stretches:
+Missing values are present in many real world time series applications
+and are often caused by outages of a sensor or service . Therefore, missing
+values in real-world scenarios are often not evenly distributed over the time series but instead form
+missing value ”stretches”. In this experiment, we simulate missing value stretches and remove time
+series values of length 50 and 110 from the datasets. This results into 5.4-7.7% missing values for
+a stretch length of 50 and and 9.9-16.9% missing values for a stretch length of 110 (depending on
+the dataset.) Here, we split the training dataset into two parts along the time axis and only introduce
+missing values in the second part. We use the ﬁrst (unchanged) part of the training dataset to train
+the GAN models and both parts of the training set to train DeepAR. We then use the GAN models
+Published as a conference paper at ICLR 2022
+Electricity
+3.31±0.78 0.84±0.44 1.43±0.02
+1.26±0.29 2.02±0.07
+TIMEGAN 1.57±0.25 1.32±0.13 1.21±0.05 0.86±0.17
+PSA-GAN 0.99±0.44 0.62±0.3
+Figure 2: NRMSE of far-forecasting experiments (lower is better). Mean and conﬁdence intervals
+are obtained by re-running each method ten times. Left: NRMSE average over different forecast
+windows. DeepAR is only run on the real time series data. The other models correspond to DeepAR
+and one of the GAN models for ﬁlling missing observations. Right: NRMSE by forecast window.
+The ﬁrst window will have no missing values during inference (we forecast the ﬁrst 32 steps after
+the training range) and we increase the missing values during inference with each window (the last
+window will have 32 ∗6 missing values). For DeepAR, the NRMSE increases noticeably at the
+fourth forecast window while using PSA-GAN to impute the missing values at inference keeps the
+NRMSE low.
+Forecast window
+PSA-GAN (ours)
+Imputed sequence
+farforecasting experiment for the Electricity dataset. True data is shown
+in blue and the imputed sequence
+and forecasts of the model in orange.
+The orange line between the dashed
+lines corresponds to the PSA-GAN
+imputed sequence and is used by
+DeepAR for forecasting. Note that
+this part is unobserved in this experiment. The imputed sequence allows to generate a reasonable forecast, even if many data points before
+the forecast start date are unobserved.
+to impute missing values during training and inference of DeepAR. Figure 4 shows that using the
+GAN models to impute missing values during training DeepAR on data with missing value stretches
+reduces its forecasting error. While all GAN models reduce the NRMSE in this setup, PSA-GAN is
+most effective in reducing the error in this experiment. See Figure S1 for a detailed split by dataset.
+Stretch length = 50
+Stretch length = 110
+Figure 4: Performance of using different GAN
+models for imputation in the missing value
+stretch length experiment. Markers denote the
+mean NRMSE averaged over datasets and error
+bars the 68% conﬁdence interval over ten runs.
+For 50 and 110 missing value stretch length, using PSA-GAN to impute missing values results
+in the lowest overall error, whereas DeepAR
+returns the highest.
+Cold Starts:
+In this experiment, we explore whether the GAN models can support DeepAR in a
+cold start forecasting setting. Cold starts refer to new time series (like a new product in demand
+forecasting) for which little or no data is available. Here, we randomly truncate 10%, 20%, and 30%
+of the time series from our datasets such that only the last 24 (representing 24 hours of data) values
+before inference are present. We only consider a single forecasting window in this experiment. We
+then again use the GAN models to impute values for the lags and context that DeepAR conditions for
+Published as a conference paper at ICLR 2022
+Electricity
+0.49±0.03 0.26±0.02 1.07±0.01
+0.28±0.02 1.06±0.02 0.47±0.004
+PSA-GAN 0.64±0.22
+Table 2: NRMSE accuracy comparison of data augmentation experiments
+(lower is better, best method in bold).
+Mean and 95% conﬁdence intervals are
+obtained by re-running each method
+ﬁve times. DeepAR is only run on the
+real time series data. The other models
+correspond to DeepAR and one of the
+GAN models for data augmentation.
+forecasting the cold start time series. Figure 5 shows the forecasting error of the different models for
+the cold start time series only. In this experiment, PSA-GAN and TIMEGAN improve the NRMSE
+over DeepAR and are on-par overall (mean NMRSE 0.70 and 0.71 for PSA-GAN and TIMEGAN,
+respectively). See Figure S2 for a detailed split by dataset.
+Cold start percentage = 10
+Cold start percentage = 20
+Cold start percentage = 30
+Figure 5: Performance of using different GAN models for imputation in the cold start experiment.
+Markers denote the mean NRMSE averaged over datasets and error bars the 68% conﬁdence interval
+over ten runs. Note that this ﬁgure only shows the error of the cold start time series. Overall,
+TIMEGAN and PSA-GAN improve the NRMSE over DeepAR in this setup, while PSA-GAN is the
+best method when 30% of time series are cold starts.
+Data Augmentation:
+In this experiment, we average the real data and GAN samples to augment
+the data during training. 1 During inference, DeepAR is conditioned on real data only to generate
+forecasts. In Table 2 we we can see that none of the GAN models for data augmentation consistently
+improves over DeepAR. Overall, TIMEGAN is the best-performing GAN model but plain DeepAR
+still performs better. This ﬁnding is aligned with recent work in the image domain where data
+augmentation with GAN samples does not improve a downstream task . We
+hypothesize that the GAN models cannot improve in the data augmentation setup because they are
+trained to generate realistic samples and not necessarily to produce relevant invariances. Furthermore,
+the dataset sizes might be sufﬁcient for DeepAR to train a well-performing model and therefore the
+augmentation might not be able to reduce the error further. More research is required to understand
+whether synthetic data can improve forecasting models via data augmentation.
+Forecasting Experiments:
+In this experiment, we use the GAN models directly for forecasting
+(Table 3, example samples in Appendix H). We can see that DeepAR consistently performs best.
+This is expected as DeepAR takes into account context information and lagged values. This kind of
+information is not available to the GAN models. To test this we further consider PSA-GAN-C, i.e.
+PSA-GAN with 64 previous time series values as context, and further evaluate DeepAR with drawing
+lags only from the last 64 values (DeepAR-C). We can see that in this case PSA-GAN-C outperforms
+DeepAR-C in 3 out of 4 datasets and PSA-GAN performs on par with DeepAR-C. Moreover, both
+PSA-GAN and PSA-GAN-C are the best performing GAN models. Adding lagged values to the GAN
+models as context could further improve their performance and adversarial/attention architectures
+have been previously used for forecasting .
+1We also tried using only the GAN generated data for training and experimented with ratios of mixing
+synthetic and real samples, similar to the work in . Furthermore, we tried different
+weights and scheduled sampling but this did not improve the results.
+Published as a conference paper at ICLR 2022
+Electricity
+0.49±0.03 0.26±0.02 1.07±0.01 0.45±0.01
+PSA-GAN-C 1.18±0.00
+Table 3: NRMSE accuracy comparison of forecasting experiments (lower
+is better, best method in bold). Mean
+and 95% conﬁdence intervals are obtained by re-running each method ﬁve
+times. DeepAR-C and PSA-GAN-C
+use the same 64 previous values as context. Among GAN models PSA-GAN
+and PSA-GAN-C perform best.
+ABLATION STUDY
+Figure 6 shows the results of our ablation study where we disable important components of our model:
+moment loss, self-attention, and fading in of new layers. We measure the performance of the ablation
+models by Context-FID score. Overall, our propost logog ed PSA-GAN model performs better than
+the ablations which conﬁrms that these components contribute to the performance of the model.
+Figure 6: We perform an ablation study by disabling moment
+loss, self-attention, and fading
+in of new layers of PSA-GAN.
+We show the mean performance
+over three runs on four datasets
+and the 68% conﬁdence interval. PSA-GAN has the lowest
+Context-FID score which con-
+ﬁrms that the proposed model
+requires these components for
+good performance.
+SA: Selfattention, ML: Moment loss,
+fade in: Progressive fade in of
+new layers
+LOW CONTEXT-FID SCORE MODELS CORRESPOND TO BEST-PERFORMING
+FORECASTING MODELS
+One other observation is that the lowest Context-FID score models correspond to the best models in
+the data augmentation and far-forecasting experiments. PSA-GAN and TIMEGAN produce the lowest
+Context-FID samples and both models also improve over the baseline in most downstream tasks.
+Overall, PSA-GAN has lowest Context-FID and also outperforms the other models in the downstream
+forecasting tasks, except for the cold start task. Additionally, we calculated the Context-FID scores
+for the ablation models mentioned in Figure 6 (but with a target length of 32) and the NRMSE of these
+models in the forecasting experiment (as in Table 3). We ﬁnd that the Pearson correlation coefﬁcient
+between the Context-FID and forecasting NRMSE is 0.71 and the Spearman’s rank correlation
+coefﬁcient is 0.67, averaged over all datasets. All datasets (except Traffic) have a correlation
+coefﬁcient of at least 0.73 in either measure (see Table S1 in the Appendix).
+CONCLUSION
+We have presented PSA-GAN, a progressive growing time series GAN augmented with self-attention,
+that produces long realistic time series and improves downstream forecasting tasks that are challenging
+for deep learning-based time series models. Furthermore, we introduced the Context-FID score to
+assess the quality of synthetic time series samples produced by GAN models. We found that the
+lowest Context-FID scoring models correspond to the best-performing models in downstream tasks.
+We believe that time series GANs that scale to long sequences combined with a reliable metric to
+assess their performance might lead to their routine use in time series modeling.
+Published as a conference paper at ICLR 2022
+REPRODUCIBILITY STATEMENT
+Details necessary for reproducing our experiments are given in the Appendix. In particular, details
+on training are provided in Sections B and C, together with hyperparameter tuning in Section E and
+further experimental settings in Section F. The code we used in the paper is available under:
+ and we will additionally disseminate PSA-GAN via GluonTS:

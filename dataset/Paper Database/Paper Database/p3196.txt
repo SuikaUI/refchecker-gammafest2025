@@ -1,0 +1,1539 @@
+A Statistical Parsing Framework for
+Sentiment Classiﬁcation
+Li Dong∗, ∗∗
+Beihang University
+Furu Wei†, ‡
+Microsoft Research
+Shujie Liu†
+Microsoft Research
+Ming Zhou†
+Microsoft Research
+Beihang University
+We present a statistical parsing framework for sentence-level sentiment classiﬁcation in this
+article. Unlike previous works that use syntactic parsing results for sentiment analysis, we
+develop a statistical parser to directly analyze the sentiment structure of a sentence. We show that
+complicated phenomena in sentiment analysis (e.g., negation, intensiﬁcation, and contrast) can
+be handled the same way as simple and straightforward sentiment expressions in a uniﬁed and
+probabilistic way. We formulate the sentiment grammar upon Context-Free Grammars (CFGs),
+and provide a formal description of the sentiment parsing framework. We develop the parsing
+model to obtain possible sentiment parse trees for a sentence, from which the polarity model
+is proposed to derive the sentiment strength and polarity, and the ranking model is dedicated
+to selecting the best sentiment tree. We train the parser directly from examples of sentences
+annotated only with sentiment polarity labels but without any syntactic annotations or polarity
+annotations of constituents within sentences. Therefore we can obtain training data easily. In
+particular, we train a sentiment parser, s.parser, from a large amount of review sentences with
+users’ ratings as rough sentiment polarity labels. Extensive experiments on existing benchmark
+data sets show signiﬁcant improvements over baseline sentiment classiﬁcation approaches.
+∗State Key Laboratory of Software Development Environment, Beihang University, XueYuan Road No.37,
+HaiDian District, Beijing, P.R. China 100191. E-mail: ; .
+∗∗Contribution during internship at Microsoft Research.
+† Natural Language Computing Group, Microsoft Research Asia, Building 2, No. 5 Danling Street, Haidian
+District, Beijing, P.R. China 100080. E-mail: {fuwei, shujliu, mingzhou}@microsoft.com.
+‡ Corresponding author.
+Submission received: 10 December 2013; revised version received: 26 July 2014; accepted for publication:
+28 January 2015.
+doi:10.1162/COLI a 00221
+© 2015 Association for Computational Linguistics
+Downloaded from by guest on 26 March 2025
+Computational Linguistics
+Volume 41, Number 2
+1. Introduction
+Sentiment analysis has received much attention from
+both research and industry communities in recent years. Sentiment classiﬁcation, which
+identiﬁes sentiment polarity (positive or negative) from text (sentence or document),
+has been the most extensively studied task in sentiment analysis. Until now, there
+have been two mainstream approaches for sentiment classiﬁcation. The lexicon-based
+approach aims to aggregate the sentiment polarity
+of a sentence from the polarity of words or phrases found in the sentence, and the
+learning-based approach treats sentiment polarity
+identiﬁcation as a special text classiﬁcation task and focuses on building classiﬁers
+from a set of sentences (or documents) annotated with their corresponding sentiment
+The lexicon-based sentiment classiﬁcation approach is simple and interpretable,
+but suffers from scalability and is inevitably limited by sentiment lexicons that are
+commonly created manually by experts. It has been widely recognized that sentiment
+expressions are colloquial and evolve over time very frequently. Taking tweets from
+Twitter1 and movie reviews on IMDb2 as examples, people use very casual language
+as well as informal and new vocabulary to comment on general topics and movies. In
+practice, it is not feasible to create and maintain sentiment lexicons to capture sentiment
+expressions with high coverage. On the other hand, the learning-based approach relies
+on large annotated samples to overcome the vocabulary coverage and deals with variations of words in sentences. Human ratings in reviews and emoticons
+in tweets are extensively used
+to collect a large number of training corpora to train the sentiment classiﬁer. However,
+it is usually not easy to design effective features to build the classiﬁer. Among
+others, unigrams have been reported as the most effective features in sentiment classiﬁcation.
+Handling complicated expressions delivering people’s opinions is one of the most
+challenging problems in sentiment analysis. Compositionalities such as negation, intensiﬁcation, contrast, and their combinations are typical cases. We show some concrete
+examples here:
+(1) The movie is not good. [negation]
+(2) The movie is very good. [intensiﬁcation]
+(3) The movie is not funny at all. [negation + intensiﬁcation]
+(4) The movie is just so so, but i still like it. [contrast]
+(5) The movie is not very good, but i still like it. [negation + intensiﬁcation +
+The negation expressions, intensiﬁcation modiﬁers, and the contrastive conjunction
+can change the polarity (Examples (1), (3), (4), (5)), strength (Examples (2), (3), (5)), or
+both (Examples (3), (5)) of the sentiment of the sentences. We do not need any detailed
+explanations here as they can be commonly found and easily understood in people’s
+1 
+2 
+Downloaded from by guest on 26 March 2025
+Dong et al.
+A Statistical Parsing Framework for Sentiment Classiﬁcation
+daily lives. Existing works to address these issues usually rely on syntactic parsing
+results either used as features in learning-based methods or hand-crafted rules in lexiconbased methods. However, even with the difﬁculty and feasibility of deriving the sentiment structure from syntactic parsing results put aside, it is an even more challenging
+task to generate stable and reliable parsing results for text that is ungrammatical in
+nature and has a high ratio of out-of-vocabulary words. The accuracy of the linguistic
+parsers trained on standard data sets drops dramatically on user-generated-content (reviews, tweets,
+etc.), which is actually the prime focus of sentiment analysis algorithms. The error,
+unfortunately, will propagate downstream in the process of sentiment analysis methods
+building upon parsing results.
+We therefore propose directly analyzing the sentiment structure of a sentence.
+The nested structure of sentiment expressions can be naturally modeled in a similar
+fashion as statistical syntactic parsing, which aims to ﬁnd the linguistic structure of a
+sentence. This idea creates many opportunities for developing sentiment classiﬁers from
+a new perspective. The most challenging problem and barrier in building a statistical
+sentiment parser lies in the acquisition of training data. Ideally, we need examples of
+sentences annotated with polarity for the whole sentence as well as sentiment tags
+for constituents within a sentence, as with the Penn TreeBank for training traditional
+linguistic parsers. However, this is not practical as the annotations will be inevitably
+time-consuming and require laborious human efforts. Therefore, it is better to learn the
+sentiment parser only utilizing examples annotated with the polarity label of the whole
+sentence. For example, we can collect a huge number of publicly available reviews and
+rating scores on the Web. People may use the movie is gud (“gud” is a popular informal
+expression of “good”) to express a positive opinion towards a movie, and not a fan to
+express a negative opinion. Also, we can ﬁnd review sentences such as The movie is
+gud, but I am still not a fan to indicate a negative opinion. We can then use these two
+fragments and the overall negative opinion of the sentence to deduce sentiment rules
+automatically from data. These sentiment fragments and rules can be used to analyze
+the sentiment structure for new sentences.
+In this article, we propose a statistical parsing framework to directly analyze the
+structure of a sentence from the perspective of sentiment analysis. Speciﬁcally, we
+formulate a Context-Free Grammar (CFG)–based sentiment grammar. We then develop
+a statistical parser to derive the sentiment structure of a sentence. We leverage the CYK
+algorithm to conduct bottom–up parsing, and
+use dynamic programming to accelerate computation. Meanwhile, we propose using
+the polarity model to derive sentiment strength and polarity of a sentiment parse tree,
+and the ranking model to select the best one from the sentiment parsing results. We train
+the parser directly from examples of sentences annotated with sentiment polarity labels
+instead of syntactic annotations and polarity annotations of constituents within sentences. Therefore we can obtain training data easily. In particular, we train a sentiment
+parser, named s.parser, from a large number of review sentences with users’ ratings
+as rough sentiment polarity labels. The statistical parsing–based approach builds a
+principled and scalable framework to support the sentiment composition and inference
+which cannot be well handled by bag-of-words approaches. We show that complicated
+phenomena in sentiment analysis (e.g., negation, intensiﬁcation, and contrast) can be
+handled the same way as simple and straightforward sentiment expressions in a uniﬁed
+and probabilistic way.
+Downloaded from by guest on 26 March 2025
+Computational Linguistics
+Volume 41, Number 2
+The major contributions of the work presented in this article are as follows.
+We propose a statistical parsing framework for sentiment analysis that is
+capable of analyzing the sentiment structure for a sentence. This
+framework can naturally handle compositionality in a probabilistic way. It
+can be trained from sentences annotated with only sentiment polarity but
+without any syntactic annotations or polarity annotations of constituents
+within sentences.
+We present the parsing model, polarity model, and ranking model in the
+proposed framework, which are formulated and can be improved
+independently. It provides a principled and ﬂexible approach to sentiment
+classiﬁcation.
+We implement the statistical sentiment parsing framework, and conduct
+experiments on several benchmark data sets. The experimental results
+show that the proposed framework and algorithm can signiﬁcantly
+outperform baseline methods.
+The remainder of this article is organized as follows. We introduce related work in
+Section 2. We present the statistical sentiment parsing framework, including the parsing
+model, polarity model, and ranking model, in Section 3. Learning methods for our
+model are explained in Section 4. Experimental results are reported in Section 5. We
+conclude this article with future work in Section 6.
+2. Related Work
+In this section, we give a brief introduction to related work about sentiment classi-
+ﬁcation (Section 2.1) and parsing (Section 2.2). We tackle the sentiment classiﬁcation
+problem in a parsing manner, which is a signiﬁcant departure from most previous
+2.1 Sentiment Classiﬁcation
+Sentiment classiﬁcation has been extensively studied in the past few years. In terms
+of text granularity, existing works can be divided into phrase-level, sentence-level, or
+document-level sentiment classiﬁcation. We focus on sentence-level sentiment classiﬁcation in this article. Regardless of what granularity the task is performed on, existing
+approaches deriving sentiment polarity from text fall into two major categories, namely,
+lexicon-based and learning-based approaches.
+The lexicon-based sentiment analysis uses dictionary matching on a predeﬁned sentiment lexicon to derive sentiment polarity. These methods often use a set of manually
+deﬁned rules to deal with the negation of polarity. Turney proposed using the
+average sentiment orientation of phrases, which contains adjectives or adverbs, in a
+review to predict its sentiment orientation. Yu and Hatzivassiloglou calculated
+a modiﬁed log-likelihood ratio for every word by the co-occurrences with positive and
+negative seed words. To determine the polarity of a sentence, they compare the average
+log-likelihood value with threshold. Taboada et al. presented a lexicon-based
+approach for extracting sentiment from text. They used dictionaries of words with annotated sentiment orientation (polarity and strength) while incorporating intensiﬁcation
+and negation. The lexicon-based methods often achieve high precisions and do not need
+Downloaded from by guest on 26 March 2025
+Dong et al.
+A Statistical Parsing Framework for Sentiment Classiﬁcation
+any labeled samples. But they suffer from coverage and domain adaption problems.
+Moreover, lexicons are often built and used without considering the context . Also, hand-crafted rules are often matched heuristically.
+The sentiment dictionaries used for lexicon-based sentiment analysis can be created manually, or automatically using seed words to expand the list of words. Kamps
+et al. and Williams and Anand used various lexical relations (such as
+synonym and antonym relations) in WordNet to expend a set of seed words. Some other
+methods learn lexicons from data directly. Hatzivassiloglou and McKeown used
+a log-linear regression model with conjunction constraints to predict whether conjoined
+adjectives have similar or different polarities. Combining conjunction constraints across
+many adjectives, a clustering algorithm separated the adjectives into groups of different
+polarity. Finally, adjectives were labeled as positive or negative. Velikovich et al. 
+constructed a term similarity graph using the cosine similarity of context vectors. They
+performed graph propagation from seeds on the graph, obtaining polarity words and
+phrases. Takamura, Inui, and Okumura regarded the polarity of words as spins of
+electrons, using the mean ﬁeld approximation to compute the approximate probability
+function of the system instead of the intractable actual probability function. Kanayama
+and Nasukawa used tendencies for similar polarities to appear successively in
+contexts. They deﬁned density and precision of coherency to ﬁlter neutral phrases and
+uncertain candidates. Choi and Cardie and Lu et al. transformed the
+lexicon learning to an optimization problem, and used integer linear programming to
+solve it. Kaji and Kitsuregawa deﬁned the χ2-based polarity value and PMI-based
+polarity value as a polarity strength to ﬁlter neutral phrases. de Marneffe, Manning,
+and Potts utilized review data to deﬁne polarity strength as the expected rating
+value. Mudinas, Zhang, and Levene used word count as a feature template and
+trained a classiﬁer using Support Vector Machines with linear kernel. They then regarded the weights as polarity strengths. Krestel and Siersdorfer generated topicdependent lexicons from review articles by incorporating topic and rating probabilities
+and deﬁned the polarity strength based on the results. In this article, the lexical relations
+deﬁned in WordNet are not used because of its coverage. Furthermore, most of these
+methods deﬁne different criteria to propagate polarity information of seeds, or use
+optimization algorithms and sentence-level sentiment labels to learn polarity strength
+values. Their goal is to balance the precision and recall of learned lexicons. We also
+learn the polarity strength values of phrases from data. However, our primary objective
+is to obtain correct sentence-level polarity labels, and use them to form the sentiment
+Learning-based sentiment analysis uses machine learning methods to classify sentences or documents into two (negative and positive) or three (negative, positive, and
+neutral) classes. Previous research has shown that sentiment classiﬁcation is more dif-
+ﬁcult than traditional topic-based text classiﬁcation, despite the fact that the number
+of classes in sentiment classiﬁcation is smaller than that in topic-based text classiﬁcation . Pang, Lee, and Vaithyanathan investigated three
+machine learning methods to produce automated classiﬁers to generate class labels for
+movie reviews. They tested them on Na¨ıve Bayes, Maximum Entropy, and Support
+Vector Machine (SVM), and evaluated the contribution of different features including unigrams, bigrams, adjectives, and part-of-speech tags. Their experimental results
+suggested that a SVM classiﬁer with unigram presence features outperforms other
+competitors. Pang and Lee separated subjective portions from the objective
+by ﬁnding minimum cuts in graphs to achieve better sentiment classiﬁcation performance. Matsumoto, Takamura, and Okumura used text mining techniques to
+Downloaded from by guest on 26 March 2025
+Computational Linguistics
+Volume 41, Number 2
+extract frequent subsequences and dependency subtrees, and used them as features
+of SVM. McDonald et al. investigated a global structured model for jointly
+classifying polarity at different levels of granularity. This model allowed classiﬁcation
+decisions from one level in the text to inﬂuence decisions at another. Yessenalina,
+Yue, and Cardie used sentence-level latent variables to improve document-level
+prediction. T¨ackstr¨om and McDonald presented a latent variable model for
+only using document-level annotations to learn sentence-level sentiment labels, and
+T¨ackstr¨om and McDonald improved it by using a semi-supervised latent variable model to utilize manually crafted sentence labels. Agarwal et al. and Tu et al.
+ explored part-of-speech tag features and tree-kernel. Wang and Manning 
+used SVM built over Na¨ıve Bayes log-count ratios as feature values to classify polarity.
+They showed that SVM was better at full-length reviews, and Multinomial Na¨ıve Bayes
+was better at short-length reviews. Liu, Agam, and Grossman proposed a set
+of heuristic rules based on dependency structure to detect negations and sentimentbearing expressions. Most of these methods are built on bag-of-words features, and
+sentiment compositions are handled by manually crafted rules. In contrast to these
+models, we derive polarity labels from tree structures parsed by the sentiment grammar.
+There have been several attempts to assume that the problem of sentiment analysis is compositional. Sentiment classiﬁcation can be solved by deriving the sentiment
+of a complex constituent (sentence) from the sentiment of small units (words and
+phrases) . Moilanen and Pulman proposed using delicate written linguistic patterns as heuristic decision rules when computing the sentiment from individual words to phrases and ﬁnally to the sentence. The
+manually compiled rules were powerful enough to discriminate between the different
+sentiments in effective remedies (positive) / effective torture (negative), and in too colorful
+(negative) and too sad (negative). Nakagawa, Inui, and Kurohashi leveraged a
+conditional random ﬁeld model to calculate the sentiment of all the parsed elements
+in the dependency tree and then generated the overall sentiment. It had an advantage
+over the rule-based approach in that it did not explicitly
+denote any sentiment designation to words or phrases in parse trees. Instead, it modeled
+their sentiment polarity as latent variables with a certain probability of being positive
+or negative. Councill, McDonald, and Velikovich used a conditional random ﬁeld
+model informed by a dependency parser to detect the scope of negation for sentiment
+analysis. Some other methods model sentiment compositionality in the vector space.
+They regard the composition operator as a matrix, and use matrix-vector multiplication to obtain the transformed vector representation. Socher et al. proposed a
+recursive neural network model that learned compositional vector representations for
+phrases and sentences. Their model assigned a vector and a matrix to every node in a
+parse tree. The vector captured the inherent meaning of the constituent, and the matrix
+captured how it changes the meaning of neighboring words or phrases. Socher et al.
+ recently introduced a sentiment treebank based on the results of the Stanford
+parser . The sentiment treebank included polarity labels of
+phrases that are annotated using Amazon Mechanical Turk. The authors trained recursive neural tensor networks on the sentiment treebank. For a new sentence, the model
+predicted polarity labels based on the syntactic parse tree, and used tensors to handle
+compositionality in the vector space. Dong et al. proposed utilizing multiple composition functions in recursive neural models and learning to select them adaptively.
+Most previous methods are either rigid in terms of handcrafted rules, or sensitive to
+the performance of existing syntactic parsers they use. This article addresses sentiment
+Downloaded from by guest on 26 March 2025
+Dong et al.
+A Statistical Parsing Framework for Sentiment Classiﬁcation
+compositions by deﬁning sentiment grammar and borrowing some techniques in the
+parsing research ﬁeld. Moreover, our method uses symbolic representations instead of
+vector spaces.
+2.2 Syntactic Parsing and Semantic Parsing
+The work presented in this article is close to traditional statistical parsing, as we borrow
+some algorithms to build the sentiment parser. Syntactic parsers are learned from the
+Treebank corpora, and ﬁnd the most likely parse tree with the largest probability. In
+this article, we borrow some well-known techniques from syntactic parsing methods
+ , such as the CYK algorithm and Context-Free
+Grammar. These techniques are used to build the sentiment grammar and parsing
+model. They provide a natural way of deﬁning the structure of sentiment trees and
+parse sentences to trees. The key difference lies in that our task is to calculate the
+polarity label of a sentence, instead of obtaining the parse tree. We only have sentencepolarity pairs as our training instances instead of annotated tree structures. Moreover,
+in the decoding process, our goal is to compute correct polarity labels by representing
+sentences as latent sentiment trees. Recently, Hall, Durrett, and Klein developed a
+discriminative constituency parser using rich surface features, adapting it to sentiment
+analysis. Besides extracting unigrams and bigrams as features, they learned interactions
+between tags and words located at the beginning or the end of spans. However, their
+method relies on phrase-level polarity annotations.
+Semantic parsing is another body of work related to this article. A semantic parser
+is used to parse meaning representations for given sentences. Most existing semantic
+parsing works relied on ﬁne-grained
+annotations of target logical forms, which required the supervision of experts and are
+relatively expensive. To balance the performance and the amount of human annotation,
+some works used only question-answer pairs or even binary correct/incorrect signals
+as their input. Clarke et al. used a binary correct/incorrect signal of a database
+query to map sentences to logical forms. It worked with FunQL language and transformed semantic parsing as an integer linear programming (ILP) problem. In each iteration, it solved ILP and updated the parameters of structural SVM. Liang, Jordan, and
+Klein learned a semantic parser from question-answer pairs, where the logical
+form was modeled as a latent tree-based semantic representation. Krishnamurthy and
+Mitchell presented a method for training a semantic parser using a knowledge
+base and an unlabeled text corpus, without any individually annotated sentences.
+Artzi and Zettlemoyer used various types of weak supervision to learn a
+grounded Combinatory Categorial Grammar semantic parser, which took context into
+consideration. Bao et al. presented a translation-based weakly supervised semantic parsing method to translate questions to answers based on CYK parsing. A log-linear
+model is deﬁned to score derivations. All these weakly supervised semantic parsing
+methods learned to transform a natural language sentence to its semantic representation
+without annotated logical form. In this work, we build a sentiment parser. Specifically, we use a modiﬁed version of the CYK algorithm that parses sentences in a
+bottom–up fashion. We use the log-linear model to score candidates generated by beam
+search. Instead of using question-answer pairs, sentence-polarity pairs are used as our
+weak supervisions. We also use the parameter estimation algorithm proposed by Liang,
+Jordan, and Klein .
+Downloaded from by guest on 26 March 2025
+Computational Linguistics
+Volume 41, Number 2
+3. Statistical Sentiment Parsing
+We present the statistical parsing framework for sentence-level sentiment classiﬁcation
+in this section. The underlying idea is to model sentiment classiﬁcation as a statistical parsing process. Figure 1 shows the overview of the statistical sentiment parsing
+framework. There are three major components. The input sentence s is transformed
+into and represented by sentiment trees derived from the parsing model (Section 3.2),
+using the sentiment grammar deﬁned in Section 3.1. Trees are scored by the ranking
+model in Section 3.3. The sentiment tree with the highest ranking score is treated as the
+best derivation for s. Furthermore, the polarity model (Section 3.4) is used to compute
+polarity values for the sentiment trees.
+Notably, the sentiment trees t are unobserved during training. We can only observe
+the sentence s and its polarity label y in training data. In other words, we train the model
+directly from the examples of sentences annotated only with sentiment polarity labels
+but without any syntactic annotations or polarity annotations of the constituents within
+sentences. To be speciﬁc, we ﬁrst learn the sentiment grammar and the polarity model
+from data as described in Section 4.2. Then, given the sentence and polarity label pairs
+, we search the latent sentiment trees t and estimate the parameters of the ranking
+model as detailed in Section 4.1.
+To better illustrate the whole process, we describe the sentiment parsing procedure
+using an example sentence, The movie is not very good, but i still like it. The sentiment
+polarity label of the above sentence is “positive.” There is negation, intensiﬁcation, and
+contrast in this example, which are difﬁcult to capture using bag-of-words classiﬁcation
+methods. This sentence is a complex case that demonstrates the capability of the proposed statistical sentiment parsing framework, which motivates the work in this article.
+The statistical sentiment parsing algorithm may generate a number of sentiment trees
+for the input sentence. Figure 2 shows the best sentiment parse tree. It shows that the
+statistical sentiment parsing framework can deal with the compositionality of sentiment
+in a natural way. In Table 1, we list the sentiment rules used during the parsing process.
+We show the generation process of the sentiment parse tree from the bottom–up and
+the calculation of sentiment strength and polarity for every text span in the parsing
+(sentence)
+(sentiment tree)
+(polarity label)
+Parsing Model
+Ranking Model
+Polarity Model
+the movie is not very good
+The parsing model and ranking model are used to transform the input sentence s to the
+sentiment tree t with the highest ranking score. Moreover, the polarity model deﬁnes
+how to compute polarity values for the rules of the sentiment grammar. The sentiment
+tree t is evaluated with respect to the polarity model to produce the polarity label y.
+Downloaded from by guest on 26 March 2025
+Dong et al.
+A Statistical Parsing Framework for Sentiment Classiﬁcation
+Sentiment structure for the sentence The movie is not very good, but i still like it. The rules used in
+the derivation process include {P →the movie is; P →good; P →i still like it; P →very P;
+N →not P; N →PN; N →NE; E →,; P →N but P; S →P}.
+In the following sections, we ﬁrst provide a formal description of the sentiment
+grammar in Section 3.1. We then present the details of the parsing model in Section 3.2,
+the ranking model in Section 3.3, and the polarity model in Section 3.4.
+3.1 Sentiment Grammar
+We develop the sentiment grammar upon CFG (Context-Free Grammar) . Let G =< V, Σ, S, R > denote a CFG, where V is a ﬁnite set of non-terminals,
+Σ is a ﬁnite set of terminals (disjointed from V), S ∈V is the start symbol, and R is
+a set of rewrite rules (or production rules) of the form A →c where A ∈V and c ∈
+(V ∪Σ)∗. We use Gs =< Vs, Σs, S, Rs > to denote the sentiment grammar in this article.
+Parsing process for the sentence The movie is not very good, but i still like it. [i, Y, j] represents the
+text spanning from i to j is derived to symbol Y. N and P are non-terminals in the sentiment
+grammar, and N and P represent polarities of sentiment.
+[0, P, 3]: the movie is
+P →the movie is
+[5, P, 6]: good
+[6, E, 7]: ,
+[8, P, 11]: i still like it
+P →i still like it
+[4, P, 6]: very good
+[3, N, 6]: not very good
+[0, N, 6]: the movie is not very good
+[0, N, 7]: the movie is not very good,
+[0, P, 11]: the movie is not very good, but i still like it
+P →N but P
+[0, S, 11]: the movie is not very good, but i still like it
+Downloaded from by guest on 26 March 2025
+Computational Linguistics
+Volume 41, Number 2
+The non-terminal set is denoted as Vs = {N, P, S, E}, where S is the start symbol, the
+non-terminal N represents the negative polarity, and the non-terminal P represents the
+positive polarity. The rules in Rs are divided into the following six categories:
+Dictionary rules: X →wk
+0, where X ∈{N, P}, wk
+0 = w0 . . . wk−1, and
+s . These rules can be regarded as the sentiment dictionary
+used in traditional approaches. They are basic sentiment units
+assigned with polarity probabilities. For instance, P →good is a
+dictionary rule.
+Combination rules: X →c, where c ∈(Vs ∪Σs)+, and two successive
+non-terminals are not allowed. There is at least one terminal in c.
+These rules combine terminals and non-terminals, such as N →not P,
+and P →N but P. They are used to handle negation, intensiﬁcation,
+and contrast in sentiment analysis. The number of non-terminals in a
+combination rule is restricted to one and two.
+Glue rules: X →X1X2, where X, X1, X2 ∈{N, P}. These rules combine two
+text spans that are derived into X1 and X2, respectively.
+OOV rules: E →wk
+0, where wk
+0 ∈Σ+. We use these rules to handle
+Out-Of-Vocabulary (OOV) text spans whose polarity probabilities are not
+learned from data.
+Auxiliary rules: X →EX1, X →X1E, where X, X1 ∈{N, P}. These rules
+combine a text span with polarity and an OOV text span.
+Start rules: S →Y, where Y ∈{N, P, E}. The derivations begin with S, and S
+can be derived to N, P, and E.
+Here, X represents the non-terminals N or P. The dictionary rules and combinations rules are automatically extracted from the data. We will describe the details
+in Section 4.2. By applying these rules, we can derive the polarity label of a sentence from the bottom–up. The glue rules are used to combine polarity information of two text spans together, and it treats the combined parts as independent. In
+order to tackle the OOV problem, we treat a text span that consists of OOV words as
+empty text span, and derive them to E. The OOV text spans are combined with other
+text spans without considering their sentiment information. Finally, each sentence is
+derived to the symbol S using the start rules that are the beginnings of derivations.
+We can use the sentiment grammar to compactly describe the derivation process of a
+3.2 Parsing Model
+We present the formal description of the statistical sentiment parsing model following
+deductive proof systems as used in
+traditional syntactic parsing. For a concrete example,
+Downloaded from by guest on 26 March 2025
+Dong et al.
+A Statistical Parsing Framework for Sentiment Classiﬁcation
+which represents if we have the rule A →BC and B ∗⇒wk
+i and C ∗⇒w j
+k ( ∗⇒is used to
+represent the reﬂexive and transitive closure of immediate derivation), then we can
+obtain A ∗⇒w j
+i . By adding a unary rule
+with the binary rule in Equation (6), we can express the standard CYK algorithm for
+CFG in Chomsky Normal Form (CNF). And the goal is [0, S, n], in which S is the start
+symbol and n is the length of the input sentence. In the given CYK example, the term in
+deductive rules can be one of the following two forms:
+[i, X, j] is an item representing a subtree rooted in X spanning from i to j, or
+(X →γ) is a rule in the grammar.
+Generally, we represent the form of an inference rule as:
+where, if all the terms r and Hk are true, then we can infer [i, X, j] as true. Here, r denotes
+a sentiment rule, and Hk denotes an item. When we refer to both rules and items, we
+employ the word terms.
+Theoretically, we can convert the sentiment rules to CNF versions, and then use
+the CYK algorithm to conduct parsing. Because the maximum number of non-terminal
+symbols in a rule is already restricted to two, we formulate the statistical sentiment
+parsing based on a customized CYK algorithm that is similar to the work of Chiang
+ . Let X, X1, X2 represent the non-terminals N or P; the inference rules for the
+statistical sentiment parsing are summarized in Figure 3.
+3.3 Ranking Model
+The parsing model generates many candidate parse trees T(s) for a sentence s. The
+goal of the ranking model is to score and rank these parse trees. The sentiment tree
+with the highest score is treated as the best representation for sentence s. We extract a
+feature vector φ(s, t) ∈Rd for the speciﬁc sentence-tree pair (s, t), where t ∈T(s) is the
+parse tree. Let ψ ∈Rd be the parameter vector for the features. We use the log-linear
+model to calculate a probability p(t|s; T, ψ) for each parse tree t ∈T(s). The probabilities
+indicate how likely the trees are to produce correct predictions. Given the sentence s
+and parameters ψ, the log-linear model deﬁnes a conditional probability:
+p(t|s; T, ψ) = exp {φ(s, t)Tψ −A(ψ; s, T)}
+A(ψ; s, T) = log
+exp {φ(s, t)Tψ}
+Downloaded from by guest on 26 March 2025
+Computational Linguistics
+Volume 41, Number 2
+[i1, X1, j1]
+[i1, X1, j1]
+[i2, X2, j2]
+[i, X1, k]
+[k, X2, j]
+[k, X1, j]
+[i, X1, k]
+where X, X1, X2 represent N or P.
+Inference rules for the basic parsing model.
+where A(ψ; s, T) is the log-partition function with respect to T(s). The log-linear
+model is a discriminative model, and it is widely used in natural language processing. We can use φ(s, t)Tψ as the score of the parse tree without normalization in the
+decoding process, because p(t|s; T, ψ) ∝φ(s, t)Tψ, and this will not change the ranking
+3.4 Polarity Model
+The goal of the polarity model is to model the calculation of sentiment strength and
+polarity of a text span from its subspans in the parsing process. It is speciﬁed in terms of
+the rules used in the parsing process. We expand the notations in the inference rule (8)
+to incorporate the polarity model. The new form of inference rule is:
+[i, X, j]Φ
+in which r, H1, . . . , HK are the terms described in Section 3.2. Every item Hk is assigned
+polarity strength Φk :
+for text span w jk
+ik . For the item [i, X, j], the polarity
+model Φ(r, Φ1, . . . , ΦK) is deﬁned as a function that takes the rule r and polarity strength
+of subspans as input.
+Downloaded from by guest on 26 March 2025
+Dong et al.
+A Statistical Parsing Framework for Sentiment Classiﬁcation
+The polarity strength obtained by the polarity model should satisfy two constraints. First, the values calculated by the polarity model are non-negative, that is,
+i) ≥0, P(X|w j
+i) ≥0. Second, the positive and negative polarity values are normalized to 1, namely, P(X|w j
+i) + P(X|w j
+i) = 1. Notably, X =
+X = P is the opposite
+polarity of X.
+The inference rules with the polarity model are formally deﬁned in Figure 4. In the
+following part, we deﬁne the polarity model for the different types of rules. If the rule
+is a dictionary rule X →w j
+i, its sentiment strength is obtained as:
+i) = ˜P(X|w j
+i) = ˜P(X|w j
+where X ∈{N, P} denotes the sentiment polarity of the left hand side of the rule, X is
+the opposite polarity of X, and ˜P(X|w j
+i), ˜P(X|w j
+i) indicate the sentiment polarity values
+estimated from training data.
+[i, X, j]P(X|w j
+i) = ˜P(X|w j
+[i1, X1, j1]Φ1
+[i, X, j]P(X|wj
+i) = h(θ0 + θ1P(X1|w j1
+[i1, X1, j1]Φ1
+[i2, X2, j2]Φ2
+[i, X, j]P(X|w j
+i) = h(θ0 + θ1P(X1|w j1
+i1 ) + θ2P(X2|w j2
+[i, X1, k]Φ1
+[k, X2, j]Φ2
+[i, X, j]P(X|w j
+i )P(X|w j
+i )P(X|w j
+k)+P(X|w k
+i )P(X|w j
+[i, E, j]◦
+[i, E, k] ◦
+[k, X1, j]Φ1
+[i, X, j]P(X|w j
+i) = P(X|w j
+[i, X1, k]Φ1
+[k, E, j]◦
+[i, X, j]P(X|w j
+i) = P(X|w k
+where h(x) =
+1 + exp{−x} is a logistic function, ◦represents the absence, and X, X1, X2
+represent N or P. As speciﬁed in the polarity model, we have P(X|w j
+i) = 1 −P . The polarity value is calculated by their product, and normalized to 1.
+i )P(X|w j
+i )P(X|w j
+k)+P(X|w k
+i )P(X|w j
+i) = 1 −P(X|wj
+For OOV text spans, the polarity model does not calculate the polarity values. When
+they are combined with in-vocabulary phrases by the auxiliary rules, the polarity values
+are determined by the text span with polarity and the OOV text span is ignored. More
+speciﬁcally,
+i) = P(X|wk
+i) = P(X|wk
+The combination rules are more complicated than other types of rules. In this article,
+we model the polarity probability calculation as the logistic regression. The logistic
+regression can be regarded as putting linear combination of the subspans’ polarity probabilities into a logistic function (or sigmoid function). We will show that the negation,
+intensiﬁcation, and contrast can be well modeled by the regression-based method. It is
+formally shown as
+θkP(Xk|wjk
+k=1 θkP(Xk|wjk
+where h(x) =
+1+exp {−x} is the logistic function, K is the number of non-terminals in
+a rule, and θ0, . . . , θK are the parameters that are learned from data. As a concrete
+example, if the span wj
+i can match N →not P and P ∗⇒wj
+i+1, the inference rule with
+the polarity model is deﬁned as
+[i + 1, P, j]Φ1
+i) = h(θ0 + θ1P(P|wj
+i) = 1 −P(N|wj
+where polarity probability is calculated by P(N|wj
+i) = h simply reverses the sentiment polarity and corresponding sentiment strength. However, consider
+not great and not good; ﬂipping polarity directly makes not good more positive than
+not great, which is unreasonable. Another potential problem of switch negation is that
+negative polarity items interact with intensiﬁers in undesirable ways . For example, not very good turns out to be even more negative than not
+good, given the fact that very good is more positive than good. Therefore, Taboada et al.
+ argue that shift negation is a better way to handle polarity negation. Instead
+of reversing polarity strength, shift negation shifts it toward the opposite polarity by
+Downloaded from by guest on 26 March 2025
+Dong et al.
+A Statistical Parsing Framework for Sentiment Classiﬁcation
+a ﬁxed amount. This method can partially avoid the aforementioned two problems.
+However, they set the parameters manually, which might not be reliable and extensible
+enough to a new data set. Using the regression model, switch negation is captured by
+the negative scale item θk (k > 0), and shift negation is expressed by the shift item θ0.
+The intensiﬁers are adjectives or adverbs that strengthen (ampliﬁer) or decrease
+(downtoner) the semantic intensity of its neighboring item . For example,
+extremely good should obtain higher strength of positive polarity than good, because it
+is modiﬁed by the ampliﬁer (extremely). Polanyi and Zaenen and Kennedy and
+Inkpen handle intensiﬁers by polarity addition and subtraction. This method,
+termed ﬁxed intensiﬁcation, increases a ﬁxed amount of polarity for ampliﬁers and
+decreases for downtoners. Taboada et al. propose a method, called percentage
+intensiﬁcation, to associate each intensiﬁcation word with a percentage scale, which is
+larger than one for ampliﬁers, and less than one for downtoners. The regression model
+can capture these two methods to handle the intensiﬁcation. The shift item θ0 represents
+the polarity addition and subtraction directly, and the scale item θk (k > 0) can scale the
+polarity by a percentage.
+Table 2 illustrates how the regression based polarity model represents different
+negation and intensiﬁcation methods. For a speciﬁc rule, the parameters and the compositional method are automatically learned from data (Section 4.2.3) instead of setting
+them manually as in previous work . In a similar way, this method
+can handle the contrast. For example, the inference rule for N →P but N is:
+(N →P but N)
+[i1, P, j1]Φ1
+[i2, N, j2]Φ2
+i) = h(θ0 + θ1P(P|wj1
+i1) + θ2P(N|wj2
+i) = 1 −P(N|wj
+where the polarity probability of the rule N →P but N is computed by P(N|wj
+i) = h(θ0 +
+i1) + θ2P(N|wj2
+i2)). It can express the contrast relation by speciﬁc parameters θ0,
+θ1, and θ2.
+It should be noted that a linear regression model could turn out to be problematic, as it may produce unreasonable results. For example, if we do not add any
+constraint, we may get P(N|wj
+i) = −0.6 + P(P|wj
+i+1). When P(P|wj
+i+1) = 0.55, we will
+get P(N|wj
+i) = −0.6 + 0.55 = −0.05. This conﬂicts with the deﬁnition that the polarity
+probability ranges from zero to one. Figure 5 intuitively shows that the logistic function
+truncates polarity values to (0, 1) smoothly.
+The check mark means the parameter of the polarity model can capture the corresponding
+intensiﬁcation type and negation type. Shift item θ0 can handle shift negation and ﬁxed
+intensiﬁcation, and scale item θ1 can model switch negation and percentage intensiﬁcation.
+Negation Type
+i) = h(θ0 + θ1P(X|w j1
+Intensiﬁcation Type
+i) = h(θ0 + θ1P(X|w j1
+Percentage
+θ0 (Shift item)
+θ1 (Scale item)
+Downloaded from by guest on 26 March 2025
+Computational Linguistics
+Volume 41, Number 2
+Linear Function
+Logistic Function
+Logistic function h(x) =
+1+exp{−x} truncates polarity values to (0, 1) smoothly. The computed
+values are used as polarity probabilities.
+3.5 Constraints
+We incorporate additional constraints into the parsing model. Those are used as pruning
+conditions in the derivation process not only to improve efﬁciency but also to force the
+derivation towards the correct direction. We expand the inference rules in Section 3.4 as,
+[i, X, j]Φ
+where C is a side condition. The constraints are interpreted in a Boolean manner. If
+the constraint C is satisﬁed, the rule can be used, otherwise, it cannot. We deﬁne two
+constraints in the parsing model.
+First, in the parsing process, the polarity label of text span wj
+i obtained by the
+polarity model (Section 3.4) should be consistent with the non-terminal X (N or P)
+on the left hand side of the rule. To distinguish between the polarity labels and the
+non-terminals, we denote the corresponding polarity label of non-terminal X as X.
+Following this notation, we describe the ﬁrst constraint as
+C1 : P(X|wj
+i) > P(X|wj
+where X is the opposite polarity of X. For instance, if rule P →not N matches the text
+i, the polarity calculated by the polarity model should be consistent with P, i.e.,
+the polarity obtained by the polarity model should be positive (P).
+Second, when we apply the combination rules, the polarity strength of subspans
+needs to exceed a predeﬁned threshold τ (≥0.5). Speciﬁcally, for combination rules X →
+j2 and X →wi1
+j1, we deﬁne the second constraint as
+C2 : P(Xk|wjk
+ik) > τ, k = 1, . . . , K
+where K is the number of subspans in the rule, and Xk is the corresponding polarity
+label of non-terminal Xk in the right hand side. If P(Xk|wjk
+ik) is not larger than threshold
+Downloaded from by guest on 26 March 2025
+Dong et al.
+A Statistical Parsing Framework for Sentiment Classiﬁcation
+τ, we regard the polarity of phrase wjk
+ik as neutral. For instance, we do not want to use
+the combination rule P →a lot of P or N →a lot of N for the phrase a lot of people. This
+constraint avoids improperly using the combination rules for neutral phrases. Notably,
+when τ is set as 0.5, this constraint is the same as the ﬁrst one in Equation (19).
+As shown in Figure 6, we add these two constraints to the inference rules. The OOV
+rules do not have any constraints, and the constraint C1 is applied for all the other rules.
+The constraint C2 is only applied for the combination rules.
+3.6 Decoding Algorithm
+In this section, we summarize the decoding algorithm in Algorithm 1. For a sentence s,
+the CYK algorithm and dynamic programming are used to obtain the sentiment tree
+with the highest score. To be speciﬁc, the modiﬁed CYK parsing model parses the input
+sentence to sentiment trees in a bottom–up manner—that is, from short to long text
+spans. For every text span wj
+i, we match the rules in the sentiment grammar (Section 3.1)
+to generate the candidate set. Their polarity values are calculated using the polarity
+model described in Section 3.4. We also use the constraints described in Section 3.5 to
+prune search paths. The constraints improve the efﬁciency of the parsing algorithm and
+make derivations that meet our intuition.
+[i, X, j]P(X|wj
+i) = ˜P(X|wj
+[i1, X1, j1]Φ1
+[i, X, j]P(X|wj
+i) = h(θ0 + θ1P(X1|wj1
+[i1, X1, j1]Φ1
+[i2, X2, j2]Φ2
+[i, X, j]P(X|wj
+i) = h(θ0 + θ1P(X1|wj1
+i1) + θ2P(X2|wj2
+[i, X1, k]Φ1
+[k, X2, j]Φ2
+[i, X, j]P(X|wj
+i )P(X|w j
+i )P(X|w j
+k)+P(X|w k
+i )P(X|w j
+[i, E, j]◦◦
+[i, E, k] ◦
+[k, X1, j]Φ1
+[i, X, j]P(X|wj
+i) = P(X|wj
+[i, X1, k]Φ1
+[k, E, j]◦
+[i, X, j]P(X|wj
+i) = P(X|wk
+where h(x) =
+1 + exp{−x} is a logistic function, ◦represents the absence, and X, X1, X2
+represent N or P. As speciﬁed in the polarity model, we have P(X|wj
+i) = 1 −P H1...HK
+Φ ←calculate polarity value for r
+▷Polarity model
+if constraints are satisﬁed then
+▷Constraint
+sc ←compute score for this derivation by ranking model
+if sc > score[i, j, X] then
+score[i, j, X] ←sc
+10: return arg maxX∈{N,P} score[0, X, n]
+The features in the ranking model (Section 4.1.1) decompose along the structure of
+the sentiment tree. So the dynamic programming technique can be used to compute the
+derivation tree with the highest ranking score. For a span, the scores of its subspans
+are used to calculate the local scores of its derivations. For example, the score of the
+derivation (r) [i1,P,j1] [i2,N,j2]
+is score[i1, j1, P] + score[i2, j2, N] + scorer, where score[i, j, X] is
+the highest score of text span wj
+i that is derived to the non-terminal X, and scorer is
+the score of applying the rule r. As described in Section 3.3, the score of using rule r is
+scorer = φ(wj
+Tψ, where φ(wj
+i, r) is the feature vector of using the rule r for the span
+i, and ψ is the weight vector of the ranking model. The k highest score trees satisfying
+the constraints are stored in score[, , ] for decoding the longer text spans. After ﬁnishing
+the CYK parsing, arg maxX∈{N,P} score[0, n, X] is regarded as the polarity label of input
+sentence. The time complexity is the same as the standard CYK’s.
+4. Model Learning
+We described the statistical sentiment parsing framework in Section 3. We present the
+model learning process in this section. The learning process consists of two steps. First,
+the sentiment grammar and the polarity model are learned from data. In other words,
+the rules and the parameters used to compute polarity values are learned. These basic
+sentiment building blocks are then used to build the parse trees. Second, we estimate
+the parameters of the ranking model using the sentence and polarity label pairs. At this
+stage, we concentrate on learning how to score the parse trees based on the learned
+sentiment grammar and polarity model.
+Section 4.1 shows the features and the parameter estimation algorithm used in the
+ranking model. Section 4.2 illustrates how to learn the sentiment grammar and the
+polarity model.
+4.1 Ranking Model Training
+As shown in Section 3.3, we develop the ranking model on the log-linear model. In
+the following subsections, we ﬁrst present the features used to rank sentiment tree
+Downloaded from by guest on 26 March 2025
+Dong et al.
+A Statistical Parsing Framework for Sentiment Classiﬁcation
+candidates. Then, we describe the objective function used in the optimization algorithm.
+Finally, we introduce the algorithm for parameter estimation using the gradient-based
+4.1.1 Features. We extract a feature vector φ(s, t) ∈Rd for each parse tree t of sentence s.
+The feature vector is used in the log-linear model. In Figure 7, we present the features
+extracted for the sentence The movie is not very good, but i still like it. The features are
+organized into feature templates. Each of them contains a set of features. These feature
+templates are shown as follows:
+COMBHIT: This feature is the total number of combination rules used in t.
+COMBRULE: It contains features {COMBRULE[r] : r is a combination rule},
+each of which ﬁres on the combination rule r appearing in t.
+DICTHIT: This feature is the total number of dictionary rules used in t.
+DICTRULE: It contains features {DICTRULE[r] : r is a dictionary rule}, each
+of which ﬁres on the dictionary rule r appearing in t.
+These features are generic local patterns that capture the properties of the sentiment tree. Another intuitive lexical feature template is [combination rule + word]. For
+instance, P →very P(good) is a feature that lexicalizes the non-terminal P to good.
+However, if this feature is ﬁred frequently, the phrase very good would be learned as
+a dictionary rule and can be used in the decoding process. So we do not use this feature
+template in order to reduce the feature size. It should be noted that these features
+(a) COMBHIT and COMBRULE
+(b) DICTHIT and DICTRULE
+Feature Template
+Feature Value
+Number of combination rules
+Combination rule
+COMBRULE[P →very P]
+COMBRULE[N →not P]
+COMBRULE[P →N but P]
+Number of dictionary rules
+Dictionary rule
+DICTRULE[P →the movie is]
+DICTRULE[P →good]
+DICTRULE[P →i still like it]
+Feature templates used in the ranking model. The red triangles denote the features for the
+Downloaded from by guest on 26 March 2025
+Computational Linguistics
+Volume 41, Number 2
+decompose along structures of sentiment trees, enabling us to use dynamic programming in the CYK algorithm.
+4.1.2 Objective Function. We design the ranking model upon the log-linear model to score
+candidate sentiment trees. In the training data D, we only have the input sentence s and
+its polarity label Ls. The forms of sentiment parse trees, which can obtain the correct
+sentiment polarity, are unobserved. So we work with the marginal log-likelihood of
+obtaining the correct polarity label Ls,
+log p(Ls|s; T, ψ) = log p(t ∈TLs(s)|s; T, ψ)
+= A(ψ; s, TLs) −A(ψ; s, T)
+where TLs is the set of candidate trees whose prediction labels are Ls, and A(ψ; s, T)
+(Equation (10)) is the log-partition function with respect to T(s).
+Based on the marginal log-likelihood function, the objective function O(ψ, T) consists of two terms. The ﬁrst term is the sum of marginal log-likelihood over training
+instances that can obtain the correct polarity labels. The second term is a L2-norm
+regularization term on the parameters ψ. Formally,
+TLs (s)̸=∅
+log p(Ls|s; T, ψ) −λ
+To learn the parameters ψ, we use a gradient-based optimization method to maximize the objective function O(ψ, T). According to Wainwright and Jordan , the
+derivative of the log-partition function is the expected feature vector
+TLs (s)̸=∅
+(Ep(t|s;TLs,ψ)[φ(s, t)] −Ep(t|s;T,ψ)[φ(s, t)]) −λψ
+where Ep(x)[f (x)] = P
+x p(x)f (x) for discrete x.
+4.1.3 Parameter Estimation. The objective function O(ψ, T) is not concave (nor convex),
+hence the optimization potentially results in a local optimum. Stochastic Gradient Descent is a widely used optimization method. The SGD
+algorithm picks up a training instance randomly, and updates the parameter vector ψ
+according to
+(t+1) = ψj
+where α is the learning rate, and ∂O(ψ)
+is the gradient of the objective function with
+respect to parameter ψj. The SGD is sensitive to α, and the learning rate is the same
+for all dimensions. As described in Section 4.1.1, we mix sparse features together with
+dense features. We want the learning rate to be different for each dimension. We use
+AdaGrad to update the parameters, which sets an
+adaptive per-feature learning rate. The AdaGrad algorithm tends to use smaller update
+Downloaded from by guest on 26 March 2025
+Dong et al.
+A Statistical Parsing Framework for Sentiment Classiﬁcation
+steps when we meet a feature many times. In order to compute efﬁciently, a diagonal
+approximation version of AdaGrad is used. The update rule is
+(t+1) = ψj
+where we introduce an adaptive term G(t)
+becomes larger along with updating, and
+decreases the update step for dimension j. Compared with SGD, the only cost is to store
+and update G(t)
+for each parameter.
+To train the model, we use the method proposed by Liang, Jordan, and Klein .
+With the candidate parse trees and objective function, the parameters ψ are updated to
+make the parsing model favor correct trees and give them a higher score. Because there
+are many parse trees for a sentence, we need to calculate Equation (23) efﬁciently. As
+indicated in Section 4.1.1, the features decompose along the structure of sentiment trees.
+So dynamic programming can be utilized to compute Ep(t|s;T,ψ)[φ(s, t)] of Equation (23).
+However, the ﬁrst expectation term Ep(t|s;TLs,ψ)[φ(s, t)] sums over the candidates that
+obtain the correct polarity labels. As this constraint does not decompose along the tree
+structure, there is no efﬁcient dynamic program for this. Instead of searching all the
+parse trees spanning s, we use beam search to approximate this expectation. Beam
+search is a best-ﬁrst search algorithm that explores at most K paths (K is the beam
+size). It keeps the local optimums to reduce the huge search space. Speciﬁcally, the
+beam search algorithm generates the K-best trees with the highest score φ(s, t)Tψ for
+each span. These local optimums are used recursively in the CYK process. The K-best
+trees for the whole span are regarded as the candidate set ˜T. Then ˜T and ˜TLs are used to
+approximate Equation (23) as in Liang, Jordan, and Klein .
+The intuition behind this parameter estimation algorithm lies in: (1) if we have
+better parameters, we can obtain better candidate trees; (2) with better candidate trees,
+we can learn better parameters. Thus the optimization problem is solved in an iterative
+manner. We initialize the parameters as zeros. This leads to a random search and generates random candidate trees. With the initial candidates, the two steps in Algorithm 2
+lead the parameters ψ towards the direction achieving better performance.
+4.2 Sentiment Grammar Learning
+In this section, we present the automatic learning of the sentiment grammar as deﬁned
+in Section 3.1. We need to extract the dictionary rules and the combination rules from
+data. In traditional statistical parsing, grammar rules are induced from annotated parse
+trees (such as the Penn TreeBank), so ideally we need examples of sentiment structure
+trees, or sentences annotated with sentiment polarity for the whole sentence as well
+as those for constituents within sentences. However, this is not practical, if not unfeasible, as the annotations will be inevitably time consuming and require laborious
+human effort. We show that it is possible to induce the sentiment grammar directly
+from examples of sentences annotated with sentiment polarity labels without using
+any syntactic annotations or polarity annotations of constituents within sentences. The
+Downloaded from by guest on 26 March 2025
+Computational Linguistics
+Volume 41, Number 2
+Algorithm 2 Ranking Model Learning Algorithm
+Input: D: Training data {(s, Ls)}, S: Maximum number of iteration
+Output: ψ: Parameters of the ranking model
+1: ψ(0) ←(0, 0, . . . , 0)T
+(s, Ls) ←randomly select a training instance in D
+˜T(t) ←BEAMSEACH(s, ψ(t))
+▷Beam search to generate K-best candidates
+∂O(ψ, ˜T(t))
+∂O(ψ, ˜T(t))
+▷Update parameters using
+8: until t > S
+9: return ψ(T)
+sentences annotated with sentiment polarity labels are relatively easy to obtain, and we
+use them as our input to learn dictionary rules and combination rules.
+We ﬁrst present the basic idea behind the algorithm we propose. People are likely to
+express positive or negative opinions using very simple and straightforward sentiment
+expressions again and again in their reviews. Intuitively, we can mine dictionary rules
+from these massive review sentences by leveraging the redundancy characteristics.
+Furthermore, there are many complicated reviews that contain complex sentiment
+structures (e.g., negation, intensiﬁcation, and contrast). If we already have dictionary
+rules on hand, we can use them to obtain basic sentiment information for the fragments
+within complicated reviews. We can then extract combination rules with the help of the
+dictionary rules and the sentiment polarity labels of complicated reviews. Because the
+simple and straightforward sentiment expressions are often coupled with complicated
+expressions, we need to conduct dictionary rule mining and the combination rule
+mining in an iterative way.
+4.2.1 Dictionary Rule Learning. The dictionary rules GD are basic sentiment building
+blocks used in the parsing process. Each dictionary rule in GD is in the form X →f,
+where f is a sentiment fragment. We use the polarity probabilities P(N|f ) and P(P|f ) in
+the polarity model. To build GD, we regard all the frequent fragments whose occurrence
+frequencies are larger than τf and lengths range from 1 to 7 as the sentiment fragments.
+We further ﬁlter the phrases formed by stop words and punctuations, which are not
+used to express sentiment.
+For a balanced data set, the sentiment distribution of a candidate sentiment fragment f is calculated by
+#( f, X ) + 1
+#( f, N ) + #( f, P) + 2
+where X ∈{N, P}, and #( f, X ) denotes the number of reviews containing f with X
+being the polarity. It should be noted that Laplace smoothing is used in Equation (26) to
+deal with the zero frequency problem.
+Downloaded from by guest on 26 March 2025
+Dong et al.
+A Statistical Parsing Framework for Sentiment Classiﬁcation
+We do not learn the polarity probabilities P(N|f ) and P(P|f ) by directly counting
+occurrence frequency. For example, in the review sentence this movie is not good (negative), the naive counting method increases the count #(good, N ) in terms of the polarity
+of the whole sentence. Moreover, because of the common collocation not as good as
+(negative) in movie reviews, as good as is also regarded as negative if we count the
+frequency directly. The examples indicate why some polarity probabilities of phrases
+counting from data are different from our intuitions. These unreasonable polarity
+probabilities also make trouble for learning the polarity model. Consequently, in order
+to estimate more reasonable probabilities, we need to take the compositionality into
+consideration when learning sentiment fragments.
+Following this motivation, we ignore the count #(f, X ), if the sentiment fragment
+f is covered by a negation rule r that negates the polarity of f. The word cover here
+means that f is derived within a non-terminal of the negation rule r. For instance, the
+negation rule N →not P covers the sentiment fragment good in the sentence this is not
+a good movie (negative), that is, the good is derived from P of this negation rule. So we
+ignore the occurrence for #(good, N ) in this sentence. It should be noted that we still
+increase the count for #(not good, N ), because there is no negation rule covering the
+fragment not good.
+As shown in Algorithm 3, we learn the dictionary rules and their polarity probabilities by counting the frequencies in negative and positive classes. Only the fragments
+whose occurrence numbers are larger than threshold τf are kept. Moreover, we take
+the combination rules into consideration to acquire more reasonable GD. Notably, a
+subsequence of a frequent fragment must also be frequent. This is similar to the key
+insight in the Apriori algorithm . When we learn the dictionary rules, we can count the sentiment fragments from short to long, and prune the
+infrequent fragments in the early stages if any subsequence is not frequent. This pruning
+method accelerates the dictionary rule learning process and makes the procedure ﬁt in
+Algorithm 3 Dictionary Rule Learning
+Input: D: Data set, GC: Combination rules, τf: Frequency threshold
+Output: GD: Dictionary rules
+1: function MINEDICTIONARYRULES(D, GC)
+for (s, Ls) in D do
+▷s : w0w1 · · · w|s|−1, Ls: Polarity label of s
+for all i, j s.t. 0 ≤i < j ≤|s| do
+i : wiwi+1 · · · wj−1
+if no negation rule in GC covers wj
+for f in GD′ do
+if #(f, ·) ≥τf then
+compute P(N|f ) and P(P|f ) using Equation (26)
+add dictionary rule (Lf →f ) to GD
+▷Lf = arg maxX∈{N,P} P(X|f )
+Downloaded from by guest on 26 March 2025
+Computational Linguistics
+Volume 41, Number 2
+4.2.2 Combination Rule Learning. The combination rules GC are generalizations for the
+dictionary rules. They are used to handle the compositionality and process unseen
+phrases. The learning of combination rules is based on the learned dictionary rules and
+their polarity values. The sentiment fragments are generalized to combination rules by
+replacing the subsequences of dictionary rules with their polarity labels. For instance, as
+shown in Figure 8, the fragments is not (good/as expected/funny/well done) are all negative.
+After replacing the subspans good, as expected, funny, and well done with their polarity
+label P, we can learn the negation rule N →is not P.
+We present the combination rule learning approach in Algorithm 4. Speciﬁcally,
+the ﬁrst step is to generate combination rule candidates. For every subsequence wj
+of sentiment fragment f, we replace it with the corresponding non-terminal Lw j
+i) is larger than the threshold τp, and we can get wi
+j . Next, we compare
+the polarity Lw j
+i with Lf. If Lf ̸= Lw j
+i, we regard the rule Lf →wi
+as a negation
+rule. Otherwise, we further compare their polarity values. If this rule makes the polarity
+value become larger (or smaller), it will be treated as a strengthen (or weaken) rule. To
+obtain the contrast rules, we replace two subsequences with their polarity labels in a
+similar way. If the polarities of these two subsequences are different, we categorize this
+rule to the contrast type. Notably, these two non-terminals cannot be next to each other.
+After these steps, we get the rule candidate set GC′ and the occurrence number of each
+rule. We then ﬁlter the rule candidates whose occurrence frequencies are too small, and
+assign the rule types (negation, strengthen, weaken, and contrast) according to their
+occurrence numbers.
+4.2.3 Polarity Model Learning. As shown in Section 3.4, we deﬁne the polarity model
+to calculate the polarity probabilities using the sentiment grammar. In this section, we
+present how to learn the parameters of the polarity model for the combination rules.
+𝑁→is not P
+𝑁→is not P
+as expected
+Estimate Parameters
+Polarity Model
+We replace the subsequences with their polarity labels for frequent sentiment fragments.
+As shown here, we replace good, as expected, funny, and well done with their polarity label P.
+Then we compare the polarity probabilities of subfragments with the whole fragments,
+such as good and is not good, to determine whether it is a negation rule, strengthen
+rule, or weaken rule. After obtaining the rule, we use polarity probabilities of these
+compositional examples as training data to estimate parameters of the polarity model.
+ P(P|good), P(N|is not good)
+ P(P|as expected), P(N|is not as expected)
+ P(P|funny), P(N|is not funny)
+, (P(P|well done), and P(N|is not well done)) are used to
+learn the polarity model for N →is not P.
+Downloaded from by guest on 26 March 2025
+Dong et al.
+A Statistical Parsing Framework for Sentiment Classiﬁcation
+Algorithm 4 Combination Rule Learning
+Input: D: Data set, GD: Dictionary rules, τp, τ∆, τr, τc: Thresholds
+Output: GC: Combination rules
+1: function MINECOMBINATIONRULES(D, GD)
+for (X →f ) in GD do
+▷f : w0w1 · · · w|f|−1
+for all i, j s.t. 0 ≤i < j ≤|f| do
+i) > τp then
+▷Polarity label Lw j
+i = arg maxX∈{N,P} P(X|wj
+▷Non-terminal Lw j
+i = arg maxX∈{N,P} P(X|wj
+if X ̸= Lw j
+#(r, negation) ++
+else if P(X|f ) > P(Lw j
+i) + τ∆then
+#(r, strengthen) ++
+else if P(X|f ) < P(Lw j
+i) −τ∆then
+#(r, weaken) ++
+add r to GC′
+for all i0, j0, i1, j1 s.t. 0 ≤i0 < j0 < i1 < j1 ≤|f| do
+i0) > τp and P(Lw
+i1) > τp then
+▷Replace wj0
+i1 with the non-terminals
+#(r, contrast) ++
+add r to GC′
+for r in GC′ do
+if #(r, ·) > τr and max
+#(r) > τc then
+add r to GC
+As shown in Figure 8, we learn combination rules by replacing the subsequences of
+frequent sentiment fragments with their polarity labels. Both the replaced fragment and
+the whole fragment can be found in the dictionary rules, so their polarity probabilities
+have been estimated from data. We can use them as our training examples to ﬁgure
+out how context changes the polarity of replaced fragment, and learn parameters of the
+polarity model.
+We describe the polarity model in Section 3.4. To further simplify the notation, we
+denote the input vector x = (1, P(X1|wj1
+i1), . . . , P(XK|wjK
+iK))T, and the response value as y.
+Then we can rewrite Equation (15) as
+1 + exp{−θTx}
+Downloaded from by guest on 26 March 2025
+Computational Linguistics
+Volume 41, Number 2
+where hθ(x) is the polarity probability calculated by the polarity model, and θ =
+(θ0, θ1, . . . , θK)T is the parameter vector. Our goal is to estimate the parameter vector
+θ of the polarity model.
+We ﬁt the model to minimize the sum of squared residuals between the predicted
+polarity probabilities and the values computed from data. We deﬁne the cost function as
+(hθ(xm) −ym)2
+is the m-th training instance.
+The gradient descent algorithm is used to minimize the cost function J (θ). The
+partial derivative of J (θ) with respect to θj is
+ hθ(xm) −ym ∂hθ(xm)
+ hθ(xm) −ym
+ 1 −hθ(xi)
+ hθ(xm) −ym
+hθ(xm) (1 −hθ(xm)) xm
+We set the initial θ as zeros, and start with it. We use the Stochastic Gradient
+Descend algorithm to minimize the cost function. For the instance (x, y), the parameters
+are updated using
+(t+1) = θj
+(t) −α(hθ(t)(x) −y)hθ(t)(x)
+ 1 −hθ(t)(x)
+where α is the learning rate, and it is set to 0.01 in our experiments. We summarize
+the learning method in Algorithm 5. For each combination rule, we iteratively scan
+Algorithm 5 Polarity Model Learning Algorithm
+Input: GC: Combination rules, ε: Stopping condition, α: Learning rate
+Output: θ: Parameters of the polarity model
+1: function ESTIMATEPOLARITYMODEL(GC)
+for all combination rule r ∈GC do
+θ(0) ←(0, 0, ..., 0)T
+←randomly select a training instance
+(t) −α(hθ(t)(x) −y)hθ(t)(x)
+ 1 −hθ(t)(x)
+θ(t+1) −θ(t)
+assign θ(T) as the parameters of the polarity model for rule r
+Downloaded from by guest on 26 March 2025
+Dong et al.
+A Statistical Parsing Framework for Sentiment Classiﬁcation
+Algorithm 6 Sentiment Grammar Learning
+Input: D: Data set {(s, Ls)}, T: Maximum number of iteration
+▷Ls: Polarity label of s
+Output: GD: Dictionary rules, GC: Combination rules
+GD ←MINEDICTIONARYRULES(D, GC)
+▷Algorithm 3
+GC ←MINECOMBINATIONRULES(D, GD)
+▷Algorithm 4
+5: until iteration number exceeds T
+6: ESTIMATEPOLARITYMODEL(GC)
+▷Algorithm 5
+7: return GD, GC
+through the training examples
+in a random order, and update the parameters
+θ according to Equation (30). The stopping condition is
+θ(t+1) −θ(t)
+2 < ε, which
+indicates the parameters become stable.
+4.2.4 Summary of the Grammar Learning Algorithm. We summarize the grammar learning
+process in Algorithm 6, which learns the sentiment grammar in an iterative manner.
+We ﬁrst learn the dictionary rules and their polarity probabilities by counting the
+frequencies in negative and positive classes. Only the fragments whose occurrence numbers are larger than the threshold τf are kept. As mentioned in Section 4.2.1, the context
+can essentially change the distribution of sentiment fragments. We take the combination
+rules into consideration to acquire more reasonable GD. In the ﬁrst iteration, the set of
+combination rules is empty. Therefore, we have no information about compositionality
+to improve dictionary rule learning. The initial GD contains some inaccurate sentiment
+distributions. Next, we replace the subsequences of dictionary rules to their polarity
+labels, and generalize these sentiment fragments to the combination rules GC as illustrated in Section 4.2.2. At the same time, we can obtain their compositional types and
+learn parameters of the polarity model. We iterate over these two steps to obtain reﬁned
+GD and GC.
+5. Experimental Studies
+In this section, we describe experimental results on existing benchmark data sets with
+extensive comparisons with state-of-the-art sentiment classiﬁcation methods. We also
+present the effects of different experimental settings in the proposed statistical sentiment parsing framework.
+5.1 Experiment Set-up
+We describe the data sets in Section 5.1.1, the experimental settings in Section 5.1.2, and
+the methods used for comparison in Section 5.1.3.
+5.1.1 Data Sets. We conduct experiments on sentiment classiﬁcation for sentence-level
+and phrase-level data. The sentence-level data sets contain user reviews and critic
+Downloaded from by guest on 26 March 2025
+Computational Linguistics
+Volume 41, Number 2
+reviews from Rotten Tomatoes3 and IMDb.4 We balance the positive and negative
+instances in the training data set to mitigate the problem of data imbalance. Moreover,
+the Stanford Sentiment Treebank5 contains polarity labels of all syntactically plausible
+phrases. In addition, we use the MPQA6 data set for the phrase-level task. We describe
+these data sets as follows.
+RT-C: 436,000 critic reviews from Rotten Tomatoes. It consists of 218,000 negative
+and 218,000 positive critic reviews. The average review length is 23.2 words. Critic
+reviews from Rotten Tomatoes contain a label (Rotten: Negative, Fresh: Positive) to
+indicate the polarity, which we use directly as the polarity label of corresponding
+PL05-C: The sentence polarity data set v1.0 contains 5,331
+positive and 5,331 negative snippets written by critics from Rotten Tomatoes. This data
+set is widely used as the benchmark data set in the sentence-level polarity classiﬁcation
+task. The data source is the same as RT-C.
+SST: The Stanford Sentiment Treebank is built upon PL05-C.
+The sentences are parsed to parse trees. Then, 215,154 syntactically plausible phrases are
+extracted and annotated by workers from Amazon Mechanical Turk. The experimental
+settings of positive/negative classiﬁcation for sentences are the same as in Socher et al.
+RT-U: 737,806 user reviews from Rotten Tomatoes. Because we focus on sentencelevel sentiment classiﬁcation, we ﬁlter out user reviews that are longer than 200 characters. The average length of these short user reviews from Rotten Tomatoes is 15.4
+words. Following previous work on polarity classiﬁcation, we use the review score to
+select highly polarized reviews. For the user reviews from Rotten Tomatoes, a negative
+review has a score <2.5 out of 5, and a positive review has a score >3.5 out of 5.
+IMDB-U: 600,000 user reviews from IMDb. The user reviews in IMDb contain
+comments and short summaries (usually a sentence) to summarize the overall sentiment
+expressed in the reviews. We use the review summaries as the sentence-level reviews.
+The average length is 6.6 words. For user reviews of IMDb, a negative review has a score
+<4 out of 10, and a positive review has a score >7 out of 10.
+C-TEST: 2,000 labeled critic reviews sampled from RT-C. We use C-TEST as the
+testing data set for RT-C. Note that we exclude these from the training data set . The authors manually annotate sentiment polarity labels for the expressions (i.e., sub-sentences) within a sentence. We regard the expressions as short
+sentences in our experiments. There are 7,308 negative examples and 3,316 positive
+examples in this data set. The average number of words per example is 3.1.
+3 
+4 
+5 
+6 corpus.
+Downloaded from by guest on 26 March 2025
+Dong et al.
+A Statistical Parsing Framework for Sentiment Classiﬁcation
+Statistical information of data sets. #Negative and #Positive are the number of negative instances
+and positive instances, respectively. lavg is average length of sentences in the data set, and |V| is
+the vocabulary size.
+Table 3 shows the summary of these data sets, and all of them are publicly available
+at 
+5.1.2 Settings. To compare with other published results for PL05-C and MPQA, the
+training and testing regime (10-fold cross-validation) is the same as in Pang and Lee
+ , Nakagawa, Inui, and Kurohashi and Socher et al. . For SST, the
+regime is the same as in Socher et al. . We use C-TEST as the testing data for RT-C,
+and U-TEST as the testing data for RT-U and IMDB-U. There are a number of settings
+that have trade-offs in performance, computation, and the generalization power of our
+model. The best settings are chosen by a portion of training split data that serves as the
+validation set. We provide the performance comparisons using different experimental
+settings in Section 5.4.
+Number of training examples: The size of training data has been widely recognized
+as one of the most important factors in machine learning-based methods. Generally,
+using more data leads to better performance. By default, all the training data is used
+in our experiments. We use the same size of training data in different methods for fair
+comparisons.
+Number of training iterations (T): We use AdaGrad as the optimization algorithm in the learning process. The algorithm starts with
+randomly initialized parameters, and alternates between searching candidate sentiment
+trees and updating parameters of the ranking model. We treat one-pass scan of training
+data as an iteration.
+Beam size (K): The beam size is used to make a trade-off between the search space
+and the computation cost. Moreover, an appropriate beam size can prune unfavorable
+candidates. We set K = 30 in our experiments.
+Regularization (λ): The regularization parameter λ in Equation (22) is used to avoid
+over-ﬁtting. The value used in the experiments is 0.01.
+Minimum fragment frequency: It is difﬁcult to estimate reliable polarity probabilities when the fragment appears very few times. Hence, a minimum fragment frequency
+that is too small will introduce noise in the fragment learning process. On the other
+hand, a large threshold will lose much useful information. The minimum fragment
+frequency is chosen according to the size of the training data set and the validation
+performance. To be speciﬁc, we set this parameter as 4 for RT-C, SST, RT-U, and
+IMDB-U, and 2 for PL05-C and MPQA.
+Downloaded from by guest on 26 March 2025
+Computational Linguistics
+Volume 41, Number 2
+Maximum fragment length: High order n-grams are more precise and deterministic
+expressions than unigrams and bigrams. So it would be useful to use long fragments to
+capture polarity information. According to the experimental results, as the maximum
+fragment length increases, the accuracy of sentiment classiﬁcation increases. The maximum fragment length is set to 7 words in our experiments.
+5.1.3 Sentiment Classiﬁcation Methods for Comparison. We evaluate the proposed statistical sentiment parsing framework on the different data sets, and compare the results
+with some baselines and state-of-the-art sentiment classiﬁcation methods described as
+SVM-m: Support Vector Machine (SVM) achieves good performance in the sentiment classiﬁcation task . Though unigrams and bigrams are
+reported as the most effective features in existing work , we use
+high-order n-gram (1 ≤n ≤m) features to conduct fair comparisons. Hereafter, m has
+the same meaning. We use LIBLINEAR in our experiments because it
+can handle well the high feature dimension and a large number of training examples.
+We try different hyper-parameters C ∈{10−2, 10−1, 1, 5, 10, 20} for SVM, and select C on
+the validation set.
+MNB-m: As indicated in Wang and Manning , Multinomial Na¨ıve Bayes
+(MNB) often outperforms SVM for sentence-level sentiment classiﬁcation. We utilize Laplace smoothing to tackle the zero
+probability problem. High order n-gram (1 ≤n ≤m) features are considered in the
+experiments.
+LM-m: Language Model (LM) is a generative model calculating the probability
+of word sequences. It is used for sentiment analysis in Cui, Mittal, and Datar .
+Probability of generating sentence s is calculated by P(s) = Q|s|−1
+denotes the word sequence w0 . . . wi−1. We use Good-Turing smoothing to overcome sparsity when estimating the probability of high-order n-gram. We
+train language models on negative and positive sentences separately. For a sentence,
+its polarity is determined by comparing the probabilities calculated from the positive
+and negative language models. The unknown-word token is treated as a regular word
+(denoted by <UNK>). The SRI Language Modeling Toolkit is used in our
+experiment.
+Voting-w/Rev: This approach is proposed by Choi and Cardie , and is used
+as a baseline in Nakagawa, Inui, and Kurohashi . The polarity of a subjective
+sentence is decided by the voting of each phrase’s prior polarity. The polarity of phrases
+that have odd numbers of negation phrases in their ancestors is reversed. The results
+are reported by Nakagawa, Inui, and Kurohashi .
+HardRule: This baseline method is compared by Nakagawa, Inui, and Kurohashi
+ . The polarity of a subjective sentence is deterministically decided based on rules,
+by considering the sentiment polarity of dependency subtrees. The polarity of a modiﬁer is reversed if its head phrase has a negation word. The decision rules are applied
+from the leaf nodes to the root node in a dependency tree. We use the results reported
+by Nakagawa, Inui, and Kurohashi .
+Tree-CRF: Nakagawa, Inui, and Kurohashi present a dependency tree-based
+method using conditional random ﬁelds with hidden variables. In this model, the
+polarity of each dependency subtree is represented by a hidden variable. The value of
+the hidden variable of the root node is identiﬁed as the polarity of the whole sentence.
+The experimental results are reported by Nakagawa, Inui, and Kurohashi .
+Downloaded from by guest on 26 March 2025
+Dong et al.
+A Statistical Parsing Framework for Sentiment Classiﬁcation
+RAE-pretrain: Socher et al. introduce a framework based on recursive autoencoders to learn vector space representations for multi-word phrases and predict
+sentiment distributions for sentences. We use the results with pre-trained word vectors
+learned on Wikipedia, which leads to better results compared with randomized word
+vectors. We directly compare the results with those in Socher et al. .
+MV-RNN: Socher et al. try to capture the compositional meaning of
+long phrases through matrix-vector recursive neural networks. This model assigns a
+vector and a matrix to every node in the parse tree. Matrices are regarded as operators, and vectors capture the meaning of phrases. The results are reported by Socher
+et al. .
+s.parser-LongMatch: The longest matching rules are utilized in the decoding process. In other words, the derivations that contain the fewest rules are used for all text
+spans. In addition, the dictionary rules are preferred to the combination rules if both
+of them match the same text span. The dynamic programming algorithm is used in the
+implementation.
+s.parser-w/oComb: This is our method without using the combination rules (such
+as N →not P) learned from data.
+5.2 Results of Sentiment Classiﬁcation
+We present the experimental results of the sentiment classiﬁcation methods on the
+different data sets in Table 4. The top three methods on each data set are in bold, and the
+best methods are also underlined. The experimental results show that s.parser achieves
+better performance than other methods on most data sets.
+The data sets RT-C, PL05-C, and SST are critic reviews. On RT-C, the accuracy of
+s.parser increases by 2 percentage points, 2.9 percentage points, and 7.1 percentage
+points from the best results of SVM, MNB, and LM, respectively. On PL05-C, the
+accuracy of s.parser also rises by 2.1 percentage points, 0.7 percentage points, and
+4.4 percentage points from the best results of SVM, MNB, and LM, respectively.
+Compared to Voting-w/Rev and HardRule, s.parser outperforms them by 16.4 percentage points and 16.6 percentage points. The results indicate that our method
+signiﬁcantly outperforms the baselines that use manual rules, as rule-based methods
+lack a probabilistic way to model the compositionality of context. Furthermore, s.parser
+achieves an accuracy improvement rate of 2.2 percentage points, 1.8 percentage points,
+and 0.5 percentage points over Tree-CRF, RAE-pretrain, and MV-RNN, respectively. On
+SST, s.parser outperforms SVM, MNB, and LM by 3.4 percentage points, 1.4 percentage
+points, and 3.8 percentage points, respectively. The performance is better than MV-RNN
+with an improvement rate of 1.8 percentage points. Moreover, the result is comparable to the 85.4% obtained by recursive neural tensor networks 
+without depending on syntactic parsing results.
+On the user review data sets RT-U and IMDB-U, our method also achieves the best
+results. More speciﬁcally, on the data set RT-U, s.parser outperforms the best results of
+SVM, MNB, and LM by 1.7 percentage points, 2.9 percentage points, and 1.5 percentage
+points, respectively. On the data set IMDB-U, our method brings an improved accuracy
+rate of 2.1 percentage points, 3.7 percentage points, and 2.2 percentage points over
+SVM, MNB, and LM, respectively. We ﬁnd that MNB performs better than SVM and
+LM on the critics review data sets RT-C and PL05-C. Also, SVM and LM achieve better
+results on the user review data sets RT-U and IMDB-U. The s.parser is more robust for
+the different genres of data sets.
+Downloaded from by guest on 26 March 2025
+Computational Linguistics
+Volume 41, Number 2
+Sentiment classiﬁcation results on different data sets; The top three methods are in bold and the
+best is also underlined; SVM-m = Support Vector Machine; MNB-m = Multinomial Na¨ıve Bayes;
+LM-m = Language Model; Voting-w/Rev = Voting with negation rules; HardRule = Rule based
+method on dependency tree; Tree-CRF = Dependency tree-based method employing conditional
+random ﬁelds; RAE-pretrain = Recursive autoencoders with pre-trained word vectors;
+MV-RNN = Matrix-vector recursive neural network; s.parser-LongMatch = The longest
+matching rules are used; s.parser-w/oComb = Without using the combination rules; s.parser =
+Our method. Some of the results are missing (indicated by “-”) in the table as there is no publicly
+available implementation or they are hard to scale up.
+Voting-w/Rev
+RAE-pretrain
+s.parser-LongMatch
+s.parser-w/oComb
+On the data set MPQA, the accuracy of s.parser increases by 0.5 percentage points,
+1.1 percentage points, and 14.8 percentage points from the best results of SVM, MNB,
+and LM, respectively. Compared with Voting-w/Rev and HardRule, s.parser achieves
+4.5 percentage point and 4.4 percentage point improvements over them. As illustrated
+in Table 3, the size and length of sentences in MPQA are much smaller than those in
+the other four data sets. The RAE-pretrain achieves better results than other methods
+on this data set, because the word embeddings pre-trained on Wikipedia can leverage
+smoothing to relieve the sparsity problem in MPQA. If we do not use any external
+resources (i.e., Wikipedia), the accuracy of RAE on MPQA is 85.7%, which is lower than
+Tree-CRF and s.parser. The results indicate that s.parser achieves the best result if no
+external resource is used.
+Downloaded from by guest on 26 March 2025
+Dong et al.
+A Statistical Parsing Framework for Sentiment Classiﬁcation
+In addition, we compare the results of s.parser-LongMatch and s.parser-w/oComb.
+The s.parser-LongMatch utilizes the dictionary rules and combination rules in the
+longest matching manner, whereas s.parser-w/oComb removes the combination rules
+in the parsing process. Compared with the results of s.parser, we ﬁnd that both the
+ranking model and the combination rules play a positive role in the model. The ranking
+model learns to score parse trees by assigning larger weights to the rules that tend to obtain correct labels. Also, the combination rules generalize these dictionary rules to deal
+with the sentiment compositionality in a symbolic way, which enables the model to
+process unseen phrases. Furthermore, s.parser-LongMatch achieves better results than
+s.parser-w/oComb. This indicates that the effects of the combination rules are more
+pronounced than the ranking model.
+The bag-of-words classiﬁers work well for long documents relying on sentiment
+words that appear many times in a document. The redundancy characteristics provide
+strong evidence for sentiment classiﬁcation. Even though some phrases of a document
+are not estimated accurately, it can still result in a correct polarity label. However, for
+short text, such as a sentence, the compositionality plays an important role in sentiment
+classiﬁcation. Tree-CRF, MV-RNN, and s.parser take compositionality into consideration in different ways, and they achieve signiﬁcant improvements over SVM, MNB, and
+LM. We also ﬁnd that the high order n-grams contribute to classiﬁcation accuracy on
+most of the data sets, but they harm the accuracy of LM on PL05-C. The high-order
+n-grams can partially solve compositionality in a brute-force way.
+5.3 Effect of Training Data Size
+We further investigate the effect of the size of training data for different sentiment classiﬁcation methods. This is meaningful as the number of the publicly available reviews
+is increasing dramatically nowadays. The methods that can take advantage of more
+training data will be even more useful in practice.
+We report the results of s.parser compared with SVM, MNB, and LM on the data
+set RT-C using different training data size. In order to make the ﬁgure clear, we only
+present the results of SVM/MNB/LM-1/5 here. As shown in Figure 9, we ﬁnd that
+the size of training data plays an important role for all these sentiment classiﬁcation
+methods. The basic conclusion is that the performance of all the methods rise as the
+data size increases, especially when the data size is smaller than a certain number. It
+meets our intuition that the size of data is the key factor when the size is relatively
+small. When the size of data is larger, the growth of accuracy becomes slower. The
+performance of the baseline methods starts to converge after the data size is larger
+than 200,000. The comparisons illustrate that s.parser signiﬁcantly outperforms these
+baselines. And the performance of s.parser becomes even better when the data size
+increases. The convergence of s.parser’s performance is slower than the others. It indicates that s.parser leverages data more effectively and beneﬁts more from a larger
+data set. With more training data, s.parser learns more dictionary rules and combination rules. These rules enhance the generalization ability of our model. Furthermore,
+it estimates more reliable parameters for the polarity model and ranking model. In
+contrast, the bag-of-words based approaches (such as SVM, MNB, and LM) cannot
+make full use of high-order information in the data set. The generalization ability
+of the combination rules of s.parser leads to better performance, and take advantage
+of larger data. It should be noted that there are similar trends with the other data
+Downloaded from by guest on 26 March 2025
+Computational Linguistics
+Volume 41, Number 2
+The curves show the test accuracy as the number of training examples increases. Our method
+s.parser signiﬁcantly outperforms the other methods, which indicates s.parser can leverage data
+more effectively and beneﬁts more from larger data.
+5.4 Effect of Experimental Settings
+In this section, we investigate the effects of different experimental settings. We show
+the results on the data set RT-C by only changing one factor and ﬁxing the others.
+Figure 10 shows the effect of minimum fragment frequency, and maximum fragment length. Speciﬁcally, Figure 10a indicates that a minimum fragment frequency
+that is too small will introduce noise, and it is difﬁcult to estimate reliable polarity
+probabilities for infrequent fragments. However, a minimum fragment frequency that
+is too large will discard too much useful information. As shown in Figure 10b, we ﬁnd
+that accuracy increases as the maximum fragment length increases. The results illustrate
+that the large maximum fragment length is helpful for s.parser. We can learn more
+Minimum Fragment Frequency
+(a) Effect of minimum fragment frequency
+Maximum Fragment Length
+(b) Effect of maximum fragment length
+(a) When the minimum fragment frequency is small, noise is introduced in the fragment
+learning process. On the other hand, too large a threshold loses useful information. (b) As the
+maximum fragment length increases, the accuracy increases monotonically. It indicates that long
+fragments are useful for our method.
+Downloaded from by guest on 26 March 2025
+Dong et al.
+A Statistical Parsing Framework for Sentiment Classiﬁcation
+Regularization (λ)
+(a) Effect of regularization
+Beam size (K)
+Average run time
+Average run time (ms)
+(b) Effect of beam size
+(a) The test accuracy is relatively insensitive to the regularization parameter λ in Equation (22).
+(b) As the beam size K increases, the test accuracy increases; however, the computation costs also
+become more expensive. When K = 1, the optimization algorithm cannot learn any weights.
+combination rules with a larger maximum fragment length, and long dictionary rules
+capture more precise expressions than unigrams. This conclusion is the same as that in
+Section 5.2.
+As shown in Figure 11, we also investigate how the training iteration, regularization, and beam size affect the results. As shown in Figure 11a, we try a wide range of
+regularization parameters λ in Equation (22). The results indicate that it is insensitive
+to the choice of λ. Figure 11b shows the effects of different beam size K in the search
+process. When beam size K = 1, the optimization algorithm cannot learn the weights.
+In this case, the decoding process is to select one search path randomly, and compute
+its polarity probabilities. The results become better as the beam size K increases. On
+the other hand, the computation costs increase. The proper beam size K can prune some
+candidates to speed up the search procedure. It should be noted that the sentence length
+also effects the run time.
+5.5 Results of Grammar Learning
+The sentiment grammar plays a central role in the statistical sentiment parsing framework. It is obvious that the accuracy of s.parser relies on the quality of the automatically
+learned sentiment grammar. The quality can be implicitly evaluated by the accuracy of
+sentiment classiﬁcation results, as we have shown in previous sections. However, there
+is no straightforward way to explicitly evaluate the quality of the learned grammar.
+In this section, we provide several case studies of the learned dictionary rules and
+combination rules to further illustrate the results of the sentiment grammar learning
+process as detailed in Section 4.2.
+To start with, we report the total number of dictionary rules and combination rules
+learned from the data sets. As shown in Table 5, the results indicate that we can learn
+more dictionary rules and combination rules from the larger data sets. Although we
+learn more dictionary rules from RT-C than from IMDB-U, the number of combination
+rules learned from RT-C is less than from IMDB-U. It indicates that the language usage
+of RT-C is more diverse than that of IMDB-U. For SST, more rules are learned because
+of its constituent-level annotations.
+Downloaded from by guest on 26 March 2025
+Computational Linguistics
+Volume 41, Number 2
+Number of rules learned from different data sets. τf represents minimum fragment frequency,
+|GD| represents total number of dictionary rules, and |GC| is the total number of combination
+Furthermore, we explore how the minimum fragment frequency τf affects the
+number of dictionary rules, and present the distribution of dictionary rule length. As
+illustrated in Figure 12a, we ﬁnd that the relation between total number of dictionary
+rules |GD| and minimum fragment frequency τf obeys the power law, that is, the
+log10(|GD|) −log2(τf ) graph takes a linear form. It indicates that most of the fragments
+appear few times, and only some of them appear frequently. Notably, all the syntactically plausible phrases of SST are annotated, so its distribution is different from the other
+sentence-level data sets. Figure 12b shows the cumulative distribution of dictionary rule
+length l. It presents most dictionary rules as short ones. For all data sets except SST,
+more than 80% of dictionary rules are shorter than ﬁve words. The length distributions
+of data sets RT-C and IMDB-U are similar, whereas we obtain more high order n-grams
+from RT-U and SST.
+We further investigate the effect of context for dictionary rule learning. Table 6
+shows some dictionary rules with polarity probabilities learned by our method and
+log10(|GD |)
+(b) Cumulative distribution of dictionary rule
+(a) We choose τf = 2, 4, 8, 16, 32, and plot log10(|GD|)–log2(τf ) graph to show the effects of τf for
+total number of dictionary rules |GD|. The results (except SST) follow a power law distribution.
+(b) The cumulative distribution of dictionary rule length l indicates that most dictionary rules
+are short ones.
+Downloaded from by guest on 26 March 2025
+Dong et al.
+A Statistical Parsing Framework for Sentiment Classiﬁcation
+Comparing our dictionary rule learning method with naive counting. The dictionary rules that
+are assigned different polarities by these two methods are presented. N represents negative, and
+P represents positive. The polarity probabilities of fragments are shown in this table, and they
+demonstrate that our method learns more intuitive results than counting directly.
+Naive Count
+a very good movie
+looks gorgeous
+to enjoy the movies
+a difﬁcult ﬁlm to
+disappoint
+naive counting on RT-C. We notice that if we count the fragment occurrence number
+directly, some polarities of fragments are learned incorrectly. This is caused by the effect
+of context as described in Section 4.2.1. By taking the context into consideration, we
+obtain more reasonable polarity probabilities of dictionary rules. Our dictionary rule
+learning method takes compositionality into consideration, namely, we skip the count
+if there exist some negation indicators outside the phrase. This constraint tries to ensure
+that the polarity of fragments is the same as the whole sentence. As shown in the results,
+the polarity probabilities learned by our method are more reasonable and meet people’s
+intuitions. However, there are also some negative examples caused by “false subjective.”
+For instance, the neutral phrase to pay it tends to appear in negative sentences, and it is
+learned as a negative phrase. This makes sense for the data distribution, but it may lead
+to the mismatch for the combination rules.
+In Figure 13, we show the polarity model of some combination rules learned from
+the data set RT-C. The ﬁrst two examples are negation rules. We ﬁnd that both switch
+negation and shift negation exist in data, instead of using only one negation type in
+previous work . For the rule
+“N →i do not P,” we ﬁnd that it is a switch negation rule. This rule reverses the polarity
+and the corresponding polarity strength. For instance, the i do not like it very much is
+more negative than the i do not like it. As shown in Figure 13b, the “N →is not P” is
+a shift negation that reduces a ﬁxed polarity strength to reverse the original polarity.
+Speciﬁcally, the is not good is more negative than the is not great, as described in Section 3.4. We have a similar conclusion for the next two weaken rules. As illustrated
+in Figure 13c, the “P →P actress” describes one aspect of a movie, hence it is more
+likely to decrease the polarity intensity. We ﬁnd that this rule is a ﬁxed intensiﬁcation
+rule that reduces the polarity probability by a ﬁxed value. The “N →a bit of N” is
+a percentage intensiﬁcation rule, which scales polarity intensity by a percentage. It
+reduces more strength for stronger polarity. The last two rules in Figure 13e and Figure 13f are strengthen rules. Both “P →lot of P” and “N →N terribly” increase the
+polarity strength of the sub-fragments. These cases indicate that it is necessary to learn
+how the context performs compositionality from data. In order to capture the compositionality for different rules, we deﬁne the polarity model and learn parameters for each
+rule. This also agrees with the models of Socher et al. and Dong et al. ,
+Downloaded from by guest on 26 March 2025
+Computational Linguistics
+Volume 41, Number 2
+N → i do not P
+(a) N →i do not P
+N → is not P .
+(b) N →is not P.
+P → P actress
+(c) P →P actress
+N → a bit of N
+(d) N →a bit of N
+P → lot of P
+(e) P →lot of P
+N → N terribly
+(f) N →N terribly
+Illustration of the polarity model for combination rules: (a)(b) Negation rule. (c)(d) Weaken rule.
+(e)(f) Strengthen rule. The labels of axes represent the corresponding polarity labels, the red
+points are the training instances, and the blue lines are the regression results for the polarity
+Downloaded from by guest on 26 March 2025
+Dong et al.
+A Statistical Parsing Framework for Sentiment Classiﬁcation
+which use multiple composition matrices to make compositions speciﬁc and is an
+improvement over the recursive neural network that employs one composition matrix.
+6. Conclusion and Future Work
+In this article, we propose a statistical parsing framework for sentence-level sentiment
+classiﬁcation that provides a novel approach to designing sentiment classiﬁers from a
+new perspective. It directly analyzes the sentiment structure of a sentence other than
+relying on syntactic parsing results, as in existing literature. We show that complicated
+phenomena in sentiment analysis, such as negation, intensiﬁcation, and contrast, can
+be handled in a similar manner to simple and straightforward sentiment expressions in
+a uniﬁed and probabilistic way. We provide a formal model to represent the sentiment
+grammar built upon Context-Free Grammars. The framework consists of: (1) a parsing
+model to analyze the sentiment structure of a sentence; (2) a polarity model to calculate
+sentiment strength and polarity for each text span in the parsing process; and (3) a
+ranking model to select the best parsing result from a list of candidate sentiment parse
+trees. We show that the sentiment parser can be trained from the examples of sentences
+annotated only with sentiment polarity labels but without using any syntactic or sentiment annotations within sentences. We evaluate the proposed framework on standard
+sentiment classiﬁcation data sets. The experimental results show that the statistical sentiment parsing notably outperforms the baseline sentiment classiﬁcation approaches.
+We believe the work on statistical sentiment parsing can be advanced from many
+different perspectives. First, statistical parsing has been a well-established research ﬁeld,
+in which many different grammars and parsing algorithms have been proposed in previously published literature. It will be an interesting direction to apply and adjust more
+advanced models and algorithms from the syntactic parsing and the semantic parsing
+to our framework. We leave it as a line of future work. Second, we can incorporate target
+and aspect information in the statistical sentiment parsing framework to facilitate the
+target-dependent and aspect-based sentiment analysis. Intuitively, this can be done by
+introducing semantic tags of targets and aspects as new non-terminals in the sentiment
+grammar and revising grammar rules accordingly. However, acquiring training data
+will be an even more challenging task, as we need more ﬁne-grained information.
+Third, as the statistical sentiment parsing produces more ﬁne-grained information (e.g.,
+the basic sentiment expressions from the dictionary rules as well as the sentiment
+structure trees), we will have more opportunities to generate better opinion summaries.
+Moreover, we are interested in jointly learning parameters of the polarity model and the
+parsing model from data. Last but not the least, we are interested in investigating the
+domain adaptation, which is a very important and challenging problem in sentiment
+analysis. Generally, we may need to learn domain-speciﬁc dictionary rules for different
+domains, whereas we believe combination rules are mostly generic across different
+domains. This is also worth consideration for further study.
+Acknowledgments
+This research was partly supported by NSFC
+(grant no. 61421003) and the fund of the
+State Key Lab of Software Development
+Environment (grant no. SKLSDE-2015ZX-05).
+We gratefully acknowledge helpful
+discussions with Dr. Nan Yang and the
+anonymous reviewers.

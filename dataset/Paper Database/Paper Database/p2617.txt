@@ -1,0 +1,523 @@
+RandAugment: Practical automated data augmentation
+with a reduced search space
+Ekin D. Cubuk ∗, Barret Zoph∗, Jonathon Shlens, Quoc V. Le
+Google Research, Brain Team
+{cubuk, barretzoph, shlens, qvl}@google.com
+Recent work has shown that data augmentation has the
+potential to signiﬁcantly improve the generalization of deep
+learning models. Recently, automated augmentation strategies have led to state-of-the-art results in image classiﬁcation and object detection. While these strategies were optimized for improving validation accuracy, they also led to
+state-of-the-art results in semi-supervised learning and improved robustness to common corruptions of images. An
+obstacle to a large-scale adoption of these methods is a separate search phase which increases the training complexity and may substantially increase the computational cost.
+Additionally, due to the separate search phase, these approaches are unable to adjust the regularization strength
+based on model or dataset size. Automated augmentation
+policies are often found by training small models on small
+datasets and subsequently applied to train larger models.
+In this work, we remove both of these obstacles. RandAugment has a signiﬁcantly reduced search space which allows
+it to be trained on the target task with no need for a separate
+proxy task. Furthermore, due to the parameterization, the
+regularization strength may be tailored to different model
+and dataset sizes.
+RandAugment can be used uniformly
+across different tasks and datasets and works out of the box,
+matching or surpassing all previous automated augmentation approaches on CIFAR-10/100, SVHN, and ImageNet.
+On the ImageNet dataset we achieve 85.0% accuracy, a
+0.6% increase over the previous state-of-the-art and 1.0%
+increase over baseline augmentation. On object detection,
+RandAugment leads to 1.0-1.3% improvement over baseline augmentation, and is within 0.3% mAP of AutoAugment
+on COCO. Finally, due to its interpretable hyperparameter,
+RandAugment may be used to investigate the role of data
+augmentation with varying model and dataset size. Code is
+available online. 1
+∗Authors contributed equally.
+1github.com/tensorflow/tpu/tree/master/models/
+official/efficientnet
+PyramidNet
+Table 1. RandAugment matches or exceeds predictive performance of other augmentation methods with a signiﬁcantly reduced search space. We report the search space size and the test
+accuracy achieved for AutoAugment (AA) , Fast AutoAugment
+ , Population Based Augmentation (PBA) and the proposed RandAugment (RA) on CIFAR-10 , SVHN , and
+ImageNet classiﬁcation tasks. Architectures presented include
+PyramidNet , Wide-ResNet-28-10 , ResNet-50 , and
+EfﬁcientNet-B7 . Search space size is reported as the order of
+magnitude of the number of possible augmentation policies. All
+accuracies are the percentage on a cross-validated validation or
+test split. Dash indicates that results are not available.
+1. Introduction
+Data augmentation is a widely used method for generating additional data to improve machine learning systems, for image classiﬁcation , object detection , instance segmentation , and speech recognition . Unfortunately, data augmentation methods require expertise, and manual work to design policies
+that capture prior knowledge in each domain. This requirement makes it difﬁcult to extend existing data augmentation
+methods to other applications and domains.
+Learning policies for data augmentation has recently
+emerged as a method to automate the design of augmentation strategies and therefore has the potential to address
+some weaknesses of traditional data augmentation methods
+ . Training a machine learning model with
+a learned data augmentation policy may signiﬁcantly improve accuracy , model robustness , and performance on semi-supervised learning for image classiﬁcation; likewise, for object detection tasks on COCO
+and PASCAL-VOC . Notably, unlike engineering bet-
+ 
+ter network architectures , all of these improvements in
+predictive performance incur no additional computational
+cost at inference time.
+In spite of the beneﬁts of learned data augmentation policies, the computational requirements as well as the added
+complexity of two separate optimization procedures can be
+prohibitive. The original presentation of neural architecture
+search (NAS) realized an analogous scenario in which the
+dual optimization procedure resulted in superior predictive
+performance, but the original implementation proved prohibitive in terms of complexity and computational demand.
+Subsequent work accelerated training efﬁciency and the ef-
+ﬁcacy of the procedure , eventually making
+the method amenable to a uniﬁed optimization based on a
+differentiable process . In the case of learned augmentations, subsequent work identiﬁed more efﬁcient search
+methods , however such methods still require a separate optimization procedure, which signiﬁcantly increases
+the computational cost and complexity of training a machine learning model.
+The original formulation for automated data augmentation postulated a separate search on a small, proxy task
+whose results may be transferred to a larger target task
+ . This formulation makes a strong assumption that
+the proxy task provides a predictive indication of the larger
+task . In the case of learned data augmentation, we
+provide experimental evidence to challenge this core assumption. In particular, we demonstrate that this strategy
+is sub-optimal as the strength of the augmentation depends
+strongly on model and dataset size. These results suggest
+that an improved data augmentation may be possible if one
+could remove the separate search phase on a proxy task.
+In this work, we propose a practical method for automated data augmentation – termed RandAugment
+does not require a separate search. In order to remove a separate search, we ﬁnd it necessary to dramatically reduce the
+search space for data augmentation. The reduction in parameter space is in fact so dramatic that simple grid search
+is sufﬁcient to ﬁnd a data augmentation policy that outperforms all learned augmentation methods that employ a separate search phase. Our contributions can be summarized as
+• We demonstrate that the optimal strength of a data augmentation depends on the model size and training set
+size. This observation indicates that a separate optimization of an augmentation policy on a smaller proxy
+task may be sub-optimal for learning and transferring
+augmentation policies.
+• We introduce a vastly simpliﬁed search space for
+data augmentation containing 2 interpretable hyperparameters. One may employ simple grid search to
+tailor the augmentation policy to a model and dataset,
+removing the need for a separate search process.
+• Leveraging this formulation, we demonstrate state-ofthe-art results on CIFAR , SVHN , and ImageNet . On object detection , our method is
+within 0.3% mAP of state-of-the-art. On ImageNet we
+achieve a state-of-the-art accuracy of 85.0%, a 0.6%
+increment over previous methods and 1.0% over baseline augmentation.
+2. Related Work
+Data augmentation has played a central role in the training of deep vision models. On natural images, horizontal ﬂips and random cropping or translations of the images
+are commonly used in classiﬁcation and detection models . On MNIST, elastic distortions across scale,
+position, and orientation have been applied to achieve impressive results . While previous examples
+augment the data while keeping it in the training set distribution, operations that do the opposite can also be effective in increasing generalization. Some methods randomly
+erase or add noise to patches of images for increased validation accuracy , robustness , or both .
+Mixup is a particularly effective augmentation method
+on CIFAR-10 and ImageNet, where the neural network is
+trained on convex combinations of images and their corresponding labels. Object-centric cropping is commonly used
+for object detection tasks , whereas adds new objects
+on training images by cut-and-paste.
+Moving away from individual operations to augment
+data, other work has focused on ﬁnding optimal strategies
+for combining different operations.
+For example, Smart
+Augmentation learns a network that merges two or more
+samples from the same class to generate new data . Tran
+et al. generate augmented data via a Bayesian approach,
+based on the distribution learned from the training set .
+DeVries et al.
+use transformations (e.g.
+noise, interpolations and extrapolations) in the learned feature space to
+augment data . Furthermore, generative adversarial networks (GAN) have been used to choose optimal sequences
+of data augmentation operations . GANs have also been
+used to generate training data directly ,
+however this approach does not seem to be as beneﬁcial as
+learning sequences of data augmentation operations that are
+pre-deﬁned .
+Another approach to learning data augmentation strategies from data is AutoAugment , which originally used
+reinforcement learning to choose a sequence of operations
+as well as their probability of application and magnitude.
+Application of AutoAugment policies involves stochasticity
+at multiple levels: 1) for every image in every minibatch,
+a sub-policy is chosen with uniform probability. 2) operations in each sub-policy has an associated probability of
+Figure 1. Example images augmented by RandAugment. In
+these examples N=2 and three magnitudes are shown corresponding to the optimal distortion magnitudes for ResNet-50,
+EfﬁcientNet-B5 and EfﬁcientNet-B7, respectively.
+As the distortion magnitude increases, the strength of the augmentation increases.
+application. 3) Some operations have stochasticity over direction. For example, an image can be rotated clockwise or
+counter-clockwise. The layers of stochasticity increase the
+amount of diversity that the network is trained on, which in
+turn was found to signiﬁcantly improve generalization on
+many datasets. More recently, several papers used the AutoAugment search space and formalism with improved optimization algorithms to ﬁnd AutoAugment policies more
+efﬁciently . Although the time it takes to search
+for policies has been reduced signiﬁcantly, having to implement these methods in a separate search phase reduces the
+applicability of AutoAugment. For this reason, this work
+aims to eliminate the search phase on a separate proxy task
+completely.
+Some of the developments in RandAugment were inspired by the recent improvements to searching over data
+augmentation policies.
+For example, Population Based
+Augmentation (PBA) found that the optimal magnitude
+of augmentations increased during the course of training,
+which inspired us to not search over optimal magnitudes for
+each transformation but have a ﬁxed magnitude schedule,
+which we discuss in detail in Section 3. Furthermore, authors of Fast AutoAugment found that a data augmentation policy that is trained for density matching leads to
+improved generalization accuracy, which inspired our ﬁrst
+order differentiable term for improving augmentation (see
+Section 4.7).
+transforms = [
+’Identity’, ’AutoContrast’, ’Equalize’,
+’Rotate’, ’Solarize’, ’Color’, ’Posterize’,
+’Contrast’, ’Brightness’, ’Sharpness’,
+’ShearX’, ’ShearY’, ’TranslateX’, ’TranslateY’]
+def randaugment(N, M):
+"""Generate a set of distortions.
+N: Number of augmentation transformations to
+apply sequentially.
+M: Magnitude for all the transformations.
+sampled_ops = np.random.choice(transforms, N)
+return [(op, M) for op in sampled_ops]
+Figure 2. Python code for RandAugment based on numpy.
+3. Methods
+The primary goal of RandAugment is to remove the need
+for a separate search phase on a proxy task. The reason
+we wish to remove the search phase is because a separate
+search phase signiﬁcantly complicates training and is computationally expensive. More importantly, the proxy task
+may provide sub-optimal results (see Section 4.1). In order to remove a separate search phase, we aspire to fold
+the parameters for the data augmentation strategy into the
+hyper-parameters for training a model. Given that previous learned augmentation methods contained 30+ parameters , we focus on vastly reducing the parameter
+space for data augmentation.
+Previous work indicates that the main beneﬁt of learned
+augmentation policies arise from increasing the diversity of
+examples . Indeed, previous work enumerated a
+policy in terms of choosing which transformations to apply
+out of K=14 available transformations, and probabilities for
+applying each transformation:
+• identity
+• autoContrast
+• equalize
+• solarize
+• posterize
+• contrast
+• brightness
+• sharpness
+• translate-x
+• translate-y
+In order to reduce the parameter space but still maintain image diversity, we replace the learned policies and probabilities for applying each transformation with a parameter-free
+procedure of always selecting a transformation with uniform probability 1
+K . Given N transformations for a training
+image, RandAugment may thus express KN potential policies.
+The ﬁnal set of parameters to consider is the magnitude
+of the each augmentation distortion. Following , we employ the same linear scale for indicating the strength of each
+transformation. Brieﬂy, each transformation resides on an
+integer scale from 0 to 10 where a value of 10 indicates
+the maximum scale for a given transformation. A data augmentation policy consists of identifying an integer for each
+augmentation . In order to reduce the parameter space further, we observe that the learned magnitude for
+each transformation follows a similar schedule during training (e.g. Figure 4 in ) and postulate that a single global
+distortion M may sufﬁce for parameterizing all transformations. We experimented with four methods for the schedule
+of M during training: constant magnitude, random magnitude, a linearly increasing magnitude, and a random magnitude with increasing upper bound. The details of this experiment can be found in Appendix A.1.1.
+The resulting algorithm contains two parameters N and
+M and may be expressed simply in two lines of Python
+code (Figure 2). Both parameters are human-interpretable
+such that larger values of N and M increase regularization strength. Standard methods may be employed to efﬁciently perform hyperparameter optimization , however given the extremely small search space we ﬁnd that
+naive grid search is quite effective (Section 4.1). We justify
+all of the choices of this proposed algorithm in this subsequent sections by comparing the efﬁcacy of the learned augmentations to all previous learned data augmentation methods.
+4. Results
+To explore the space of data augmentations, we experiment with core image classiﬁcation and object detection
+tasks. In particular, we focus on CIFAR-10, CIFAR-100,
+SVHN, and ImageNet datasets as well as COCO object detection so that we may compare with previous work. For all
+of these datasets, we replicate the corresponding architectures and set of data transformations. Our goal is to demonstrate the relative beneﬁts of employing this method over
+previous learned augmentation methods.
+4.1. Systematic failures of a separate proxy task
+A central premise of learned data augmentation is to construct a small, proxy task that may be reﬂective of a larger
+task . Although this assumption is sufﬁcient for
+identifying learned augmentation policies to improve performance , it is unclear if this assumption
+is overly stringent and may lead to sub-optimal data augmentation policies.
+In this ﬁrst section, we challenge the hypothesis that formulating the problem in terms of a small proxy task is appropriate for learned data augmentation. In particular, we
+explore this question along two separate dimensions that are
+commonly restricted to achieve a small proxy task: model
+size and dataset size. To explore this hypothesis, we systematically measure the effects of data augmentation policies on CIFAR-10. First, we train a family of Wide-ResNet
+Wide-ResNet-28-2
+Wide-ResNet-28-10
+Shake-Shake
+PyramidNet
+Wide-ResNet-28-2
+Wide-ResNet-28-10
+SVHN (core set)
+Wide-ResNet-28-2
+Wide-ResNet-28-10
+Wide-ResNet-28-2
+Wide-ResNet-28-10
+Table 2. Test accuracy (%) on CIFAR-10, CIFAR-100, SVHN
+and SVHN core set. Comparisons across default data augmentation (baseline), Population Based Augmentation (PBA) and
+Fast AutoAugment (Fast AA) , AutoAugment (AA) and
+proposed RandAugment (RA). Note that baseline and AA are
+replicated in this work. SVHN core set consists of 73K examples.
+The Shake-Shake model employed a 26 2×96d conﬁguration, and the PyramidNet model used the ShakeDrop regularization . Results reported by us are averaged over 10 independent
+runs. Bold indicates best results.
+architectures , where the model size may be systematically altered through the widening parameter governing
+the number of convolutional ﬁlters. For each of these networks, we train the model on CIFAR-10 and measure the
+ﬁnal accuracy compared to a baseline model trained with
+default data augmentations (i.e. ﬂip left-right and random
+translations). The Wide-ResNet models are trained with the
+additional K=14 data augmentations (see Methods) over a
+range of global distortion magnitudes M parameterized on
+a uniform linear scale ranging from 2.
+Figure 3a demonstrates the relative gain in accuracy of
+a model trained across increasing distortion magnitudes for
+three Wide-ResNet models. The squares indicate the distortion magnitude with which achieves the highest accuracy. Note that in spite of the measurement noise, Figure
+3a demonstrates systematic trends across distortion magnitudes. In particular, plotting all Wide-ResNet architectures
+versus the optimal distortion magnitude highlights a clear
+monotonic trend across increasing network sizes (Figure
+3b). Namely, larger networks demand larger data distortions for regularization. Figure 1 highlights the visual difference in the optimal distortion magnitude for differently
+sized models. Conversely, a learned policy based on 
+provides a ﬁxed distortion magnitude (Figure 3b, dashed
+line) for all architectures that is clearly sub-optimal.
+A second dimension for constructing a small proxy task
+2Note that the range of magnitudes exceeds the speciﬁed range of magnitudes in the Methods because we wish to explore a larger range of magnitudes for this preliminary experiment. We retain the same scale as for
+a value of 10 to maintain comparable results.
+Figure 3. Optimal magnitude of augmentation depends on the size of the model and the training set. All results report CIFAR-10
+validation accuracy for Wide-ResNet model architectures averaged over 20 random initializations, where N = 1. (a) Accuracy of
+Wide-ResNet-28-2, Wide-ResNet-28-7, and Wide-ResNet-28-10 across varying distortion magnitudes. Models are trained for 200 epochs
+on 45K training set examples. Squares indicate the distortion magnitude that achieves the maximal accuracy. (b) Optimal distortion
+magnitude across 7 Wide-ResNet-28 architectures with varying widening parameters (k). (c) Accuracy of Wide-ResNet-28-10 for three
+training set sizes (1K, 4K, and 10K) across varying distortion magnitudes. Squares indicate the distortion magnitude that achieves the
+maximal accuracy. (d) Optimal distortion magnitude across 8 training set sizes. Dashed curves show the scaled expectation value of the
+distortion magnitude in the AutoAugment policy .
+is to train the proxy on a small subset of the training
+Figure 3c demonstrates the relative gain in accuracy of Wide-ResNet-28-10 trained across increasing distortion magnitudes for varying amounts of CIFAR-10 training data. The squares indicate the distortion magnitude with
+that achieves the highest accuracy. Note that in spite of
+the measurement noise, Figure 3c demonstrates systematic
+trends across distortion magnitudes. We ﬁrst observe that
+models trained on smaller training sets may gain more improvement from data augmentation (e.g. 3.0% versus 1.5%
+in Figure 3c). Furthermore, we see that the optimal distortion magnitude is larger for models that are trained on larger
+datasets. At ﬁrst glance, this may disagree with the expectation that smaller datasets require stronger regularization.
+Figure 3d demonstrates that the optimal distortion magnitude increases monotonically with training set size. One
+hypothesis for this counter-intuitive behavior is that aggressive data augmentation leads to a low signal-to-noise ratio
+in small datasets. Regardless, this trend highlights the need
+for increasing the strength of data augmentation on larger
+datasets and the shortcomings of optimizing learned augmentation policies on a proxy task comprised of a subset of
+the training data. Namely, the learned augmentation may
+learn an augmentation strength more tailored to the proxy
+task instead of the larger task of interest.
+The dependence of augmentation strength on the dataset
+and model size indicate that a small proxy task may provide
+a sub-optimal indicator of performance on a larger task.
+This empirical result suggests that a distinct strategy may
+be necessary for ﬁnding an optimal data augmentation policy. In particular, we propose in this work to focus on a
+uniﬁed optimization of the model weights and data augmentation policy. Figure 3 suggest that merely searching for a
+shared distortion magnitude M across all transformations
+may provide sufﬁcient gains that exceed learned optimization methods . Additionally, we see that optimizing individual magnitudes further leads to minor improvement in
+performance (see Section A.1.2 in Appendix).
+Furthermore, Figure 3a and 3c indicate that merely sampling a few distortion magnitudes is sufﬁcient to achieve
+good results.
+Coupled with a second free parameter N,
+we consider these results to prescribe an algorithm for
+learning an augmentation policy. In the subsequent sections, we identify two free parameters N and M specifying RandAugment through a minimal grid search and compare these results against computationally-heavy learned
+data augmentations based on proxy tasks.
+4.2. CIFAR
+CIFAR-10 has been extensively studied with previous
+data augmentation methods and we ﬁrst test this proposed
+method on this data.
+The default augmentations for all
+methods include ﬂips, pad-and-crop and Cutout . N and
+M were selected based on the validation performance on 5K
+held out examples from the training set for 1 and 5 settings
+for N and M, respectively. Results indicate that RandAugment achieves either competitive (i.e. within 0.1%) or stateof-the-art on CIFAR-10 across four network architectures
+(Table 2). As a more challenging task, we additionally compare the efﬁcacy of RandAugment on CIFAR-100 for Wide-
+ResNet-28-2 and Wide-ResNet-28-10. On the held out 5K
+dataset, we sampled 2 and 4 settings for N and M, respectively (i.e. N={1, 2} and M={2, 6, 10, 14}). For Wide-
+ResNet-28-2 and Wide-ResNet-28-10, we ﬁnd that N=1,
+M=2 and N=2, M=14 achieves best results, respectively.
+Again, RandAugment achieves competitive or superior results across both architectures (Table 2).
+Because SVHN is composed of numbers instead of natural images, the data augmentation strategy for SVHN may
+differ substantially from CIFAR-10. Indeed, identiﬁed
+a qualitatively different policy for CIFAR-10 than SVHN.
+Likewise, in a semi-supervised setting for CIFAR-10, a policy learned from CIFAR-10 performs better than a policy
+learned from SVHN .
+SVHN has a core training set of 73K images . In
+addition, SVHN contains 531K less difﬁcult “extra” images to augment training. We compare the performance of
+the augmentation methods on SVHN with and without the
+extra data on Wide-ResNet-28-2 and Wide-ResNet-28-10
+(Table 2). In spite of the large differences between SVHN
+and CIFAR, RandAugment consistently matches or outperforms previous methods with no alteration to the list of
+transformations employed. Notably, for Wide-ResNet-28-
+2, applying RandAugment to the core training dataset improves performance more than augmenting with 531K additional training images (98.3% vs. 98.2%). For, Wide-
+ResNet-28-10, RandAugment is competitive with augmenting the core training set with 531K training images (i.e.
+within 0.2%). Nonetheless, Wide-ResNet-28-10 with RandAugment matches the previous state-of-the-art accuracy
+on SVHN which used a more advanced model .
+4.4. ImageNet
+Data augmentation methods that improve CIFAR-10 and
+SVHN models do not always improve large-scale tasks such
+as ImageNet. For instance, Cutout substantially improves
+CIFAR and SVHN performance , but fails to improve
+ImageNet . Likewise, AutoAugment does not increase
+the performance on ImageNet as much as other tasks ,
+especially for large networks (e.g. +0.4% for AmoebaNet-
+C and +0.1% for EfﬁcientNet-B5 ). One plausible
+reason for the lack of strong gains is that the small proxy
+task was particularly impoverished by restricting the task to
+∼10% of the 1000 ImageNet classes.
+Table 3 compares the performance of RandAugment to
+other learned augmentation approaches on ImageNet. RandAugment matches the performance of AutoAugment and
+Fast AutoAugment on the smallest model (ResNet-50), but
+on larger models RandAugment signiﬁcantly outperforms
+other methods achieving increases of up to +1.3% above
+the baseline. For instance, on EfﬁcientNet-B7, the resulting
+model achieves 85.0% – a new state-of-the-art accuracy –
+exhibiting a 1.0% improvement over the baseline augmentation. These systematic gains are similar to the improvements achieved with engineering new architectures ,
+however these gains arise without incurring additional computational cost at inference time.
+To further test the generality of this approach, we next
+explore a related task of large-scale object detection on the
+COCO dataset . Learned augmentation policies have
+improved object detection and lead to state-of-the-art results
+ . We followed previous work by training on the same
+architectures and following the same training schedules (see
+Appendix A.3). Brieﬂy, we employed RetinaNet with
+ResNet-101 and ResNet-200 as a backbone . Models
+were trained for 300 epochs from random initialization.
+Table 4 compares results between a baseline model, AutoAugment and RandAugment.
+AutoAugment leveraged
+additional, specialized transformations not afforded to RandAugment in order to augment the localized bounding box
+of an image .
+In addition, note that AutoAugment
+expended ∼15K GPU hours for search, where as RandAugment was tuned by on merely 6 values of the hyperparameters (see Appendix A.3). In spite of the smaller library of specialized transformations and the lack of a separate search phase, RandAugment surpasses the baseline
+model and provides competitive accuracy with AutoAugment. We reserve for future work to expand the transformation library to include bounding box speciﬁc transformation
+to potentially improve RandAugment results even further.
+4.6. Investigating the dependence on the included
+transformations
+RandAugment achieves state-of-the-art results across
+different tasks and datasets using the same list of transformations. This result suggests that RandAugment is largely
+insensitive to the selection of transformations for different datasets. To further study the sensitivity, we experibaseline
+76.3 / 93.1
+77.6 / 93.7
+77.6 / 93.8
+77.6 / 93.8
+EfﬁcientNet-B5
+83.2 / 96.7
+83.3 / 96.7
+83.9 / 96.8
+EfﬁcientNet-B7
+84.0 / 96.9
+84.4 / 97.1
+85.0 / 97.2
+Table 3. ImageNet results. Top-1 and Top-5 accuracies (%) on ImageNet. Baseline and AutoAugment (AA) results on ResNet-50 are
+from . Fast AutoAugment (Fast AA) results are from . EfﬁcientNet results with and without AutoAugment are from .
+Highest accuracy for each model is presented in bold. Note that Population Based Augmentation (PBA) has not been implemented on
+augmentation
+search space
+ResNet-101
+AutoAugment
+RandAugment
+ResNet-200
+AutoAugment
+RandAugment
+Table 4. Results on object detection. Mean average precision
+(mAP) on COCO detection task. Higher is better. Search space
+size is reported as the order of magnitude of the number of possible
+augmentation policies. Models are trained for 300 epochs from
+random initialization following .
+Figure 4. Average performance improves when more transformations are included in RandAugment. All panels report median CIFAR-10 validation accuracy for Wide-ResNet-28-2 model
+architectures trained with RandAugment (N = 3, M = 4)
+using randomly sampled subsets of transformations. No other data
+augmentation is included in training. Error bars indicate 30th and
+70th percentile. (a) Median accuracy for randomly sampled subsets
+of transformations. (b) Median accuracy for subsets with and without the Rotate transformation. (c) Median accuracy for subsets
+with and without the translate-x transformation. (d) Median
+accuracy for subsets with and without the posterize transformation. Dashed curves show the accuracy of the model trained
+without any augmentations.
+mented with RandAugment on a Wide-ResNet-28-2 trained
+on CIFAR-10 for randomly sampled subsets of the full list
+of 14 transformations. We did not use ﬂips, pad-and-crop,
+or cutout to only focus on the improvements due to RandAugment with random subsets. Figure 4a suggests that the
+median validation accuracy due to RandAugment improves
+as the number of transformations is increased. However,
+even with only two transformations, RandAugment leads to
+more than 1% improvement in validation accuracy on average.
+To get a sense for the effect of individual transformations, we calculate the average improvement in validation
+accuracy for each transformation when they are added to a
+random subset of transformations. We list the transformations in order of most helpful to least helpful in Table 5. We
+see that while geometric transformations individually make
+the most difference, some of the color transformations lead
+to a degradation of validation accuracy on average. Note
+that while Table 5 shows the average effect of adding individual transformations to randomly sampled subsets of
+transformations, Figure 4a shows that including all transformations together leads to a good result. The transformation rotate is most helpful on average, which was also
+observed previously . To see the effect of representative transformations in more detail, we repeat the analysis in Figure 4a for subsets with and without (rotate,
+translate-x, and posterize). Surprisingly, rotate can
+signiﬁcantly improve performance and lower variation even
+when included in small subsets of RandAugment transformations, while posterize seems to hurt all subsets of all
+4.7. Learning the probabilities for selecting image
+transformations
+RandAugment selects all image transformations with
+equal probability. This opens up the question of whether
+learning K probabilities may improve performance further.
+Most of the image transformations (except posterize, equalize, and autoContrast) are differentiable, which permits backpropagation to learn the K probabilities . Let us denote
+αij as the learned probability of selecting image transformation i for operation j. For K=14 image transformations
+and N=2 operations, αij constitutes 28 parameters. We initialize all weights such that each transformation is equal
+probability (i.e. RandAugment), and update these parameters based on how well a model classiﬁes a held out set of
+transformation
+transformation
+translate-y
+translate-x
+autoContrast
+brightness
+Table 5. Average improvement due to each transformation.
+Average difference in validation accuracy (%) when a particular
+transformation is added to a randomly sampled set of transformations. For this ablation study, Wide-ResNet-28-2 models were
+trained on CIFAR-10 using RandAugment (N = 3, M = 4) with
+the randomly sampled set of transformations, with no other data
+augmentation.
+Reduced CIFAR-10
+Wide-ResNet-28-2
+Wide-ResNet-28-10
+Wide-ResNet-28-2
+Wide-ResNet-28-10
+Table 6. Differentiable optimization for augmentation can improve RandAugment. Test accuracy (%) from differentiable RandAugment for reduced (4K examples) and full CIFAR-10. The
+1st-order approximation (1st) is based on density matching (Section 4.7). Models trained on reduced CIFAR-10 were trained for
+500 epochs. CIFAR-10 models trained using the same hyperparameters as previous. Each result is averaged over 10 independent
+validation images distorted by αij. This approach was inspired by density matching , but instead uses a differentiable approach in lieu of Bayesian optimization. We label
+this method as a 1st-order density matching approximation.
+To test the efﬁcacy of density matching to learn the probabilities of each transformation, we trained Wide-ResNet-
+28-2 and Wide-ResNet-28-10 on CIFAR-10 and the reduced
+form of CIFAR-10 containing 4K training samples.
+Table 6 indicates that learning the probabilities αij slightly
+improves performance on reduced and full CIFAR-10 (RA
+vs 1st). The 1st-order method improves accuracy by more
+than 3.0% for both models on reduced CIFAR-10 compared
+to the baseline of ﬂips and pad-and-crop. On CIFAR-10, the
+1st-order method improves accuracy by 0.9% on the smaller
+model and 1.2% on the larger model compared to the baseline. We further see that the 1st-order method always performs better than RandAugment, with the largest improvement on Wide-ResNet-28-10 trained on reduced CIFAR-10
+(87.4% vs. 86.8%). On CIFAR-10, the 1st-order method
+outperforms AutoAugment on Wide-ResNet-28-2 (96.1%
+vs. 95.9%) and matches AutoAugment on Wide-ResNet-
+28-10 3. Although the density matching approach is promis-
+3As a baseline comparison, in preliminary experiments we additionally
+ing, this method can be expensive as one must apply all
+K transformations N times to each image independently.
+Hence, because the computational demand of KN transformations is prohibitive for large images, we reserve this for
+future exploration. In summary, we take these results to indicate that learning the probabilities through density matching may improve the performance on small-scale tasks and
+reserve explorations to larger-scale tasks for the future.
+5. Discussion
+Data augmentation is a necessary method for achieving
+state-of-the-art performance . Learned
+data augmentation strategies have helped automate the design of such strategies and likewise achieved state-of-theart results . In this work, we demonstrated
+that previous methods of learned augmentation suffers from
+systematic drawbacks. Namely, not tailoring the number of
+distortions and the distortion magnitude to the dataset size
+nor the model size leads to sub-optimal performance. To
+remedy this situation, we propose a simple parameterization
+for targeting augmentation to particular model and dataset
+sizes. We demonstrate that RandAugment is competitive
+with or outperforms previous approaches 
+on CIFAR-10/100, SVHN, ImageNet and COCO without
+a separate search for data augmentation policies.
+In previous work, scaling learned data augmentation to
+larger dataset and models have been a notable obstacle.
+For example, AutoAugment and Fast AutoAugment could
+only be optimized for small models on reduced subsets of
+data ; population based augmentation was not reported for large-scale problems . The proposed method
+scales quite well to datasets such as ImageNet and COCO
+while incurring minimal computational cost (e.g. 2 hyperparameters), but notable predictive performance gains. An
+open question remains how this method may improve model
+robustness or semi-supervised learning .
+Future work will study how this method applies to other machine learning domains, where data augmentation is known
+to improve predictive performance, such as image segmentation , 3-D perception , speech recognition or
+audio recognition . In particular, we wish to better understand if or when datasets or tasks may require a separate
+search phase to achieve optimal performance. Finally, an
+open question remains how one may tailor the set of transformations to a given tasks in order to further improve the
+predictive performance of a given model.
+learn αij based on differentiating through a virtual training step . In
+this approach, the 2nd-order approximation yielded consistently negative
+results (see Appendix A.1).
+6. Acknowledgements
+We thank Samy Bengio, Daniel Ho, Ildoo Kim, Jaehoon
+Lee, Zhaoqi Leng, Hanxiao Liu, Raphael Gontijo Lopes,
+Ruoming Pang, Ben Poole, Mingxing Tan, and the rest of
+the Brain team for their help.

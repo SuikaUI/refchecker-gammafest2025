@@ -1,0 +1,551 @@
+Progressive Neural Architecture Search
+Chenxi Liu1⋆, Barret Zoph2, Maxim Neumann2, Jonathon Shlens2, Wei Hua2,
+Li-Jia Li2, Li Fei-Fei2,3, Alan Yuille1, Jonathan Huang2, and Kevin Murphy2
+1 Johns Hopkins University
+2 Google AI
+3 Stanford University
+Abstract. We propose a new method for learning the structure of convolutional neural networks (CNNs) that is more eﬃcient than recent
+state-of-the-art methods based on reinforcement learning and evolutionary algorithms. Our approach uses a sequential model-based optimization
+(SMBO) strategy, in which we search for structures in order of increasing
+complexity, while simultaneously learning a surrogate model to guide the
+search through structure space. Direct comparison under the same search
+space shows that our method is up to 5 times more eﬃcient than the RL
+method of Zoph et al. in terms of number of models evaluated,
+and 8 times faster in terms of total compute. The structures we discover
+in this way achieve state of the art classiﬁcation accuracies on CIFAR-10
+and ImageNet.
+Introduction
+There has been a lot of recent interest in automatically learning good neural
+net architectures. Some of this work is summarized in Section 2, but at a high
+level, current techniques usually fall into one of two categories: evolutionary algorithms (see e.g. ) or reinforcement learning (see e.g., ).
+When using evolutionary algorithms (EA), each neural network structure is encoded as a string, and random mutations and recombinations of the strings are
+performed during the search process; each string (model) is then trained and
+evaluated on a validation set, and the top performing models generate “children”. When using reinforcement learning (RL), the agent performs a sequence
+of actions, which speciﬁes the structure of the model; this model is then trained
+and its validation performance is returned as the reward, which is used to update the RNN controller. Although both EA and RL methods have been able to
+learn network structures that outperform manually designed architectures, they
+require signiﬁcant computational resources. For example, the RL method in 
+trains and evaluates 20,000 neural networks across 500 P100 GPUs over 4 days.
+In this paper, we describe a method that is able to learn a CNN which
+matches previous state of the art in terms of accuracy, while requiring 5 times
+fewer model evaluations during the architecture search. Our starting point is the
+⋆Work done while an intern at Google.
+ 
+C. Liu et al.
+structured search space proposed by , in which the search algorithm is tasked
+with searching for a good convolutional “cell”, as opposed to a full CNN. A cell
+contains B “blocks”, where a block is a combination operator (such as addition)
+applied to two inputs (tensors), each of which can be transformed (e.g., using
+convolution) before being combined. This cell structure is then stacked a certain
+number of times, depending on the size of the training set, and the desired
+running time of the ﬁnal CNN (see Section 3 for details). This modular design
+also allows easy architecture transfer from one dataset to another, as we will
+show in experimental results.
+We propose to use heuristic search to search the space of cell structures,
+starting with simple (shallow) models and progressing to complex ones, pruning
+out unpromising structures as we go. At iteration b of the algorithm, we have
+a set of K candidate cells (each of size b blocks), which we train and evaluate
+on a dataset of interest. Since this process is expensive, we also learn a model
+or surrogate function which can predict the performance of a structure without
+needing to training it. We expand the K candidates of size b into K′ ≫K
+children, each of size b + 1. We apply our surrogate function to rank all of the
+K′ children, pick the top K, and then train and evaluate them. We continue in
+this way until b = B, which is the maximum number of blocks we want to use
+in our cell. See Section 4 for details.
+Our progressive (simple to complex) approach has several advantages over
+other techniques that directly search in the space of fully-speciﬁed structures.
+First, the simple structures train faster, so we get some initial results to train
+the surrogate quickly. Second, we only ask the surrogate to predict the quality
+of structures that are slightly diﬀerent (larger) from the ones it has seen (c.f.,
+trust-region methods). Third, we factorize the search space into a product of
+smaller search spaces, allowing us to potentially search models with many more
+blocks. In Section 5 we show that our approach is 5 times more eﬃcient than the
+RL method of in terms of number of models evaluated, and 8 times faster
+in terms of total compute. We also show that the structures we discover achieve
+state of the art classiﬁcation accuracies on CIFAR-10 and ImageNet.4
+Related Work
+Our paper is based on the “neural architecture search” (NAS) method proposed
+in . In the original paper , they use the REINFORCE algorithm to
+estimate the parameters of a recurrent neural network (RNN), which represents a
+policy to generate a sequence of symbols (actions) specifying the structure of the
+CNN; the reward function is the classiﬁcation accuracy on the validation set of a
+CNN generated from this sequence. extended this by using a more structured
+search space, in which the CNN was deﬁned in terms of a series of stacked
+4 The code and checkpoint for the PNAS model trained on ImageNet can be downloaded from the TensorFlow models repository at 
+models/. Also see and https://
+github.com/chenxi116/PNASNet.pytorch for author’s reimplementation.
+Progressive Neural Architecture Search
+“cells”. (They also replaced REINFORCE with proximal policy optimization
+(PPO) .) This method was able to learn CNNs which outperformed almost
+all previous methods in terms of accuracy vs speed on image classiﬁcation (using
+CIFAR-10 and ImageNet ) and object detection (using COCO ).
+There are several other papers that use RL to learn network structures. 
+use the same model search space as NAS, but replace policy gradient with Qlearning. also use Q-learning, but without exploiting cell structure. use
+policy gradient to train an RNN, but the actions are now to widen an existing
+layer, or to deepen the network by adding an extra layer. This requires specifying
+an initial model and then gradually learning how to transform it. The same
+approach, of applying “network morphisms” to modify a network, was used in
+ , but in the context of hill climbing search, rather than RL. use parameter
+sharing among child models to substantially accelerate the search process.
+An alternative to RL is to use evolutionary algorithms (EA; “neuro-evolution”
+ ). Early work (e.g., ) used EA to learn both the structure and the parameters of the network, but more recent methods, such as , just
+use EA to search the structures, and use SGD to estimate the parameters.
+RL and EA are local search methods that search through the space of fullyspeciﬁed graph structures. An alternative approach, which we adopt, is to use
+heuristic search, in which we search through the space of structures in a progressive way, from simple to complex. There are several pieces of prior work that
+explore this approach. use Monte Carlo Tree Search (MCTS), but at each
+node in the search tree, it uses random selection to choose which branch to expand, which is very ineﬃcient. Sequential Model Based Optimization (SMBO)
+ improves on MCTS by learning a predictive model, which can be used to
+decide which nodes to expand. This technique has been applied to neural net
+structure search in , but they used a ﬂat CNN search space, rather than our
+hierarchical cell-based space. Consequently, their resulting CNNs do not perform very well. Other related works include , who focus on MLP rather than
+CNNs; , who used an incremental approach in the context of evolutionary
+algorithms; who used a schedule of increasing number of layers; and 
+who search through the space of latent factor models speciﬁed by a grammar.
+Finally, grow CNNs sequentially using boosting.
+Several other papers learn a surrogate function to predict the performance
+of a candidate structure, either “zero shot” (without training it) (see e.g., ),
+or after training it for a small number of epochs and extrapolating the learning
+curve (see e.g., ). However, most of these methods have been applied to ﬁxed
+sized structures, and would not work with our progressive search approach.
+Architecture Search Space
+In this section we describe the neural network architecture search space used in
+our work. We build on the hierarchical approach proposed in , in which we
+ﬁrst learn a cell structure, and then stack this cell a desired number of times, in
+order to create the ﬁnal CNN.
+C. Liu et al.
+Cell Topologies
+A cell is a fully convolutional network that maps an H ×W ×F tensor to another
+H′×W ′×F ′ tensor. If we use stride 1 convolution, then H′ = H and W ′ = W; if
+we use stride 2, then H′ = H/2 and W ′ = W/2. We employ a common heuristic
+to double the number of ﬁlters (feature maps) whenever the spatial activation is
+halved, so F ′ = F for stride 1, and F ′ = 2F for stride 2.
+The cell can be represented by a DAG consisting of B blocks. Each block is a
+mapping from 2 input tensors to 1 output tensor. We can specify a block b in a
+cell c as a 5-tuple, (I1, I2, O1, O2, C), where I1, I2 ∈Ib speciﬁes the inputs to the
+block, O1, O2 ∈O speciﬁes the operation to apply to input Ii, and C ∈C speciﬁes
+how to combine O1 and O2 to generate the feature map (tensor) corresponding
+to the output of this block, which we denote by Hc
+The set of possible inputs, Ib, is the set of all previous blocks in this cell,
+1, . . . , Hc
+b−1}, plus the output of the previous cell, Hc−1
+, plus the output of
+the previous-previous cell, Hc−2
+The operator space O is the following set of 8 functions, each of which operates on a single tensor5:
+• 3x3 depthwise-separable convolution
+• 5x5 depthwise-separable convolution
+• 7x7 depthwise-separable convolution
+• 1x7 followed by 7x1 convolution
+• identity
+• 3x3 average pooling
+• 3x3 max pooling
+• 3x3 dilated convolution
+This is less than the 13 operators used in , since we removed the ones that
+their RL method discovered were never used.
+For the space of possible combination operators C, considerd both elementwise addition and concatenation. However, they discovered that the RL
+method never chose to use concatenation, so to reduce our search space, we always use addition as the combination operator. Thus in our work, a block can
+be speciﬁed by a 4-tuple.
+We now quantify the size of the search space to highlight the magnitude of
+the search problem. Let the space of possible structures for the b’th block be
+Bb; this has size |Bb| = |Ib|2 × |O|2 × |C|, where |Ib| = (2 + b −1), |O| = 8 and
+|C| = 1. For b = 1, we have I1 = {Hc−1
+}, which are the ﬁnal outputs of
+the previous two cells, so there are |B1| = 256 possible block structures.
+If we allow cells of up to B = 5 blocks, the total number of cell structures is
+given by |B1:5| = 22 × 82 × 32 × 82 × 42 × 82 × 52 × 82 × 62 × 82 = 5.6 × 1014.
+However, there are certain symmetries in this space that allow us to prune it to
+a more reasonable size. For example, there are only 136 unique cells composed
+of 1 block. The total number of unique cells is ∼1012. This is much smaller than
+the search space used in , which has size 1028, but it is still an extremely
+large space to search, and requires eﬃcient optimization methods.
+5 The depthwise-separable convolutions are in fact two repetitions of ReLU-SepConv-
+BatchNorm; 1x1 convolutions are also inserted when tensor sizes mismatch.
+Progressive Neural Architecture Search
+Architecture
+Cell, stride 1
+Cell, stride 2
+Cell, stride 1
+Cell, stride 2
+Cell, stride 1
+Architecture
+3x3 conv, stride 2
+Cell, stride 2
+Cell, stride 1
+Cell, stride 2
+Cell, stride 1
+Cell, stride 2
+Cell, stride 1
+Left: The best cell structure found by our Progressive Neural Architecture
+Search, consisting of 5 blocks. Right: We employ a similar strategy as when constructing CNNs from cells on CIFAR-10 and ImageNet. Note that we learn a single
+cell type instead of distinguishing between Normal and Reduction cell.
+From Cell to CNN
+To evaluate a cell, we have to convert it into a CNN. To do this, we stack
+a predeﬁned number of copies of the basic cell (with the same structure, but
+untied weights), using either stride 1 or stride 2, as shown in Figure 1 (right).
+The number of stride-1 cells between stride-2 cells is then adjusted accordingly
+with up to N number of repeats. At the top of the network, we use global
+average pooling, followed by a softmax classiﬁcation layer. We then train the
+stacked model on the relevant dataset.
+In the case of CIFAR-10, we use 32 × 32 images. In the case of ImageNet, we
+consider two settings, one with high resolution images of size 331 ×331, and one
+with smaller images of size 224 × 224. The latter results in less accurate models,
+but they are faster. For ImageNet, we also add an initial 3 × 3 convolutional
+ﬁlter layer with stride 2 at the start of the network, to further reduce the cost.
+The overall CNN construction process is identical to , except we only use
+one cell type (we do not distinguish between Normal and Reduction cells, but
+instead emulate a Reduction cell by using a Normal cell with stride 2), and the
+cell search space is slightly smaller (since we use fewer operators and combiners).
+Progressive Neural Architecture Search
+Many previous approaches directly search in the space of full cells, or worse,
+full CNNs. For example, NAS uses a 50-step RNN6 as a controller to generate cell
+speciﬁcations. In a ﬁxed-length binary string encoding of CNN architecture
+6 5 symbols per block, times 5 blocks, times 2 for Normal and Reduction cells.
+C. Liu et al.
+Algorithm 1 Progressive Neural Architecture Search (PNAS).
+Inputs: B (max num blocks), E (max num epochs), F (num ﬁlters in ﬁrst layer),
+K (beam size), N (num times to unroll cell), trainSet, valSet.
+S1 = B1 // Set of candidate structures with one block
+M1 = cell-to-CNN(S1, N, F) // Construct CNNs from cell speciﬁcations
+C1 = train-CNN(M1, E, trainSet) // Train proxy CNNs
+A1 = eval-CNN(C1, valSet) // Validation accuracies
+π = ﬁt(S1, A1) // Train the reward predictor from scratch
+for b = 2 : B do
+b = expand-cell(Sb−1) // Expand current candidate cells by one more block
+b = predict(S′
+b, π) // Predict accuracies using reward predictor
+Sb = top-K(S′
+b, K) // Most promising cells according to prediction
+Mb = cell-to-CNN(Sb, N, F)
+Cb = train-CNN(Mb, E, trainSet)
+Ab = eval-CNN(Cb, valSet)
+π = update-predictor(Sb, Ab, π) // Finetune reward predictor with new data
+Return top-K(SB, AB, 1)
+is deﬁned and used in model evolution/mutation. While this is a more direct
+approach, we argue that it is diﬃcult to directly navigate in an exponentially
+large search space, especially at the beginning where there is no knowledge of
+what makes a good model.
+As an alternative, we propose to search the space in a progressive order,
+simplest models ﬁrst. In particular, we start by constructing all possible cell
+structures from B1 (i.e., composed of 1 block), and add them to a queue. We
+train and evaluate all the models in the queue (in parallel), and then expand
+each one by adding all of the possible block structures from B2; this gives us
+a set of |B1| × |B2| = 256 × 576 = 147, 456 candidate cells of depth 2. Since
+we cannot aﬀord to train and evaluate all of these child networks, we refer to a
+learned predictor function (described in Section 4.2); it is trained based on the
+measured performance of the cells we have visited so far. (Our predictor takes
+negligible time to train and apply.) We then use the predictor to evaluate all
+the candidate cells, and pick the K most promising ones. We add these to the
+queue, and repeat the process, until we ﬁnd cells with a suﬃcient number B of
+blocks. See Algorithm 1 for the pseudocode, and Figure 2 for an illustration.
+Performance Prediction with Surrogate Model
+As explained above, we need a mechanism to predict the ﬁnal performance of
+a cell before we actually train it. There are at least three desired properties of
+such a predictor:
+– Handle variable-sized inputs: We need the predictor to work for variablelength input strings. In particular, it should be able to predict the performance of any cell with b + 1 blocks, even if it has only been trained on cells
+with up to b blocks.
+Progressive Neural Architecture Search
+B1 * B2 (~105)
+K * B3 (~105)
+candidates that get trained
+candidates scored by predictor
+expand 1 more block
+select top
+train/finetune
+apply/score
+Fig. 2. Illustration of the PNAS search
+procedure when the maximum number of
+blocks is B = 3. Here Sb represents the set
+of candidate cells with b blocks. We start by
+considering all cells with 1 block, S1 = B1;
+we train and evaluate all of these cells, and
+update the predictor. At iteration 2, we expand each of the cells in S1 to get all cells
+with 2 blocks, S′
+2 = B1:2; we predict their
+scores, pick the top K to get S2, train and
+evaluate them, and update the predictor.
+At iteration 3, we expand each of the cells
+in S2, to get a subset of cells with 3 blocks,
+3 ⊆B1:3; we predict their scores, pick the
+top K to get S3, train and evaluate them,
+and return the winner. Bb = |Bb| is the
+number of possible blocks at level b and K
+is the beam size (number of models we train
+and evaluate per level of the search tree).
+– Correlated with true performance: we do not necessarily need to achieve low
+mean squared error, but we do want the predictor to rank models in roughly
+the same order as their true performance values.
+– Sample eﬃciency: We want to train and evaluate as few cells as possible,
+which means the training data for the predictor will be scarce.
+The requirement that the predictor be able to handle variable-sized strings
+immediately suggests the use of an RNN, and indeed this is one of the methods
+we try. In particular, we use an LSTM that reads a sequence of length 4b (representing I1, I2, O1 and O2 for each block), and the input at each step is a one-hot
+vector of size |Ib| or |O|, followed by embedding lookup. We use a shared embedding of dimension D for the tokens I1, I2 ∈I, and another shared embedding
+for O1, O2 ∈O. The ﬁnal LSTM hidden state goes through a fully-connected
+layer and sigmoid to regress the validation accuracy. We also try a simpler MLP
+baseline in which we convert the cell to a ﬁxed length vector as follows: we embed each token into an D-dimensional vector, concatenate the embeddings for
+each block to get an 4D-dimensional vector, and then average over blocks. Both
+models are trained using L1 loss.
+When training the predictor, one approach is to update the parameters of
+the predictor using the new data using a few steps of SGD. However, since the
+sample size is very small, we ﬁt an ensemble of 5 predictors, each ﬁt (from
+scratch) to 4/5 of all the data available at each step of the search process. We
+observed empirically that this reduced the variance of the predictions.
+In the future, we plan to investigate other kinds of predictors, such as Gaussian processes with string kernels (see e.g., ), which may be more sample
+eﬃcient to train and produce predictions with uncertainty estimates.
+C. Liu et al.
+Experiments and Results
+Experimental Details
+Our experimental setting follows . In particular, we conduct most of our
+experiments on CIFAR-10 . CIFAR-10 has 50,000 training images and 10,000
+test images. We use 5000 images from the training set as a validation set. All
+images are whitened, and 32 × 32 patches are cropped from images upsampled
+to 40 × 40. Random horizontal ﬂip is also used. After ﬁnding a good model on
+CIFAR-10, we evaluate its quality on ImageNet classiﬁcation in Section 5.5.
+For the MLP accuracy predictor, the embedding size is 100, and we use 2 fully
+connected layers, each with 100 hidden units. For the RNN accuracy predictor,
+we use an LSTM, and the hidden state size and embedding size are both 100.
+The embeddings use uniform initialization in range [-0.1, 0.1]. The bias term in
+the ﬁnal fully connected layer is initialized to 1.8 (0.86 after sigmoid) to account
+for the mean observed accuracy of all b = 1 models. We use the Adam optimizer
+ with learning rate 0.01 for the b = 1 level and 0.002 for all following levels.
+Our training procedure for the CNNs follows the one used in . During the
+search we evaluate K = 256 networks at each stage (136 for stage 1, since there
+are only 136 unique cells with 1 block), we use a maximum cell depth of B = 5
+blocks, we use F = 24 ﬁlters in the ﬁrst convolutional cell, we unroll the cells
+for N = 2 times, and each child network is trained for 20 epochs using initial
+learning rate of 0.01 with cosine decay .
+Performance of the Surrogate Predictors
+In this section, we compare the performance of diﬀerent surrogate predictors.
+Note that at step b of PNAS, we train the predictor on the observed performance
+of cells with up to b blocks, but we apply it to cells with b+1 blocks. We therefore
+consider predictive accuracy both for cells with sizes that have been seen before
+(but which have not been trained on), and for cells which are one block larger
+than the training data.
+More precisely, let Ub,1:R be a set of randomly chosen cells with b blocks,
+where R = 10, 000. (For b = 1, there are only 136 unique cells.) We convert each
+of these to CNNs, and train them for E = 20 epochs. (Thus in total we train
+Algorithm 2 Evaluating performance of a predictor on a random dataset.
+for b = 1 : B −1 do
+for t = 1 : T do
+Sb,t,1:K = random sample of K models from Ub,1:R
+πb,t = ﬁt(Sb,t,1:K, A(Sb,t,1:K)) // Train or ﬁnetune predictor
+ˆAb,t,1:K = predict(πb,t, Sb,t,1:K) // Predict on same b
+˜Ab+1,t,1:R = predict(πb,t, Ub+1,1:R) // Predict on next b
+Progressive Neural Architecture Search
+Fig. 3. Accuracy of MLP-ensemble predictor. Top row: true vs predicted accuracies
+on models from the training set over diﬀerent trials. Bottom row: true vs predicted
+accuracies on models from the set of all unseen larger models. Denoted is the mean
+rank correlation from individual trials.
+0.938 0.113 0.857 0.450 0.714 0.469 0.641 0.444
+0.970 0.198 0.996 0.424 0.693 0.401 0.787 0.413
+MLP-ensemble 0.975 0.164 0.786 0.532 0.634 0.504 0.645 0.468
+RNN-ensemble 0.972 0.164 0.906 0.418 0.801 0.465 0.579 0.424
+Table 1. Spearman rank correlations of diﬀerent predictors on the training set, ˆρb,
+and when extrapolating to unseen larger models, ˜ρb+1. See text for details.
+∼(B −1) × R = 40, 000 models for 20 epochs each.) We now use this random
+dataset to evaluate the performance of the predictors using the pseudocode in
+Algorithm 2, where A(H) returns the true validation set accuracies of the models
+in some set H. In particular, for each size b = 1 : B, and for each trial t = 1 : T
+(we use T = 20), we do the following: randomly select K = 256 models (each
+of size b) from Ub,1:R to generate a training set Sb,t,1:K; ﬁt the predictor on the
+training set; evaluate the predictor on the training set; and ﬁnally evaluate the
+predictor on the set of all unseen random models of size b + 1.
+The top row of Figure 3 shows a scatterplot of the true accuracies of the
+models in the training sets, A(Sb,1:T,1:K), vs the predicted accuracies, ˆAb,1:T,1:K
+(so there are T ×K = 20×256 = 5120 points in each plot, at least for b > 1). The
+bottom row plots the true accuracies on the set of larger models, A(Ub+1,1:R),
+vs the predicted accuracies ˜Ab+1,1:R (so there are R = 10K points in each plot).
+We see that the predictor performs well on models from the training set, but
+C. Liu et al.
+Fig. 4. Comparing the relative eﬃciency of NAS, PNAS and random search under the
+same search space. We plot mean accuracy (across 5 trials) on CIFAR-10 validation set
+of the top M models, for M ∈{1, 5, 25}, found by each method vs number of models
+which are trained and evaluated. Each model is trained for 20 epochs. Error bars and
+the colored regions denote standard deviation of the mean.
+not so well when predicting larger models. However, performance does increase
+as the predictor is trained on more (and larger) cells.
+Figure 3 shows the results using an ensemble of MLPs. The scatter plots
+for the other predictors look similar. We can summarize each scatterplot using
+the Spearman rank correlation coeﬃcient. Let ˆρb = rank-correlation( ˆAb,1:T,1:K,
+A(Sb,1:T,1:K)) and ˜ρb+1 = rank-correlation( ˜Ab+1,1:R, A(Ub+1,1:R)). Table 1 summarizes these statistics across diﬀerent levels. We see that for predicting the
+training set, the RNN does better than the MLP, but for predicting the performance on unseen larger models (which is the setting we care about in practice),
+the MLP seems to do slightly better. This will be corroborated by our end-toend test in Section 5.3, and is likely due to overﬁtting. We also see that for the
+extrapolation task, ensembling seems to help.
+Search Eﬃciency
+In this section, we compare the eﬃciency of PNAS to two other methods: random
+search and the NAS method. To perform the comparison, we run PNAS for B =
+5, and at each iteration b, we record the set Sb of K = 256 models of size b that
+it picks, and evaluate them on the CIFAR-10 validation set (after training for
+20 epochs each). We then compute the validation accuracy of the top M models
+for M ∈{1, 5, 25}. To capture the variance in performance of a given model due
+to randomness of the parameter initialization and optimization procedure, we
+repeat this process 5 times. We plot the mean and standard error of this statistic
+in Figure 4. We see that the mean performance of the top M ∈{1, 5, 25} models
+steadily increases, as we search for larger models. Furthermore, performance is
+Progressive Neural Architecture Search
+B Top Accuracy # PNAS # NAS Speedup (# models) Speedup (# examples)
+Table 2. Relative eﬃciency of PNAS (using MLP-ensemble predictor) and NAS under
+the same search space. B is the size of the cell, “Top” is the number of top models
+we pick, “Accuracy” is their average validation accuracy, “# PNAS” is the number
+of models evaluated by PNAS, “# NAS” is the number of models evaluated by NAS
+to achieve the desired accuracy. Speedup measured by number of examples is greater
+than speedup in terms of number of models, because NAS has an additional reranking
+stage, that trains the top 250 models for 300 epochs each before picking the best one.
+better when using an MLP-ensemble (shown in Figure 4) instead of an RNNensemble (see supplementary material), which is consistent with Table 1.
+For our random search baseline, we uniformly sample 6000 cells of size B = 5
+blocks from the random set of models U5,1:R described in Section 5.2. Figure 4
+shows that PNAS signiﬁcantly outperforms this baseline.
+Finally, we compare to NAS. Each trial sequentially searches 6000 cells of size
+B = 5 blocks. At each iteration t, we deﬁne Ht to be the set of all cells visited so
+far by the RL agent. We compute the validation accuracy of the top M models
+in Ht, and plot the mean and standard error of this statistic in Figure 4. We see
+that the mean performance steadily increases, but at a slower rate than PNAS.
+To quantify the speedup factor compared to NAS, we compute the number
+of models that are trained and evaluated until the mean performance of PNAS
+and NAS are equal (note that PNAS produces models of size B after evaluating
+|B1| + (B −1) × K models, which is 1160 for B = 5). The results are shown in
+Table 2. We see that PNAS is up to 5 times faster in terms of the number of
+models it trains and evaluates.
+Comparing the number of models explored during architecture search is one
+measure of eﬃciency. However, some methods, such as NAS, employ a secondary
+reranking stage to determine the best model; PNAS does not perform a reranking stage but uses the top model from the search directly. A more fair comparison is therefore to count the total number of examples processed through SGD
+throughout the search. Let M1 be the number of models trained during search,
+and let E1 be the number of examples used to train each model.7 The total
+number of examples is therefore M1E1. However, for methods with the additional reranking stage, the top M2 models from the search procedure are trained
+using E2 examples each, before returning the best. This results in a total cost of
+7 The number of examples is equal to the number of SGD steps times the batch
+size. Alternatively, it can be measured in terms of number of epoch (passes through
+the data), but since diﬀerent papers use diﬀerent sized training sets, we avoid this
+measure. In either case, we assume the number of examples is the same for every
+model, since none of the methods we evaluate use early stopping.
+C. Liu et al.
+NASNet-A 
+20000 0.9M 250 13.5M 21.4-29.3B
+NASNet-B 
+20000 0.9M 250 13.5M 21.4-29.3B
+NASNet-C 
+20000 0.9M 250 13.5M 21.4-29.3B
+Hier-EA 
+3.75±0.12 15.7M
+7000 5.12M
+AmoebaNet-B 5 6
+27000 2.25M 100 27M
+AmoebaNet-A 5 6
+20000 1.13M 100 27M
+Table 3. Performance of diﬀerent CNNs on CIFAR test set. All model comparisons
+employ a comparable number of parameters and exclude cutout data augmentation
+ . “Error” is the top-1 misclassiﬁcation rate on the CIFAR-10 test set. (Error rates
+have the form µ ± σ, where µ is the average over multiple trials and σ is the standard
+deviation. In PNAS we use 15 trials.) “Params” is the number of model parameters.
+“Cost” is the total number of examples processed through SGD (M1E1 +M2E2) before
+the architecture search terminates. The number of ﬁlters F for NASNet-{B, C} cannot
+be determined (hence N/A), and the actual E1, E2 may be larger than the values in
+this table (hence the range in cost), according to the original authors.
+M1E1 + M2E2. For NAS and PNAS, E1 = 900K for NAS and PNAS since they
+use 20 epochs on a training set of size 45K. The number of models searched to
+achieve equal top-1 accuracy is M1 = 1160 for PNAS and M1 = 5808 for NAS.
+For the second stage, NAS trains the top M2 = 250 models for E2 = 300 epochs
+before picking the best.8 Thus we see that PNAS is about 8 times faster than
+NAS when taking into account the total cost.
+Results on CIFAR-10 Image Classiﬁcation
+We now discuss the performance of our ﬁnal model, and compare it to the
+results of other methods in the literature. Let PNASNet-5 denote the best CNN
+we discovered on CIFAR using PNAS, also visualized in Figure 1 (left). After
+8 This additional stage is quite important for NAS, as the NASNet-A cell was originally
+ranked 70th among the top 250.
+9 In Hierarchical EA, the search phase trains 7K models (each for 4 times to reduce
+variance) for 5000 steps of batch size 256. Thus, the total computational cost is 7K
+× 5000 × 256 × 4 = 35.8B.
+10 The total computational cost for AmoebaNet consists of an architecture search and
+a reranking phase. The architecture search phase trains over 27K models each for
+50 epochs. Each epoch consists of 45K examples. The reranking phase searches over
+100 models each trained for 600 epochs. Thus, the architecture search is 27K × 50
+× 45K = 60.8B examples. The reranking phase consists of 100 × 600 × 45K = 2.7B
+examples. The total computational cost is 60.8B + 2.7B = 63.5B.
+11 The search phase trains 20K models each for 25 epochs. The rest of the computation
+is the same as AmoebaNet-B.
+Progressive Neural Architecture Search
+we have selected the cell structure, we try various N and F values such that the
+number of model parameters is around 3M, train them each for 300 epochs using
+initial learning rate of 0.025 with cosine decay, and pick the best combination
+based on the validation set. Using this best combination of N and F, we train it
+for 600 epochs on the union of training set and validation set. During training
+we also used auxiliary classiﬁer located at 2/3 of the maximum depth weighted
+by 0.4, and drop each path with probability 0.4 for regularization.
+The results are shown in Table 3. We see that PNAS can ﬁnd a model with
+the same accuracy as NAS, but using 21 times less compute. PNAS also outperforms the Hierarchical EA method of , while using 36 times less compute.
+Though the the EA method called “AmoebaNets” currently give the highest
+accuracies (at the time of writing), it also requires the most compute, taking 63
+times more resources than PNAS. However, these comparisons must be taken
+with a grain of salt, since the methods are searching through diﬀerent spaces.
+By contrast, in Section 5.3, we ﬁx the search space for NAS and PNAS, to make
+the speedup comparison fair.
+Results on ImageNet Image Classiﬁcation
+We further demonstrate the usefulness of our learned cell by applying it to ImageNet classiﬁcation. Our experiments reveal that CIFAR accuracy and ImageNet
+accuracy are strongly correlated (ρ = 0.727; see supplementary material).
+To compare the performance of PNASNet-5 to the results in other papers,
+we conduct experiments under two settings:
+– Mobile: Here we restrain the representation power of the CNN. Input image
+size is 224 × 224, and the number of multiply-add operations is under 600M.
+– Large: Here we compare PNASNet-5 against the state-of-the-art models on
+ImageNet. Input image size is 331 × 331.
+In both experiments we use RMSProp optimizer, label smoothing of 0.1,
+auxiliary classiﬁer located at 2/3 of the maximum depth weighted by 0.4, weight
+decay of 4e-5, and dropout of 0.5 in the ﬁnal softmax layer. In the Mobile setting,
+we use distributed synchronous SGD with 50 P100 workers. On each worker,
+batch size is 32, initial learning rate is 0.04, and is decayed every 2.2 epochs
+with rate 0.97. In the Large setting, we use 100 P100 workers. On each worker,
+batch size is 16, initial learning rate is 0.015, and is decayed every 2.4 epochs
+with rate 0.97. During training, we drop each path with probability 0.4.
+The results of the Mobile setting are summarized in Table 4. PNASNet-5
+achieves slightly better performance than NASNet-A (74.2% top-1 accuracy for
+PNAS vs 74.0% for NASNet-A). Both methods signiﬁcantly surpass the previous
+state-of-the-art, which includes the manually designed MobileNet (70.6%)
+and ShuﬄeNet (70.9%). AmoebaNet-C performs the best, but note that this
+is a diﬀerent model than their best-performing CIFAR-10 model. Table 5 shows
+that under the Large setting, PNASNet-5 achieves higher performance (82.9%
+top-1; 96.2% top-5) than previous state-of-the-art approaches, including SENet
+ , NASNet-A, and AmoebaNets under the same model capacity.
+C. Liu et al.
+Params Mult-Adds Top-1 Top-5
+MobileNet-224 
+ShuﬄeNet (2x) 
+NASNet-A (N = 4, F = 44) 
+AmoebaNet-B (N = 3, F = 62) 
+AmoebaNet-A (N = 4, F = 50) 
+AmoebaNet-C (N = 4, F = 50) 
+PNASNet-5 (N = 3, F = 54)
+Table 4. ImageNet classiﬁcation results in the Mobile setting.
+Image Size Params Mult-Adds Top-1 Top-5
+ResNeXt-101 (64x4d) 
+PolyNet 
+Dual-Path-Net-131 
+Squeeze-Excite-Net 
+320 × 320 145.8M
+NASNet-A (N = 6, F = 168) 
+AmoebaNet-B (N = 6, F = 190) 331 × 331
+AmoebaNet-A (N = 6, F = 190) 331 × 331
+AmoebaNet-C (N = 6, F = 228) 331 × 331 155.3M
+PNASNet-5 (N = 4, F = 216)
+Table 5. ImageNet classiﬁcation results in the Large setting.
+Discussion and Future Work
+The main contribution of this work is to show how we can accelerate the search
+for good CNN structures by using progressive search through the space of increasingly complex graphs, combined with a learned prediction function to ef-
+ﬁciently identify the most promising models to explore. The resulting models
+achieve the same level of performance as previous work but with a fraction of
+the computational cost.
+There are many possible directions for future work, including: the use of
+better surrogate predictors, such as Gaussian processes with string kernels; the
+use of model-based early stopping, such as , so we can stop the training of
+“unpromising” models before reaching E1 epochs; the use of “warm starting”,
+to initialize the training of a larger b+1-sized model from its smaller parent; the
+use of Bayesian optimization, in which we use an acquisition function, such as
+expected improvement or upper conﬁdence bound, to rank the candidate models,
+rather than greedily picking the top K (see e.g., ); adaptively varying the
+number of models K evaluated at each step (e.g., reducing it over time); the
+automatic exploration of speed-accuracy tradeoﬀs (cf., ), etc.
+Progressive Neural Architecture Search
+Acknowledgements
+We thank Quoc Le for inspiration, discussion and support; George Dahl for
+many fruitful discussions; Gabriel Bender, Vijay Vasudevan for the development
+of much of the critical infrastructure and the larger Google Brain team for the
+support and discussions. CL also thanks Lingxi Xie for support.

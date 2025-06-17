@@ -1,0 +1,945 @@
+Accelerating Very Deep Convolutional
+Networks for Classiﬁcation and Detection
+Xiangyu Zhang, Jianhua Zou, Kaiming He†, and Jian Sun
+Abstract—This paper aims to accelerate the test-time computation of convolutional neural networks (CNNs), especially very
+deep CNNs that have substantially impacted the computer vision community. Unlike previous methods that are designed
+for approximating linear ﬁlters or linear responses, our method takes the nonlinear units into account. We develop an effective
+solution to the resulting nonlinear optimization problem without the need of stochastic gradient descent (SGD). More importantly,
+while previous methods mainly focus on optimizing one or two layers, our nonlinear method enables an asymmetric reconstruction
+that reduces the rapidly accumulated error when multiple (e.g., ≥10) layers are approximated. For the widely used very deep
+VGG-16 model , our method achieves a whole-model speedup of 4× with merely a 0.3% increase of top-5 error in ImageNet
+classiﬁcation. Our 4× accelerated VGG-16 model also shows a graceful accuracy degradation for object detection when plugged
+into the Fast R-CNN detector .
+Index Terms—Convolutional Neural Networks, Acceleration, Image Classiﬁcation, Object Detection
+INTRODUCTION
+convolutional
+(CNNs) , has been continuously improving ,
+ , , , , but the computational cost of these
+networks also increases signiﬁcantly. For example, the
+very deep VGG models , which have witnessed
+great success in a wide range of recognition tasks ,
+ , , , , , , are substantially slower
+than earlier models , . Real-world systems may
+suffer from the low speed of these networks. For
+example, a cloud service needs to process thousands
+of new requests per seconds; portable devices such as
+phones and tablets may not afford slow models; some
+recognition tasks like object detection , , ,
+ and semantic segmentation , , need
+to apply these models on higher-resolution images. It
+is thus of practical importance to accelerate test-time
+performance of CNNs.
+There have been a series of studies on accelerating
+deep CNNs , , , . A common focus
+of these methods is on the decomposition of one or
+a few layers. These methods have shown promising
+speedup ratios and accuracy on one or two layers and
+whole (but shallower) models. However, few results
+are available for accelerating very deep models (e.g.,
+≥10 layers). Experiments on complex datasets such
+as ImageNet are also limited - e.g., the results in
+ , , are about accelerating a single layer of
+the shallower AlexNet . Moreover, performance of
+Correspondence author.
+• X. Zhang and J. Zou are with Xi’an Jiaotong University, Xi’an, China.
+This work was done when X. Zhang was an intern at Microsoft
+• K. He and J. Sun are with Microsoft Research, Beijing, China. E-mail:
+{kahe,jiansun}@microsoft.com
+the accelerated networks as generic feature extractors
+for other recognition tasks , remain unclear.
+It is nontrivial to speed up whole, very deep models
+for complex tasks like ImageNet classiﬁcation. Acceleration algorithms involve not only the decomposition
+of layers, but also the optimization solutions to the
+decomposition. Data (response) reconstruction solvers
+ based on stochastic gradient descent (SGD) and
+backpropagation work well for simpler tasks such
+as character classiﬁcation , but are less effective
+for complex ImageNet models (as we will discussed
+in Sec. 4). These SGD-based solvers are sensitive to
+initialization and learning rates, and might be trapped
+into poorer local optima for regressing responses.
+Moreover, even when a solver manages to accelerate
+a single layer, the accumulated error of approximating
+multiple layers grow rapidly, especially for very deep
+models. Besides, the layers of a very deep model
+may exhibit a great diversity in ﬁlter numbers, feature
+map sizes, sparsity, and redundancy. It may not be
+beneﬁcial to uniformly accelerate all layers.
+In this paper, we present an accelerating method
+that is effective for very deep models. We ﬁrst propose a response reconstruction method that takes
+into account the nonlinear neurons and a low-rank
+constraint. A solution based on Generalized Singular
+Value Decomposition (GSVD) is developed for this
+nonlinear problem, without the need of SGD. Our
+explicit treatment of the nonlinearity better models
+a nonlinear layer, and more importantly, enables an
+asymmetric reconstruction that accounts for the error
+from previous approximated layers. This method effectively reduces the accumulated error when multiple layers are approximated sequentially. We also
+present a rank selection method for adaptively determining the acceleration of each layer for a whole
+ 
+model, based on their redundancy.
+In experiments, we demonstrate the effects of the
+nonlinear solution, asymmetric reconstruction, and
+whole-model acceleration by controlled experiments
+of a 10-layer model on ImageNet classiﬁcation .
+Furthermore, we apply our method on the publicly available VGG-16 model , and achieve a 4×
+speedup with merely a 0.3% increase of top-5 centerview error.
+The impact of the ImageNet dataset is not
+merely on the speciﬁc 1000-class classiﬁcation task;
+deep models pre-trained on ImageNet have been actively used to replace hand-engineered features, and
+have showcased excellent accuracy for challenging
+tasks such as object detection , , , and
+semantic segmentation , , . We exploit our
+method to accelerate the very deep VGG-16 model for
+Fast R-CNN object detection. With a 4× speedup
+of all convolutions, our method has a graceful degradation of 0.8% mAP (from 66.9% to 66.1%) on the
+PASCAL VOC 2007 detection benchmark .
+A preliminary version of this manuscript has been
+presented in a conference . This manuscript extends the initial version from several aspects to
+strengthen our method. (1) We demonstrate compelling acceleration results on very deep VGG models,
+and are among the ﬁrst few works accelerating very
+deep models. (2) We investigate the accelerated models for transfer-learning-based object detection ,
+ , which is one of the most important applications
+of ImageNet pre-trained networks. (3) We provide
+evidence showing that a model trained from scratch
+and sharing the same structure as the accelerated
+model is inferior. This discovery suggests that a very
+deep model can be accelerated not simply because the
+decomposed network architecture is more powerful,
+but because the acceleration optimization algorithm is
+able to digest information.
+RELATED WORK
+Methods , , , for accelerating testtime computation of CNNs in general have two
+components: (i) a layer decomposition design that
+reduces time complexity, and (ii) an optimization
+scheme for the decomposition design. Although the
+former (“decomposition”) attracts more attention because it directly addresses the time complexity, the
+latter (“optimization”) is also essential because not all
+decompositions are similarly easy to ﬁne good local
+The method of Denton et al. is one of the
+ﬁrst to exploit low-rank decompositions of ﬁlters.
+Several decomposition designs along different dimensions have been investigated. This method does not
+explicitly minimize the error of the activations after
+the nonlinearity, which is inﬂuential to the accuracy
+as we will show. This method presents experiments
+of accelerating a single layer of an OverFeat network
+ , but no whole-model results are available.
+Jaderberg et al. present efﬁcient decompositions
+by separating k × k ﬁlters into k × 1 and 1 × k ﬁlters,
+which was earlier developed for accelerating generic
+image ﬁlters . Channel-wise dimension reduction
+is also considered. Two optimization schemes are proposed: (i) “ﬁlter reconstruction” that minimizes the error of ﬁlter weights, and (ii) “data reconstruction” that
+minimizes the error of responses. In , conjugate
+gradient descent is used to solve ﬁlter reconstruction,
+and SGD with backpropagation is used to solve data
+reconstruction. Data reconstruction in demonstrates excellent performance on a character classiﬁcation task using a 4-layer network. For ImageNet
+classiﬁcation, their paper evaluates a single layer of an
+OverFeat network by “ﬁlter reconstruction”. But the
+performance of whole, very deep models in ImageNet
+remains unclear.
+Concurrent with our work, Lebedev et al. adopt
+“CP-decomposition” to decompose a layer into ﬁve
+layers of lower complexity. For ImageNet classiﬁcation, only a single-layer acceleration of AlexNet is
+reported in . Moreover, Lebedev et al. report that
+they “failed to ﬁnd a good SGD learning rate” in their
+ﬁne-tuning, suggesting that it is nontrivial to optimize
+the factorization for even a single layer in ImageNet
+Despite some promising preliminary results that
+have been obtained in the above works , , ,
+the whole-model acceleration of very deep networks for
+ImageNet is still an open problem.
+Besides the research on decomposing layers, there
+have been other streams on improving train/test-time
+performance of CNNs. FFT-based algorithms , 
+are applicable for both training and testing, and are
+particularly effective for large spatial kernels. On the
+other hand, it is also proposed to train “thin” and
+deep networks , for good trade-off between
+speed and accuracy. Besides reducing running time, a
+related issue involving memory conservation has
+also attracted attention.
+APPROACHES
+Our method exploits a low-rank assumption for decomposition, following the stream of , . We
+show that this decomposition has a closed-form solution (SVD) for linear neurons, and a slightly more
+complicated solution (GSVD , , ) for nonlinear neurons. The simplicity of our solver enables
+an asymmetric reconstruction method for reducing
+accumulated error of very deep models.
+Low-rank Approximation of Responses
+Our assumption is that the ﬁlter response at a pixel of
+a layer approximately lies on a low-rank subspace. A
+𝑑′ channels
+Figure 1: Illustration of the decomposition. (a) An
+complexity
+approximated
+complexity
+O(d′k2c) + O(dd′).
+resulting low-rank decomposition reduces time complexity. To ﬁnd the approximate low-rank subspace,
+we minimize the reconstruction error of the responses.
+More formally, we consider a convolutional layer
+with a ﬁlter size of k×k×c, where k is the spatial size
+of the ﬁlter and c is the number of input channels of
+this layer. To compute a response, this ﬁlter is applied
+on a k × k × c volume of the layer input. We use x ∈
+Rk2c+1 to denote a vector that reshapes this volume,
+where we append one as the last entry for the sake of
+the bias. A response y ∈Rd at a position of a layer is
+computed as:
+where W is a d-by-(k2c+1) matrix, and d is the number
+of ﬁlters. Each row of W denotes the reshaped form
+of a k × k × c ﬁlter with the bias appended.
+Under the assumption that the vector y is on a lowrank subspace, we can write y = M(y −¯y)+ ¯y, where
+M is a d-by-d matrix of a rank d′ < d and ¯y is the
+mean vector of responses. Expanding this equation,
+we can compute a response by:
+y = MWx + b,
+where b = ¯y−M¯y is a new bias. The rank-d′ matrix M
+can be decomposed into two d-by-d′ matrices P and
+Q such that M = PQ⊤. We denote W′ = Q⊤W as a
+d′-by-(k2c+1) matrix, which is essentially a new set of
+d′ ﬁlters. Then we can compute (2) by:
+y = PW′x + b.
+The complexity of using Eqn.(3) is O(d′k2c) + O(dd′),
+while the complexity of using Eqn.(1) is O(dk2c).
+For many typical models/layers, we usually have
+O(dd′) ≪O(d′k2c), so the computation in Eqn.(3) will
+reduce the complexity to about d′/d.
+Fig. 1 illustrates how to use Eqn.(3) in a network.
+We replace the original layer (given by W) by two
+layers (given by W′ and P). The matrix W′ is actually
+d′ ﬁlters whose sizes are k × k × c. These ﬁlters
+produce a d′-dimensional feature map. On this feature
+map, the d-by-d′ matrix P can be implemented as d
+ﬁlters whose sizes are 1 × 1 × d′. So P corresponds
+to a convolutional layer with a 1×1 spatial support,
+which maps the d′-dimensional feature map to a ddimensional one.
+Note that the decomposition of M = PQ⊤can be
+arbitrary. It does not impact the value of y computed
+in Eqn.(3). A simple decomposition is the Singular
+Value Decomposition (SVD) : M = Ud′Sd′Vd′⊤,
+where Ud′ and Vd′ are d-by-d′ column-orthogonal
+matrices and Sd′ is a d′-by-d′ diagonal matrix. Then
+we can obtain P = Ud′S1/2
+and Q = Vd′S1/2
+In practice the low-rank assumption does not
+strictly hold, and the computation in Eqn.(3) is approximate. To ﬁnd an approximate low-rank subspace, we optimize the following problem:
+∥(yi −¯y) −M(yi −¯y)∥2
+rank(M) ≤d′.
+Here yi is a response sampled from the feature maps
+in the training set. This problem can be solved by
+SVD or actually Principal Component Analysis
+(PCA): let Y be the d-by-n matrix concatenating n
+responses with the mean subtracted, compute the
+eigen-decomposition of the covariance matrix YY⊤=
+USU⊤where U is an orthogonal matrix and S is
+diagonal, and M = Ud′Ud′⊤where Ud′ are the ﬁrst
+d′ eigenvectors. With the matrix M computed, we can
+ﬁnd P = Q = Ud′.
+How good is the low-rank assumption? We sample
+the responses from a CNN model (with 7 convolutional layers, detailed in Sec. 4) trained on ImageNet.
+For the responses of each layer, we compute the
+eigenvalues of their covariance matrix and then plot
+the sum of the largest eigenvalues (Fig. 2). We see
+that substantial energy is in a small portion of the
+largest eigenvectors. For example, in the Conv2 layer
+(d = 256) the ﬁrst 128 eigenvectors contribute over
+99.9% energy; in the Conv7 layer (d = 512), the ﬁrst
+256 eigenvectors contribute over 95% energy. This
+indicates that we can use a fraction of the ﬁlters to
+precisely approximate the original ﬁlters.
+The low-rank behavior of the responses y is because
+of the low-rank behaviors of the ﬁlter weights W
+and the inputs x. Although the low-rank assumptions
+about ﬁlter weights W have been adopted in recent
+work , , we further adopt the low-rank assumptions about the ﬁlter inputs x, which are local
+volumes and have correlations. The responses y will
+have lower rank than W and x, so the approximation
+can be more precise. In our optimization (4), we
+directly address the low-rank subspace of y.
+PCA Accumulative Energy (%)
+Figure 2: PCA accumulative energy of the responses in each layer, presented as the sum of largest d′ eigenvalues
+(relative to the total energy when d′ = d). Here the ﬁlter number d is 96 for Conv1, 256 for Conv2, and 512
+for Conv3-7 (detailed in Table 1). These ﬁgures are obtained from 3,000 randomly sampled training images.
+Nonlinear Case
+Next we investigate the case of using nonlinear units.
+We use r(·) to denote the nonlinear operator. In this
+paper we focus on the Rectiﬁed Linear Unit (ReLU)
+ : r(·) = max(·, 0).
+Driven by Eqn.(4), we minimize the reconstruction
+error of the nonlinear responses:
+∥r(yi) −r(Myi + b)∥2
+rank(M) ≤d′.
+Here b is a new bias to be optimized, and r(My+b) =
+r(MWx + b) is the nonlinear response computed by
+the approximated ﬁlters.
+The above optimization problem is challenging due
+to the nonlinearity and the low-rank constraint. To
+ﬁnd a feasible solution, we relax it as:
+∥r(yi) −r(zi)∥2
+2 + λ∥zi −(Myi + b)∥2
+rank(M) ≤d′.
+Here {zi} is a set of auxiliary variables of the same
+size as {yi}. λ is a penalty parameter. If λ →∞, the
+solution to (6) will converge to the solution to (5) .
+We adopt an alternating solver, ﬁxing {zi} and solving
+for M, b and vice versa.
+(i) The subproblem of M, b. In this case, {zi} are
+ﬁxed. It is easy to show that b is solved by b = ¯z −
+M¯y where ¯z is the mean vector of {zi}. Substituting
+b into the objective function, we obtain the problem
+involving M:
+∥(zi −¯z) −M(yi −¯y)∥2
+rank(M) ≤d′.
+This problem appears similar to Eqn.(4) except that
+there are two sets of responses.
+This optimization problem also has a closed-form
+solution by Generalized SVD (GSVD) , , .
+Let Z be the d-by-n matrix concatenating the vectors
+of {zi −¯z}. We rewrite the above problem as:
+M ∥Z −MY∥2
+rank(M) ≤d′.
+Here ∥· ∥F is the Frobenius norm. A problem in
+this form is known as Reduced Rank Regression
+ , , . This problem belongs to a broader
+category of procrustes problems that have been
+adopted for various data reconstruction problems
+ , , . The solution is as follows (see ).
+Let ˆM = ZY⊤(YY⊤)−1. GSVD is applied on
+ˆM: ˆM = USV⊤, such that U is a d-by-d orthogonal
+matrix satisfying U⊤U = Id where Id is a d-by-d
+identity matrix, and V is a d-by-d matrix satisfying
+V⊤YY⊤V = Id (called generalized orthogonality). Then
+the solution M to (8) is given by M = Ud′Sd′Vd′⊤
+where Ud′ and Vd′ are the ﬁrst d′ columns of U and
+V and Sd′ are the largest d′ singular values. One can
+show that if Z = Y (so the problem in (7) becomes
+(4)), this GSVD solution becomes SVD, i.e., eigendecomposition of YY⊤.
+(ii) The subproblem of {zi}. In this case, M and b
+are ﬁxed. Then in this subproblem each element zij of
+each vector zi is independent of any other. So we solve
+a 1-dimensional optimization problem as follows:
+zij (r(yij) −r(zij))2 + λ(zij −y′
+ij is the j-th entry of Myi + b. By separately
+considering zij ≥0 and zij < 0, we obtain the solution
+as follows: let
+z0 = min(0, y′
+z1 = max(0, λ · y′
+ij + r(yij)
+then zij = arg minz0,z1(r(yij) −r(zij))2 + λ(zij −y′
+Our method is also applicable for other types of nonlinearities. The subproblem in (9) is a 1-dimensional
+nonlinear least squares problem, so can be solved by
+gradient descent for other r(·).
+We alternatively solve (i) and (ii). The initialization
+is given by the solution to the linear case (4). We warm
+up the solver by setting the penalty parameter λ =
+0.01 and run 25 iterations. Then we increase the value
+of λ. In theory, λ should be gradually increased to
+inﬁnity . But we ﬁnd that it is difﬁcult for the
+iterative solver to make progress if λ is too large. So
+we increase λ to 1, run 25 more iterations, and use
+the resulting M as our solution. As before, we obtain
+P and Q by SVD on M.
+In experiments, we ﬁnd that it is sufﬁcient to randomly sample 3,000 images to solve Eqn.(5). It only
+takes our method 2-5 minutes in MATLAB solving a
+layer. This is much faster than SGD-based solvers.
+Asymmetric Reconstruction for Multi-Layer
+When each layer is approximated independently, the
+error of shallower layers will be rapidly accumulated
+and affect deeper layers. We propose an asymmetric
+reconstruction method to alleviate this problem.
+We apply our method sequentially on each layer,
+from the shallower layers to the deeper ones. Let
+us consider a layer whose input feature map is not
+precise due to the approximation of the previous
+layer/layers. We denote the approximate input to the
+current layer as ˆx. For the training data, we can still
+compute its non-approximate responses as y = Wx.
+So we can optimize an “asymmetric” version of (5):
+∥r(Wxi) −r(MWˆxi + b)∥2
+rank(M) ≤d′.
+In the ﬁrst term r(Wx) = r(y) is the non-approximate
+output of this layer. In the second term, ˆxi is the
+approximated input to this layer, and r(MWˆxi + b)
+is the approximated output of this layer. In contrast
+to using x (or ˆx) for both terms, this asymmetric
+formulation faithfully incorporates the two actual
+terms before/after the approximation of this layer.
+The optimization problem in (12) can be solved using
+the same algorithm as for (5).
+Rank Selection for Whole-Model Acceleration
+In the above, the optimization is based on a target d′
+of each layer. d′ is the only parameter that determines
+the complexity of an accelerated layer. But given a
+desired speedup ratio of the whole model, we need to
+determine the proper rank d′ used for each layer. One
+may adopt a uniform speedup ratio for each layer. But
+this is not an optimal solution, because the layers are
+not equally redundant.
+PCA Accumulative Energy (%)
+∆ Accuracy (%)
+Figure 3: PCA accumulative energy and the accuracy
+rates (top-5). Here the accuracy is evaluated using the
+linear solution (the nonlinear solution has a similar
+trend). Each layer is evaluated independently, with
+other layers not approximated. The accuracy is shown
+as the difference to no approximation.
+We empirically observe that the PCA energy after
+approximations is roughly related to the classiﬁcation
+accuracy. To verify this observation, in Fig. 3 we
+show the classiﬁcation accuracy (represented as the
+difference to no approximation) vs. the PCA energy.
+Each point in this ﬁgure is empirically evaluated
+using a reduced rank d′. 100% energy means no approximation and thus no degradation of classiﬁcation
+accuracy. Fig. 3 shows that the classiﬁcation accuracy
+is roughly linear on the PCA energy.
+To simultaneously determine the reduced ranks of
+all layers, we further assume that the whole-model
+classiﬁcation accuracy is roughly related to the product of the PCA energy of all layers. More formally, we
+consider this objective function:
+Here σl,a is the a-th largest eigenvalue of the layer
+l, and Pd′
+a=1 σl,a is the PCA energy of the largest d′
+eigenvalues in the layer l. The product Q
+l is over all
+layers to be approximated. The objective E is assumed
+to be related to the accuracy of the approximated
+whole network. Then we optimize this problem:
+Here dl is the original number of ﬁlters in the layer l,
+and Cl is the original time complexity of the layer l.
+dl Cl is the complexity after the approximation. C
+is the total complexity after the approximation, which
+ﬁlter size
+# channels
+output size
+complexity (%)
+# of zeros
+Table 1: The architecture of the SPP-10 model . It has 7 conv layers and 3 fc layers. Each layer (except the
+last fc) is followed by ReLU. The ﬁnal conv layer is followed by a spatial pyramid pooling layer that have
+4 levels ({6 × 6, 3 × 3, 2 × 2, 1 × 1}, totally 50 bins). The resulting 50 × 512-d is fed into the 4096-d fc layer
+(fc6), followed by another 4096-d fc layer (fc7) and a 1000-way softmax layer. The column “complexity” is the
+theoretical time complexity, shown as relative numbers to the total convolutional complexity. The column “#
+of zeros” is the relative portion of zero responses, which shows the “sparsity” of the layer.
+is given by the desired speedup ratio. This optimization problem means that we want to maximize the
+accumulated energy subject to the time complexity
+constraint.
+The problem in (14) is a combinatorial problem
+ . So we adopt a greedy strategy to solve it. We
+initialize d′
+l as dl, and consider the set {σl,a}. In each
+step we remove an eigenvalue σl,d′
+l from this set,
+chosen from a certain layer l. The relative reduction
+of the objective is △E/E = σl,d′/Pd′
+a=1 σl,a, and the
+reduction of complexity is △C =
+dl Cl. Then we
+deﬁne a measure as △E/E
+△C . The eigenvalue σl,d′
+has the smallest value of this measure is removed.
+Intuitively, this measure favors a small reduction of
+△E/E and a large reduction of complexity △C. This
+step is greedily iterated, until the constraint of the
+total complexity is achieved.
+Higher-Dimensional Decomposition
+In our formulation, we focus on reducing the channels
+(from d to d′). There are algorithmic advantages of operating on the channel dimension. Firstly, this dimension can be easily controlled by the rank constraint
+rank(M) ≤d′. This constraint enables closed-form
+solutions, e.g., SVD or GSVD. Secondly, the optimized
+low-rank projection M can be exactly decomposed
+into low-dimensional ﬁlters (P and Q). These simple
+and closed-form solutions can produce good results
+using a very small subset of training images (3,000
+out of one million).
+On the other hand, compared with decomposition
+methods that operate on multiple dimensions (spatial
+and channel) , our method has to use a smaller
+d′ to approach a given speedup ratio, which might
+limit the accuracy of our method. To avoid d′ being
+too small, we further propose to combine our solver
+with Jaderberg et al.’s spatial decomposition. Thanks
+to our asymmetric reconstruction, our method can
+effectively alleviate the accumulated error for the
+multi-decomposition.
+To determined the decomposed architecture (but
+not yet the weights), we ﬁrst use our method to
+decompose all conv layers of a model. This involves
+the rank selection of d′ for all layers. Then we apply
+Jaderberg et al.’s method to further decompose the
+resulting k×k layers (k > 1) into k×1 and 1×k ﬁlters.
+The ﬁrst k×1 layer has d′′ output channels depending
+on the speedup ratio. In this way, an original layer of
+(k × k, d) is decomposed into three layers of (k × 1,
+d′′), (1 × k, d′), and (1 × 1, d). For a speedup ratio r,
+we let each method contribute a speedup of √r.
+With the decomposed architecture determined, we
+solve for the weights of the decomposed layers. Given
+their order as above, we ﬁrst optimize the (k × 1,
+d′′) and (1 × k, d) layers using “ﬁlter reconstruction”
+ (we will discuss “data reconstruction” later). Then
+we adopt our solution on the (1 × k, d) layer and
+optimize for the (1 × k, d′) and (1 × 1, d) layers. We
+use our asymmetric reconstruction in Eqn.(12). In the
+r(MWˆx+b) term, ˆx is the approximated input to this
+1 × k layer, and the r(Wx) = r(y) term is still the
+true response of the original k × k layer without any
+decomposition. The approximation error of the spatial
+decomposition will also be addressed by our asymmetric reconstruction, which is important to alleviate
+accumulated error. We term this as “asymmetric (3d)”
+in the following.
+Fine-tuning
+With any approximated whole model, we may “ﬁnetune” this model end-to-end in the ImageNet training
+data. This process is similar to training a classiﬁcation
+network with the approximated model as the initialization.
+Conv1 Speedup
+Increase in Error (%)
+Conv2 Speedup
+Conv3 Speedup
+Conv4 Speedup
+Conv5 Speedup
+Increase in Error (%)
+Conv6 Speedup
+Conv7 Speedup
+Figure 4: Linear vs. Nonlinear for SPP-10: single-layer performance of accelerating Conv1 to Conv7. The
+speedup ratios are computed by the theoretical complexity of that layer. The error rates are top-5 single-view,
+and shown as the increase of error rates compared with no approximation (smaller is better).
+However, we empirically ﬁnd that ﬁne-tuning is
+very sensitive to the initialization (given by the approximated model) and the learning rate. If the initialization is poor and the learning rate is small, the ﬁnetuning is easily trapped in a poor local optimum and
+makes little progress. If the learning rate is large, the
+ﬁne-tuning process behaves very similar to training
+the decomposed architecture “from scratch” (as we
+will discuss later). A large learning rate may jump out
+of the initialized local optimum, and the initialization
+appears to be “forgotten”.
+Fortunately, our method has achieved very good
+accuracy even without ﬁne-tuning as we will show
+by experiments. With our approximated model as the
+initialization, the ﬁne-tuning with a sufﬁciently small
+learning rate is able to further improve the results. In
+our experiments, we use a learning rate of 1e-5 and a
+mini-batch size of 128, and ﬁne-tune the models for 5
+epochs in the ImageNet training data.
+We note that in the following the results are without
+ﬁne-tuning unless speciﬁed.
+EXPERIMENTS
+We comprehensively evaluate our method on two
+models. The ﬁrst model is a 10-layer model of “SPPnet
+(OverFeat-7)” in , which we denote as “SPP-10”.
+This model (detailed in Table 1) has a similar architecture to the OverFeat model but is deeper. It has
+7 conv layers and 3 fc layers. The second model is
+the publicly available VGG-16 model 1 that has 13
+1. www.robots.ox.ac.uk/∼vgg/research/very deep/
+conv layers and 3 fc layers. SPP-10 won the 3-rd place
+and VGG-16 won the 2-nd place in ILSVRC 2014 .
+We evaluate the “top-5 error” using single-view
+testing. The view is the center 224×224 region cropped
+from the resized image whose shorter side is 256.
+The single-view error rate of SPP-10 is 12.51% on the
+ImageNet validation set, and VGG-16 is 10.09% in our
+testing (which is consistent with the number reported
+by 2). These numbers serve as the references for the
+increased error rates of our approximated models.
+Experiments with SPP-10
+We ﬁrst evaluate the effect of our each step on the
+SPP-10 model by a series of controlled experiments.
+Unless speciﬁed, we do not use the 3-d decomposition.
+Single-Layer: Linear vs. Nonlinear
+In this subsection we evaluate the single-layer performance. When evaluating a single approximated
+layer, the remaining layers are unchanged and not approximated. The speedup ratio (involving that single
+layer only) is shown as the theoretical ratio computed
+by the complexity.
+In Fig. 4 we compare the performance of our linear
+solution (4) and nonlinear solution (6). The performance is displayed as increase of error rates (decrease
+of accuracy) vs. the speedup ratio of that layer. Fig. 4
+shows that the nonlinear solution consistently performs better than the linear solution. In Table 1, we
+2. 
+(b) 3−layer (Conv2, 3 and 4)
+(a) 2−layer (Conv6 and 7)
+Increase of Error (%)
+(c) 3−layer (Conv5, 6 and 7)
+Asymmetric
+Asymmetric
+Asymmetric
+Figure 5: Symmetric vs. Asymmetric for SPP-10: the cases of 2-layer and 3-layer approximation. The speedup is
+computed by the complexity of the layers approximated. (a) Approximation of Conv6 & 7. (b) Approximation
+of Conv2, 3 & 4. (c) Approximation of Conv5, 6 & 7.
+show the sparsity (the portion of zero activations
+after ReLU) of each layer. A zero activation is due
+to the truncation of ReLU. The sparsity is over 60%
+for Conv2-7, indicating that the ReLU takes effect
+on a substantial portion of activations. This explains
+the discrepancy between the linear and nonlinear
+solutions. Especially, the Conv7 layer has a sparsity
+of 95%, so the advantage of the nonlinear solution is
+more obvious.
+Fig. 4 also shows that when accelerating only a
+single layer by 2×, the increased error rates of our
+solutions are rather marginal or negligible. For the
+Conv2 layer, the error rate is increased by < 0.1%;
+for the Conv3-7 layers, the error rate is increased by
+We also notice that for Conv1, the degradation is
+negligible near 2× speedup (1.8× corresponds to d′ =
+32). This can be explained by Fig. 2(a): the PCA energy
+has little loss when d′ ≥32. But the degradation can
+grow quickly for larger speedup ratios, because in this
+layer the channel number c = 3 is small and d′ needs
+to be reduced drastically to achieve the speedup ratio.
+So in the following whole-model experiments of SPP-
+10, we will use d′ = 32 for Conv1.
+Multi-Layer: Symmetric vs. Asymmetric
+Next we evaluate the performance of asymmetric
+reconstruction as in the problem (12). We demonstrate
+approximating 2 layers or 3 layers. In the case of 2
+layers, we show the results of approximating Conv6
+and 7; and in the case of 3 layers, we show the
+results of approximating Conv5-7 or Conv2-4. The
+comparisons are consistently observed for other cases
+of multi-layer.
+We sequentially approximate the layers involved,
+from a shallower one to a deeper one. In the asymmetric version (12), ˆx is from the output of the previous approximated layer (if any), and x is from the
+output of the previous non-approximate layer. In the
+symmetric version (5), we use x for both terms. We
+have also tried another symmetric version of using ˆx
+for both terms, and found this symmetric version is
+even worse.
+Fig. 5 shows the comparisons between the symmetric and asymmetric versions. The asymmetric solution has signiﬁcant improvement over the symmetric solution. For example, when only 3 layers are
+approximated simultaneously (like Fig. 5 (c)), the
+improvement is over 1.0% when the speedup is 4×.
+This indicates that the accumulative error rate due to
+multi-layer approximation can be effectively reduced
+by the asymmetric version.
+When more and all layers are approximated simultaneously (as below), if without the asymmetric
+solution, the error rates will increase more drastically.
+Whole-Model: with/without Rank Selection
+In Table 2 we show the results of whole-model
+acceleration. The solver is the asymmetric version.
+For Conv1, we ﬁx d′ = 32. For other layers, when
+the rank selection is not used, we adopt the same
+speedup ratio on each layer and determine its desired
+rank d′ accordingly. When the rank selection is used,
+we apply it to select d′ for Conv2-7. Table 2 shows
+that the rank selection consistently outperforms the
+counterpart without rank selection. The advantage of
+rank selection is observed in both linear and nonlinear
+solutions.
+In Table 2 we notice that the rank selection often
+chooses a higher rank d′ (than the no rank selection)
+in Conv5-7. For example, when the speedup is 3×,
+the rank selection assigns d′ = 167 to Conv7, while
+this layer only requires d′ = 153 to achieve 3× singlelayer speedup of itself. This can be explained by
+Fig. 2(c). The energy of Conv5-7 is less concentrated,
+so these layers require higher ranks to achieve good
+approximations.
+As we will show, the rank selection is more promi-
+Table 2: Whole-model acceleration with/without rank selection for SPP-10. The solver is the asymmetric
+version. The speedup ratios shown here involve all convolutional layers (Conv1-Conv7). We ﬁx d′ = 32 in
+Conv1. In the case of no rank selection, the speedup ratio of each other layer is the same. Each column of
+Conv1-7 shows the rank d′ used, which is the number of ﬁlters after approximation. The error rates are top-5
+single-view, and shown as the increase of error rates compared with no approximation.
+nent for VGG-16 because of its diversity of layers.
+Comparisons with Jaderberg et al.’s method 
+We compare with Jaderberg et al.’s method ,
+which is a recent state-of-the-art solution to efﬁcient
+evaluation. Although our decomposition shares some
+high-level motivations as , we point out that our
+optimization strategy is different with and is important for accuracy, especially for very deep models
+that previous acceleration methods rarely addressed.
+Jaderberg et al.’s method decomposes a k × k
+spatial support into a cascade of k × 1 and 1 × k
+spatial supports. A channel-dimension reduction is
+Speedup Ratio
+Increase of Error (%)
+Jaderberg et al. (our impl.)
+Our asymmetric
+Our asymmetric (3d)
+Figure 6: Comparisons with Jaderberg et al.’s spatial
+decomposition method for SPP-10. The speedup
+ratios are theoretical speedups of the whole model.
+The error rates are top-5 single-view, and shown as
+the increase of error rates compared with no approximation (smaller is better).
+also considered. Their optimization method focuses
+on the linear reconstruction error. In the paper of ,
+their method is only evaluated on a single layer of an
+OverFeat network for ImageNet.
+Our comparisons are based on our implementation
+of . We use the Scheme 2 decomposition in 
+and its “ﬁlter reconstruction” version (as we explain
+below), which is used for ImageNet as in . Our
+reproduction of the ﬁlter reconstruction in gives
+a 2× single-layer speedup on Conv2 of SPP-10 with
+0.2% increase of error. As a reference, in it reports 0.5% increase of error on Conv2 under a 2×
+single-layer speedup, evaluated on another OverFeat
+network similar to SPP-10.
+It is worth discussing our implementation of Jaderberg et al.’s “data reconstruction” scheme, which
+was suggested to use SGD and backpropagation for
+optimization. In our reproduction, we ﬁnd that data
+reconstruction works well for the character classiﬁcation
+task as studied in . However, we ﬁnd it nontrivial
+to make data reconstruction work for large models
+trained for ImageNet. We observe that the learning
+rate needs to be carefully chosen for the SGD-based
+data reconstruction to converge (as also reported
+independently in for another decomposition),
+and when the training starts to converge, the results
+are still sensitive to the initialization (for which we
+have tried Gaussian distributions of a wide range
+of variances). We conjecture that this is because the
+ImageNet dataset and models are more complicated,
+and using SGD to regress a single layer may be
+sensitive to multiple local optima. In fact, Jaderberg
+et al.’s only report “ﬁlter reconstruction” results
+of a single layer on ImageNet. For these reasons,
+our implementation of Jaderberg et al.’s method on
+ImageNet models is based on ﬁlter reconstruction.
+We believe that these issues have not be settled and
+top-5 err.
+SPP-10 
+SPP-10 (4×)
+Jaderberg et al. (our impl.)
+278 (3.3×)
+2.41 (3.2×)
+271 (3.4×)
+2.62 (2.9×)
+our asym. (3d)
+267 (3.5×)
+2.32 (3.3×)
+our asym. (3d) FT
+267 (3.5×)
+2.32 (3.3×)
+AlexNet 
+Table 3: Comparisons of absolute performance of SPP-10. The top-5 error is the absolute value. The running
+time is a single view on a CPU (single thread, with SSE) or a GPU. The accelerated models are those of 4×
+theoretical speedup (Fig. 6). On the brackets are the actual speedup ratios.
+need to be investigated further, and accelerating deep
+networks does not just involve decomposition but also
+the way of optimization.
+In Fig. 6 we compare our method with Jaderberg et
+al.’s for whole-model speedup. For whole-model
+speedup of , we implement their method sequentially on Conv2-7 using the same speedup ratio.3 The
+speedup ratios are the theoretical complexity ratios
+involving all convolutional layers. Our method is the
+asymmetric version and with rank selection. Fig. 6
+shows that when the speedup ratios are large (4×
+and 5×), our method outperforms Jaderberg et al.’s
+method signiﬁcantly. For example, when the speedup
+ratio is 4×, the increased error rate of our method
+is 4.2%, while Jaderberg et al.’s is 6.0%. Jaderberg
+et al.’s result degrades quickly when the speedup
+ratio is getting large, while ours degrades slowly.
+This suggests the effects of our method for reducing
+accumulative error.
+We further compare with our asymmetric version
+using 3d decomposition (Sec. 3.5). In Fig. 6 we show
+the results “asymmetric (3d)”. Fig. 6 shows that this
+strategy leads to signiﬁcantly smaller increase of error.
+For example, when the speedup is 5×, the error
+is increased by only 2.5%. Our asymmetric solver
+effectively controls the accumulative error even if
+the multiple layers are decomposed extensively, and
+the 3d decomposition is easier to achieve a certain
+speedup ratio.
+For completeness, we also evaluate our approximation method on the character classiﬁcation model released by . Our asymmetric (3d) solution achieves
+4.5× speedup with only a drop of 0.7% in classiﬁcation accuracy, which is better than the 1% drop for the
+same speedup reported by .
+Comparisons with Training from Scratch
+The architecture of the approximated model can
+3. We do not apply Jaderberg et al.’s method on Conv1,
+because this layer has a small number of input channels (3), and
+the ﬁrst k×1 decomposed layer can only have a very small number
+of ﬁlters (e.g., 5) to approach a speedup ratio (e.g., 4×). Also note
+that the speedup ratio is about all conv layers, and because Conv1
+is not accelerated, other layers will have a slightly larger speedup.
+also be trained “from scratch” on the ImageNet dataset.
+One hypothesis is that the underlying architecture is
+sufﬁciently powerful, and the acceleration algorithm
+might be not necessary. We show that this hypothesis
+is premature.
+We directly train the model of the same architecture
+as the decomposed model. The decomposed model is
+much deeper than the original model (each layer replaced by three layers), so we adopt the initialization
+method in otherwise it is not easy to converge. We
+train the model for 100 epochs. We follow the common
+practice in , of training ImageNet models.
+The comparisons are in Table 4. The accuracy of the
+model trained from scratch is worse than that of our
+accelerated model by a considerable margin (2.8%).
+These results indicate that the accelerating algorithms
+can effectively digest information from the trained
+models. They also suggest that the models trained
+from scratch have much redundancy.
+top-5 err.
+increased err.
+SPP-10 
+our asym. 3d (4×)
+from scratch
+Table 4: Comparisons with the same decomposed
+architecture trained from scratch.
+Comparisons of Absolute Performance
+Table 3 shows the comparisons of the absolute
+performance of the accelerated models. We also evaluate the AlexNet which is similarly fast as our
+accelerated 4× models. The comparison is based on
+our re-implementation of AlexNet. Our AlexNet is the
+same as in except that the GPU splitting is ignored.
+Our re-implementation of this model has top-5 singleview error rate as 18.8% (10-view top-5 16.0% and top-
+1 37.6%). This is better than the one reported in 4.
+The models accelerated by our asymmetric (3d)
+version have 14.1% and 13.8% top-5 error, without
+4. In the 10-view error is top-5 18.2% and top-1 40.7%.
+ﬁlter size
+# channels
+output size
+complexity (%)
+# of zeros
+Table 5: The architecture of the VGG-16 model . It has 13 conv layers and 3 fc layers. The column
+“complexity” is the theoretical time complexity, shown as relative numbers to the total convolutional
+complexity. The column “# of zeros” is the relative portion of zero responses, which shows the “sparsity”
+of the layer.
+Table 6: Whole-model acceleration with/without rank selection for VGG-16. The solver is the asymmetric
+version. The speedup ratios shown here involve all convolutional layers. We do not accelerate Conv11. In the
+case of no rank selection, the speedup ratio of each other layer is the same. Each column of C12-C53 shows
+the rank d′ used, which is the number of ﬁlters after approximation. The error rates are top-5 single-view, and
+shown as the increase of error rates compared with no approximation.
+and with ﬁne-tuning. This means that the accelerated
+model has 5.0% lower error than AlexNet, while its
+speed is nearly the same as AlexNet.
+Table 3 also shows the actual running time per view,
+on a C++ implementation and Intel i7 CPU (2.9GHz)
+or Nvidia K40 GPU. In our CPU version, our method
+has actual speedup ratios (3.5×) close to theoretical
+speedup ratios (4.0×). This overhead mainly comes
+from the fc and other layers. In our GPU version, the
+actual speedup ratio is about 3.3×. An accelerated
+model is less easy for parallelism in a GPU, so the
+actual ratio is lower.
+Experiments with VGG-16
+The very deep VGG models have substantially
+improved a wide range of visual recognition tasks,
+including object detection , , , , semantic
+segmentation , , , , , image captioning , , , video/action recognition ,
+image question answering , texture recognition
+ , etc. Considering the big impact yet slow speed
+of this model, we believe it is of practical signiﬁcance
+to accelerate this model.
+Accelerating VGG-16 for ImageNet Classiﬁcation
+Firstly we discover that our whole-model rank selection is particularly important for accelerating VGG-
+16. In Table 6 we show the results without/with
+rank selection. No 3d decomposition is used in this
+comparison. For a 4× speedup, the rank selection
+reduces the increased error from 6.38% to 3.84%. This
+is because of the greater diversity of layers in VGG-
+increase of top-5 error (1-view)
+speedup ratio
+Jaderberg et al. (our impl.)
+our asym. (3d)
+our asym. (3d) FT
+Table 7: Accelerating the VGG-16 model using a speedup ratio of 3×, 4×, or 5×. The top-5 error rate
+(1-view) of the VGG-16 model is 10.1%. This table shows the increase of error on this baseline.
+top-5 error
+VGG-16 
+VGG-16 (4×)
+Jaderberg et al. (our impl.)
+875 (3.8×)
+6.40 (2.9×)
+875 (3.8×)
+7.97 (2.3×)
+our asym. (3d)
+860 (3.8×)
+6.30 (3.0×)
+our asym. (3d) FT
+858 (3.8×)
+6.39 (2.9×)
+Table 8: Absolute performance of accelerating the VGG-16 model . The top-5 error is the absolute value.
+The running time is a single view on a CPU (single thread, with SSE) or a GPU. The accelerated models are
+those of 4× theoretical speedup (Table 7). On the brackets are the actual speedup ratios.
+16 (Table 5). Unlike SPP-10 (or other shallower models
+ , ) that repeatedly applies 3×3 ﬁlters on the
+same feature map size, the VGG-16 model applies
+them more evenly on ﬁve feature map sizes (224,
+112, 56, 28, and 14). Besides, as the ﬁlter numbers in
+Conv51-53 are not increased, the time complexity of
+Conv51-53 is smaller than others. The selected ranks
+d′ in Table 6 show their adaptivity - e.g., the layers
+Conv51 to Conv53 keep more ﬁlters, because they
+have small time complexity and it is not a good tradeoff to compactly reduce them. The whole-model rank
+selection is a key to maintain a high accuracy for
+accelerating VGG-16.
+In Table 7 we evaluate our method on VGG-16
+for ImageNet classiﬁcation. Here we evaluate our
+asymmetric 3d version (without or with ﬁne-tuning).
+We evaluate challenging speedup ratios of 3×, 4× and
+5×. The ratios are those of the theoretical speedups of
+all 13 conv layers.
+Somewhat surprisingly, our method has demonstrated compelling results for this very deep model,
+even without ﬁne-tuning. Our no-ﬁne-tuning model
+has a 0.9% increase of 1-view top-5 error for a speedup
+ratio of 4×. On the contrary, the previous method 
+suffers greatly from the increased depth because of the
+rapidly accumulated error of multiple approximated
+layers. After ﬁne-tuning, our model has a 0.3% increase of 1-view top-5 error for a 4× speedup. This
+degradation is even lower than that of the shallower
+model of SPP-10. This suggests that the information
+in the very deep VGG-16 model is highly redundant,
+and our method is able to effectively digest it.
+Fig. 7 shows the actual vs. theoretical speedup ratios
+of VGG-16 using CPU and GPU implementations. The
+CPU speedup ratios are very close to the theoretical
+ratios. The GPU implementation, which is based on
+the standard Caffe library , exhibits a gap between
+actual vs. theoretical ratios (as is also witnessed in
+ ). GPU speedup ratios are more sensitive to specialized implementation, and the generic Caffe kernels
+are not optimized for some layers (e.g., 1×1, 1×3, and
+3×1 convolutions). We believe that a more specially
+engineered implementation will increase the actual
+GPU speedup ratio.
+Figurnov et al.’s work is one of few existing
+works that present results of accelerating the whole
+model of VGG-16. They report increased top-5 1view error rates of 3.4% and 7.1% for actual CPU
+speedups of 3× and 4× (for 4× theoretical speedup
+they report a 3.8× actual CPU speedup). Thus our
+Theoretical Speedup
+Actual Speedup
+Figure 7: Actual vs. theoretical speedup ratios of VGG-
+16 using CPU and GPU implementations.
+conv speedup
+Table 9: Object detection mAP on the PASCAL VOC
+2007 test set. The detector is Fast R-CNN using the
+pre-trained VGG-16 model.
+method is substantially more accurate than theirs.
+Note that results in are after ﬁne-tuning. This
+suggests that ﬁne-tuning is not sufﬁcient for wholemodel acceleration; a good optimization solver for the
+decomposition is needed.
+Accelerating VGG-16 for Object Detection
+Current state-of-the-art object detection results ,
+ , , mostly rely on the VGG-16 model. We
+evaluate our accelerated VGG-16 models for object
+detection. Our method is based on the recent Fast R-
+We evaluate on the PASCAL VOC 2007 object detection benchmark . This dataset contains 5k trainval
+images and 5k test images. We follow the default
+setting of Fast R-CNN using the publicly released
+code5. We train Fast R-CNN on the trainval set and
+evaluate on the test set. The accuracy is evaluated by
+mean Average Precision (mAP).
+In our experiments, we ﬁrst approximate the VGG-
+16 model on the ImageNet classiﬁcation task. Then we
+use the approximated model as the pre-trained model
+for Fast R-CNN. We use our asymmetric 3d version
+with ﬁne-tuning. Note that unlike image classiﬁcation
+where the conv layers dominate running time, for Fast
+R-CNN detection the conv layers consume about 70%
+actual running time . The reported speedup ratios
+are the theoretical speedups about the conv layers
+Table 9 shows the results of the accelerated models
+in PASCAL VOC 2007 detection. Our method with a
+4× convolution speedup has a graceful degradation
+of 0.8% in mAP. We believe this trade-off between
+accuracy and speed is of practical importance, because
+even with the recent advance of fast object detection
+ , , the feature extraction running time is still
+considerable.
+CONCLUSION
+We have presented an acceleration method for very
+deep networks. Our method is evaluated under
+whole-model speedup ratios. It can effectively reduce
+the accumulated error of multiple layers thanks to
+the nonlinear asymmetric reconstruction. Competitive
+5. 
+speedups and accuracy are demonstrated in the complex ImageNet classiﬁcation task and PASCAL VOC
+object detection task.

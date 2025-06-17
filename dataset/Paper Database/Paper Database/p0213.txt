@@ -1,0 +1,394 @@
+Published as a conference paper at ICLR 2016
+VARIABLE RATE IMAGE COMPRESSION WITH
+RECURRENT NEURAL NETWORKS
+George Toderici, Sean M. O’Malley, Sung Jin Hwang, Damien Vincent
+{gtoderici, smo, sjhwang, damienv}@google.com
+David Minnen, Shumeet Baluja, Michele Covell & Rahul Sukthankar
+{dminnen, shumeet, covell, sukthankar}@google.com
+Mountain View, CA, USA
+A large fraction of Internet trafﬁc is now driven by requests from mobile devices
+with relatively small screens and often stringent bandwidth requirements. Due
+to these factors, it has become the norm for modern graphics-heavy websites to
+transmit low-resolution, low-bytecount image previews (thumbnails) as part of
+the initial page load process to improve apparent page responsiveness. Increasing
+thumbnail compression beyond the capabilities of existing codecs is therefore a
+current research focus, as any byte savings will signiﬁcantly enhance the experience
+of mobile device users. Toward this end, we propose a general framework for
+variable-rate image compression and a novel architecture based on convolutional
+and deconvolutional LSTM recurrent networks. Our models address the main issues
+that have prevented autoencoder neural networks from competing with existing
+image compression algorithms: (1) our networks only need to be trained once (not
+per-image), regardless of input image dimensions and the desired compression rate;
+(2) our networks are progressive, meaning that the more bits are sent, the more
+accurate the image reconstruction; and (3) the proposed architecture is at least as
+efﬁcient as a standard purpose-trained autoencoder for a given number of bits. On a
+large-scale benchmark of 32×32 thumbnails, our LSTM-based approaches provide
+better visual quality than (headerless) JPEG, JPEG2000 and WebP, with a storage
+size that is reduced by 10% or more.
+INTRODUCTION
+The task of image compression has been thoroughly examined over the years by researchers and
+teams such as the Joint Pictures Experts Group, who designed the ubiquitous JPEG and JPEG 2000
+(ISO/IEC 15444-1) image formats. More recently, the WebP algorithm was proposed in order to
+further improve image compression rates , especially for the high-resolution images
+that have become more common in recent years. All these efforts approach the compression problem
+from an empirical standpoint: human experts design various heuristics to reduce the amount of
+information needing to be retained, then determine ways to transform the resulting data in a way that’s
+amenable to lossless compression. As this work is almost exclusively focused on the compression
+of large images, low-resolution thumbnail images are usually ignored (and even harmed, e.g., by
+requiring more data in ﬁle headers).
+Standard image compression algorithms tend to make assumptions about image scale. For example,
+we usually assume that a patch from a high-resolution natural image will contain a lot of redundant
+information. In fact, the higher-resolution an image is, the more likely it is that its component patches
+will contain mostly low-frequency information. This fact is exploited by most image codecs and,
+as such, these codecs tend to be very efﬁcient at compressing high-resolution images. However,
+such assumptions are broken when creating thumbnails from high-resolution natural images, as a
+ 
+Published as a conference paper at ICLR 2016
+patch taken from a thumbnail is much more likely to contain difﬁcult-to-compress, high-frequency
+information.
+Large-scale compression of thumbnails (e.g., 32×32 images) is an important application, both in
+terms of reducing disk storage and making better use of limited Internet bandwidth. Enormous
+numbers of thumbnails are currently transmitted across the web for page previews, photo galleries,
+search engine results, and numerous other applications. As such, any improvements to thumbnail
+compression will signiﬁcantly improve the experience of users accessing content over low-bandwidth
+connections.
+In recent years, neural networks have become commonplace to perform tasks that had for decades
+been accomplished by ad hoc algorithms and heuristics. For instance, in image recognition and object
+detection, the current state-of-the-art algorithms are all based on neural networks. It is only natural
+to ask if we can also employ this powerful class of methods to further improve the task of image
+compression, especially for image sizes for which we do not have carefully designed, hand-tuned
+compressors.
+If we consider an image codec broadly as an analysis/synthesis problem with a bottleneck in the
+middle, then we can ﬁnd a signiﬁcant body of research aimed toward teaching neural networks to
+discover compressive representations. Most of this work ,
+has been on synthesis of small images: often 32×32 in part due to CIFAR10 .
+Much of this work has focused on a class of neural networks known as autoencoders . However, standard autoencoders operate under a number of hard constraints that
+have so far made them infeasible as a drop-in replacement for standard image codecs. Some of
+these constraints are that variable-rate encoding is typically not possible (one network is trained per
+compression rate); the visual quality of the output is hard to ensure; and they’re typically trained for a
+particular scale, being able to capture redundancy only at that scale.
+We explore several different ways in which neural network-driven image compression can improve
+compression rates while allowing similar ﬂexibility to modern codecs. To achieve this ﬂexibility, the
+network architectures we discuss must meet all of the following requirements: (1) the compression
+rate should be capable of being restricted to a prior bit budget; (2) the compressor should be able to
+encode simpler patches more cheaply (analogously to modern codecs which may allocate more bits
+to areas of the image which contain important visual features); and (3) the model should be able to
+learn from large amounts of existing imagery in order to optimize this compression process toward
+real-world data.
+RELATED WORK
+The basic principles of using feed-forward neural networks for image compression have been known
+for some time . In this context, networks can assist or even entirely take over many
+of the processes used as part of a traditional image compression pipeline: to learn more efﬁcient
+frequency transforms, more effective quantization techniques, improved predictive coding, etc.
+More recently, autoencoder architectures have become viable as a
+means of implementing end-to-end compression. A typical compressing autoencoder has three parts:
+(1) an encoder which consumes an input (e.g., a ﬁxed-dimension image or patch) and transforms
+it into (2) a bottleneck representing the compressed data, which can then be transformed by (3) a
+decoder into something resembling the original input. These three elements are trained end-to-end,
+but during deployment the encoder and decoder are normally used independently.
+The bottleneck is often simply a ﬂat neural net layer, which allows the compression rate and visual
+ﬁdelity of the encoded images to be controlled by adjusting the number of nodes in this layer
+before training. For some types of autoencoder, encoding the bottleneck as a simple bit vector can
+be beneﬁcial . In neural net-based classiﬁcation tasks, images are
+repeatedly downsampled through convolution and pooling operations, and the entire output of the
+network might be contained in just a single node. In the decoder half of an autoencoder, however,
+the network must proceed in the opposite direction and convert a short bit vector into a much larger
+image or image patch. When this upsampling process is spatially-aware, resembling a “backward
+convolution,” it is commonly referred to as deconvolution .
+Published as a conference paper at ICLR 2016
+Long short-term memory (LSTM) networks are a type of recurrent neural network that have proven very successful for tasks such as speech recognition and machine translation . Many extensions to the standard LSTM
+model are possible including explicitly incorporating spatial information, which leads to various
+types of convolutional LSTMs that may be better suited for image compression. We
+experiment with such models and also try simpler recurrent architectures that use the residual error of
+one autoencoder as the input to another.
+VARIABLE RATE COMPRESSION ARCHITECTURES
+We start by describing a general neural network-based compression framework and then discuss the
+details of multiple instantiations of this architecture. Each subsection describes a different architecture
+that builds on the previous model and improves the compression results.
+For each architecture, we will discuss a function E that takes an image patch as input and produces
+an encoded representation. This representation is then processed by a binarization function B, which
+is the same across architectures, and is discussed in Section 3.2. Finally, for each architecture
+we also consider a decoder function D, which takes the binary representation produced by B and
+generates a reconstructed output patch. Taken together, these three components form an autoencoder,
+x′ = D(B(E(x))), which is the basic building block for all of the compression networks.
+For all architectures, an offset and scale are applied to the 8-bit RGB input images to give a range of
+values between -0.9 and 0.9. This range is compatible with the values that can be emitted by tanh.
+IMAGE COMPRESSION FRAMEWORK
+The neural network architectures that we use share the same conceptual stages: an encoder network,
+followed by a quantizer, and a decoder network. In addition, our framework is tuned for image
+compression and supports variable compression rates without the need for retraining or for storing
+multiple encodings of the same image.
+To make it possible to transmit incremental information, the design should take into account the fact
+that image decoding will be progressive. With this design goal in mind, we can consider architectures
+that are built on top of residuals with the goal of minimizing the residual error in the reconstruction
+as additional information becomes available to the decoder.
+Formally, we chain multiple copies of a residual autoencoder, Ft, deﬁned as:
+Ft(rt−1) = Dt(B(Et(rt−1))).
+This chaining is explicit, in the case of our feed-forward-only networks (Section 3.3 and Section 3.5)
+and is implicit, through the recurrent structure, in the case of our LSTM networks (described in
+Section 3.4 and Section 3.6). In all cases, we set r0 to be equal to the original input patch, and then
+rt for t > 0 represents the residual error after t stages. For non-LSTM architectures (described in
+Sections 3.3 and 3.5), Ft has no memory, and so we only expect it to predict the residual itself. In
+this case, the full reconstruction is recovered by summing over all of the residuals, and each stage is
+penalized due to the difference between the prediction and the previous residual:
+rt = Ft(rt−1) −rt−1.
+On the other hand, LSTM-based architectures (described in Sections 3.4 and 3.6) do hold state, and
+so we expect them to predict the original image patch in each stage. Accordingly, we compute the
+residual relative to the original patch:
+rt = Ft(rt−1) −r0.
+In both cases, the full, multi-stage network is trained by minimizing ∥rt∥2
+2 for t = 1 . . . N, where N
+is the total number of residual autoencoders in the model.
+BINARY REPRESENTATION
+In our networks, we employ a binarization technique ﬁrst proposed by Williams , and similar
+to Krizhevsky & Hinton and Courbariaux et al. . This binarization has three beneﬁts:
+Published as a conference paper at ICLR 2016
+(1) bit vectors are trivially serializable/deserializable for image transmission over the wire, (2) control
+of the network compression rate is achieved simply by putting constraints on the bit allowance, and
+(3) a binary bottleneck helps force the network to learn efﬁcient representations compared to standard
+ﬂoating-point layers, which may have many redundant bit patterns that have no effect on the output.
+The binarization process consists of two parts. The ﬁrst part consists of generating the required
+number of outputs (equal to the desired number of output bits) in the continuous interval [−1, 1]. The
+second part involves taking this real-valued representation as input and producing a discrete output in
+the set {−1, 1} for each value.
+For the ﬁrst step in the binarization process, we use a fully-connected layer with tanh activations.
+For the second part, following Raiko et al. , one possible binarization b(x) of x ∈[−1, 1] is
+deﬁned as:
+b(x) = x + ϵ
+with probability 1+x
+with probability 1−x
+where ϵ corresponds to quantization noise. We will use the regularization provided by the randomized
+quantization to allow us to cleanly backpropagate gradients through this binarization layer.
+Therefore, the full binary encoder function is:
+ tanh(W binx + bbin)
+where W bin and bbin are the standard linear weights and bias that transform the activations from the
+previous layer in the network. In all of our models, we use the above formulation for the forward
+pass. For the backward pass of back-propagation, we take the derivative of the expectation . Since E[b(x)] = x for all x ∈[−1, 1], we pass the gradients through b unchanged.
+In order to have a ﬁxed representation for a particular input, once the networks are trained, only the
+most likely outcome of b(x) is considered and b can be replaced by binf deﬁned as:
+binf (x) =
+otherwise.
+The compression rate is determined by the number of bits generated in each stage, which corresponds
+to the number of rows in the W bin matrix, and by the number of stages, controlled by the number of
+repetitions of the residual autoencoder structure.
+FEED-FORWARD FULLY-CONNECTED RESIDUAL ENCODER
+In the simplest instantiation of our variable rate compression architecture, we set E and D to be
+composed of stacked fully-connected layers. In order to make the search for architectures more
+feasible we decided to set the number of outputs in each fully-connected layer to be constant (512)
+and only used the tanh nonlinearity.
+Given that E and D can be functions of the encoding stage number, and since the statistics of the
+residuals change when going from stage t to t + 1 we considered two distinct approaches: in the ﬁrst
+we share weights across all stages, while in the second, we learn the distinct weights independently
+in each stage. The details of this architecture are given in Figure 1.
+LSTM-BASED COMPRESSION
+In this architecture, we explore the use of LSTM models for both the encoder and the decoder. In
+particular, both E and D consist of stacked LSTM layers.
+Following the LSTM formulation and notation proposed by Zaremba et al. , we use superscripts
+to indicate the layer number, and subscripts to indicate time steps. Let hl
+t ∈Rn denote the hidden
+state of l-th LSTM layer at time step t. We deﬁne T l
+n : Rm →Rn to be an afﬁne transform
+n(x) = W lx + bl. Finally, let ⊙denote element-wise multiplication, and let h0
+t be the input to the
+ﬁrst LSTM layer at time step t.
+Published as a conference paper at ICLR 2016
+Figure 1: The fully-connected residual autoencoder. We depict a two-iteration architecture, with the
+goal of the ﬁrst iteration being to encode the original input patch and the goal of the second iteration
+being to encode the residual from the ﬁrst level’s reconstruction. In our 64-bit results, reported in
+Table 1, we have 16 iterations giving 4 bits each. The blocks marked with 512 are fully-connected
+neural network layers with 512 units and tanh nonlinearities. The loss applied to the residuals in
+training is a simple L2 measure.
+Figure 2: The fully-connected LSTM residual encoder. The 512 LSTM blocks represent LSTM
+layers with 512 units. This ﬁgure shows an unrolling of the LSTM, needed for training, to two time
+steps. The actual architecture would have only the ﬁrst row of blocks, with the functionality of the
+second row (and subsequent recursions) being realized by feeding the residual from the previous
+pass back into the ﬁrst LSTM block. For the results reported in Table 1, this repeated feeding back
+was done 16 times, to generate 64 bit representations. The vertical connections between the LSTM
+stages in the unrolling shows the effect of the persistent memory instead each LSTM. The loss is
+applied to the residuals in training is a simple L2 measure. Note that in contrast to Figure 1, in which
+the network after the ﬁrst step is used to predict the previous step’s residual error, in this LSTM
+architecture, each step predicts the actual output.
+Figure 3: The convolutional / deconvolutional residual encoder. The convolutional layers are depicted
+as sharp rectangles, while the deconvolutional layers are depicted as rounded rectangles. The loss is
+applied to the residuals.
+Published as a conference paper at ICLR 2016
+Using this notation, the LSTM architecture can be written succinctly as proposed by Graves :
+t−1 + i ⊙g,
+t = o ⊙tanh
+where sigm(x) = (1 + exp(−x))−1 denotes the sigmoid function.
+In these equations, sigm and tanh are applied element-wise. This alternate formulation of LSTM
+is useful because it reduces the numbers of separate operations needed to evaluate one step, which
+allows for an efﬁcient implementation on GPU.
+For the encoder, we use one fully-connected layer followed by two stacked LSTM layers. The decoder
+has the opposite structure: two stacked LSTM layers followed by a fully-connected layer with a tanh
+nonlinearity that predicts RGB values (we omit this layer in the diagrams to reduce clutter). The
+exact architecture used in the experiments is given in Figure 2 (minus the RGB conversion).
+FEED-FORWARD CONVOLUTIONAL/DECONVOLUTIONAL RESIDUAL ENCODER
+Section 3.3 proposed a fully-connected residual autoencoder. We extend this architecture by replacing
+the fully-connected layers with convolution operators in the encoder E and with deconvolutional
+operators in the decoder D. The ﬁnal layer of the decoder consists of a 1×1 convolution with three
+ﬁlters that converts the decoded representation into RGB values. We depict this architecture in
+Figure 3 (minus the RGB conversion).
+The deconvolutional operator is deﬁned as the transpose of the convolutional operator. Let ⊗k denote
+the convolutional operator with stride k, and let Sk denote the stride operator with stride factor k,
+i.e., Sk(x)(i, j) = x(k × i, k × j) for 2D multi-channel image x and pixel coordinate (i, j). Then
+W ⊗k x = Sk(W ⊗1 x). Note that the transpose of Sk is the “inﬂation” operator Tk:
+Tk(x)(i, j) =
+x(i/k, j/k)
+if i, j are multiples of k,
+otherwise.
+Thus we can deﬁne the deconvolutional operator ⊘k with stride k as follows:
+W ⊘k x = W ⊗1 (Tk(x)).
+CONVOLUTIONAL/DECONVOLUTIONAL LSTM COMPRESSION
+The ﬁnal architecture combines the convolutional and deconvolutional operators with LSTM. We
+deﬁne convolutional LSTM by replacing the transformation T l
+4n in equation (8) with convolutions
+plus bias. Then the transformation function for convolutional LSTM with stride k is
+The subscript belonging to T now refers to the depth (number of features) in the output feature maps.
+Note that the second convolution term represents the recurrent relation of convolutional LSTM so
+both its input and output must have the same size. Therefore, when a convolutional LSTM has a
+stride greater than one, the stride is only applied to the ﬁrst convolution term, while the second term
+is always computed with a stride of one. Finally, to build the encoder for this architecture, we replace
+the second and third convolutional layers from Figure 3 with convolutional LSTM layers.
+For the decoder, we cannot replace all convolutional operations with deconvolution due to the fact that
+the input to deconvolution often has a different spatial dimension than the output. For the purposes of
+deﬁning a deconvolutional LSTM, T4n becomes
+Here we use the subscripts c and d to differentiate between the weights associated to the convolution
+and deconvolution operations. To construct the deconvolutional LSTM decoder, we replace the second
+and third deconvolutional layers of the deconvolutional decoder from Figure 3 with deconvolutional
+Published as a conference paper at ICLR 2016
+DYNAMIC BIT ASSIGNMENT
+For the non-convolutional approaches presented here, it is natural to assign a varying number of bits
+per patch by allowing a varying number of iterations of the encoder. This could be determined by a
+target quality metric (e.g., PSNR). While not as natural, in the case of the convolutional approaches,
+a similar method may also be employed. The input image needs to be split into patches, and each
+patch processed independently, thereby allowing a different number of bits per region. However, this
+approach has disadvantages that will be discussed at the end of this paper.
+EXPERIMENTS & ANALYSIS
+In order to train the various neural network conﬁgurations, we used the Adam algorithm proposed
+by Kingma & Ba . We experimented with learning rates of {0.1, 0.3, 0.5, 0.8, 1}. The L2
+loss was normalized by the number of pixels in the patch and also by the number of total time steps
+(i.e., number of iterations unrolled) needed to fully encode the patch. We employed no perceptual
+weighting to improve the compression for evaluation under the SSIM measure. During training we
+used the unmodiﬁed L2 error measure.
+We experimented with the number of steps needed to encode each patch, varying this from 8 to 16.
+For the fully connected networks, we chose to use 8 bits per step for an 8×8 patch, allowing us to
+ﬁne tune the compression rate in increments of 8 bits. When scaled up to a 32×32 patch size, this
+allowed us to control the compression in increments of 128 bits.
+For the convolutional/deconvolutional networks, the encoders reduce the 32×32 input patch down to
+8×8 through convolution operations with strides. We experimented with a binary output of 2 bits per
+pixel at this resolution, yielding a tunable compression rate with increments of 16 bytes per 32×32
+EVALUATION PROTOCOL AND METRICS
+Evaluating image compression algorithms is a non-trivial task. The metric commonly used in this
+context is the peak signal-to-noise ratio (PSNR), however, PSNR is biased toward algorithms which
+have been tuned to minimize L2 loss. This would not be a fair comparison against methods like JPEG
+which have been tuned to minimize a form of perceptual loss.
+In our evaluation protocol we instead employ the Structural Similarity Index (SSIM), a popular
+perceptual similarity measure proposed by Wang et al. . Since we’re evaluating compression
+performance on small 32×32 images, we do not smooth the images (a typical preprocess for SSIM).
+In addition, since we’re interested in quantifying how well local details are preserved, we split
+the images into 8×8 patches and compute the SSIM on each patch and on each color channel
+independently. The ﬁnal score is the average SSIM over all patches and channels.
+When analyzing the results, a higher score implies a better reconstruction, with a score of 1.0
+representing a perfect reconstruction. The lowest possible score is 0.0. Note that while there are other
+metrics which emulate the human visual system better than SSIM,
+we chose to use SSIM here due to its ubiquity and ease of comparison with previous work.
+32×32 BENCHMARK
+Our 32×32 benchmark dataset contains 216 million random color images collected from the public
+internet. To be included in the dataset, each image must originally have more than 32 pixels on
+both axes. Qualiﬁed images were then downsampled to 32×32, losing their original aspect ratios.
+This downsampling eliminates pre-existing compression artifacts for most images. The ﬁnal 32×32
+images were then stored losslessly (as PNG) before being used for training and testing. For training
+the LSTM models, 90% of the images were used; the remaining 10% were set aside for evaluation.
+For evaluating the image codecs, we use a subset of this data containing 100k random images.
+Published as a conference paper at ICLR 2016
+Table 1: Comparison between the proposed methods for a given compression target size (in bytes) on
+the 32x32 image benchmark.
+Patch Size
+SSIM / 64B Target
+(Header-less Size)
+SSIM / 128B Target
+(Header-less Size)
+Header-less JPEG
+(72.5 bytes avg.)
+(133 bytes avg.)
+Header-less JPEG 2000
+(73 bytes avg.)
+(156 bytes avg.)
+Header-less WebP
+(80.7 bytes avg.)
+(128.2 bytes avg.)
+Fully Connected Residual Encoder
+(Shared Weights)
+Fully Connected Residual Encoder
+(Distinct Weights)
+LSTM Compressor
+Conv/Deconv Residual Encoder
+(Shared Weights)
+Conv/Deconv Residual Encoder
+(Distinct Weights)
+Convolutional/Deconvolutional Autoencoder
+Conv/Deconv LSTM Compressor
+Table 1 summarizes the results on the 32×32 benchmark, comparing our two LSTM approaches to
+two JPEG codecs and to WebP. To avoid unfairly penalizing the codecs due to the unavoidable cost
+of their ﬁle headers, we exclude the header size from all metrics. Note also that since these standard
+codecs can not be tuned to an exact byte budget (e.g., 64 bytes excluding the ﬁle header), we search
+for the encoder quality setting that leads to a ﬁle whose size is as close as possible, but never less
+than, the target size. On average, this leads to each JPEG and WebP image consuming slightly more
+space than we allow for the LSTM models.
+These 32×32 images contain considerable detail that is perceptually relevant. As can be seen in
+Figure 4, compressing these images without destroying salient visual information or hallucinating
+false details is challenging. At these very low bitrates and spatial resolution, JPEG block artifacts
+become extremely prominent, and WebP either introduces blocking or overly blurs the image
+depending on the strength of the internal ﬁlter. Color smearing artifacts due to the codecs’ default
+(4:2:0) chroma subsampling are also clearly visible.
+Compared to JPEG, the non-convolutional LSTM model slightly reduces inter-block boundaries on
+some images but can also lead to increased color bleeding (e.g., on mandrill as shown in Figure 4).
+Furthermore, the visual quality never exceeds JPEG on average as measured by SSIM and shown in
+Figure 5. This motivates the (de)convolutional LSTM model, which eliminates block artifacts while
+avoiding excessive smoothing. It strikes the best balance between preserving real detail and avoiding
+color smearing, false gradients, and hallucinated detail not present in the original image.
+Note that the (de)convolutional LSTM model exhibits perceptual quality levels that are equal to
+or better than both JPEG and WebP at 4% – 12% lower average bitrate. We see this improvement
+despite the fact that, unlike JPEG and WebP, the LSTMs do not perform chroma subsampling as a
+preprocess. However, at the JPEG quality levels used in Figure 4, disabling subsampling (i.e., using
+4:4:4 encoding) leads to a costly increase in JPEG’s bitrate: 1.32-1.77 bpp instead of 1.05-1.406 bpp,
+or 26% greater. This means that if we desired to preserve chroma ﬁdelity, we would need to drastically
+Published as a conference paper at ICLR 2016
+Original (32×32)
+JPEG compressed images
+WebP compressed images
+Compressed images with LSTM architecture
+Compressed images with conv/deconv LSTM architecture
+From left to right
+Average bits per pixel (bpp)
+(De)Convolutional LSTM
+Figure 4: 32×32 image compression comparison between JPEG and convolutional/deconvolutional
+LSTM architecture.
+reduce JPEG encoding quality in order to produce 4:4:4 JPEGs at a comparable bitrate to the LSTM
+In terms of coding efﬁciency, we took an autoencoder architecture (one iteration of the model
+presented in Section 3.5) with a given bit budget of either 64 or 128 bytes, and compared its SSIM
+against the (de)convolutional LSTM encoder at these targets. In both cases, the LSTM model
+produces SSIM values that are equivalent to the autoencoder, even though the resulting model is more
+CONCLUSION & FUTURE WORK
+We describe various methods for variable-length encoding of image patches using neural networks,
+and demonstrate that for the given benchmark, the fully-connected LSTM model can perform on par
+with JPEG, while the convolutional/deconvolutional LSTM model is able to signiﬁcantly outperform
+JPEG on the SSIM perceptual metric.
+Published as a conference paper at ICLR 2016
+Figure 5: Rate-distortion graph showing the SSIM for different codecs at different target bit rates.
+The results are averaged over 100k images for JPEG and WebP and over a 10% hold-out set of over 21
+million images for the two LSTM models. The (de)convolutional LSTM model provides the highest
+SSIM across all low bit rates, though we expect WebP to provide better SSIM at higher bit rates.
+While our current approach gives favorable results versus modern codecs on small images, codecs that
+include an entropy coder element tend to improve (in a bits-per-pixel sense) with greater resolution,
+meaning that by choosing an arbitrarily large test image it is always possible to defeat an approach
+like that described in this work. Therefore, an obvious need is to extend the current work to function
+on arbitrarily large images, taking advantage of spatial redundancy in images in a manner similar to
+entropy coding.
+Although we presented a solution for dynamic bit assignment in the convolutional case, it is not a
+fully satisfactory solution as it has the potential to introduce encoding artifacts at patch boundaries.
+Another topic for future work is determining a dynamic bit assignment algorithm that is compatible
+with the convolutional methods we present, while not creating such artifacts.
+The algorithms that we present may also be extended to work on video, which we believe to be the
+next grand challenge for neural network-based compression.

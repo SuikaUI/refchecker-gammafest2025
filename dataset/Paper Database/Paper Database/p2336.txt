@@ -1,0 +1,479 @@
+COMPRESSIVE TRANSFORMERS
+FOR LONG-RANGE
+SEQUENCE MODELLING
+Jack W. Rae∗∗† ‡
+Anna Potapenko*†
+Siddhant M. Jayakumar†
+Chloe Hillier†
+Timothy P. Lillicrap†‡
+We present the Compressive Transformer, an attentive sequence model which
+compresses past memories for long-range sequence learning. We ﬁnd the Compressive Transformer obtains state-of-the-art language modelling results in the
+WikiText-103 and Enwik8 benchmarks, achieving 17.1 ppl and 0.97 bpc respectively. We also ﬁnd it can model high-frequency speech effectively and can be
+used as a memory mechanism for RL, demonstrated on an object matching task.
+To promote the domain of long-range sequence learning, we propose a new openvocabulary language modelling benchmark derived from books, PG-19.
+INTRODUCTION
+Humans have a remarkable ability to remember information over long time horizons. When reading
+a book, we build up a compressed representation of the past narrative, such as the characters and
+events that have built up the story so far. We can do this even if they are separated by thousands
+of words from the current text, or long stretches of time between readings. During daily life, we
+make use of memories at varying time-scales: from locating the car keys, placed in the morning,
+to recalling the name of an old friend from decades ago. These feats of memorisation are not
+achieved by storing every sensory glimpse throughout one’s lifetime, but via lossy compression. We
+aggressively select, ﬁlter, or integrate input stimuli based on factors of surprise, perceived danger,
+or repetition — amongst other signals .
+Memory systems in artiﬁcial neural networks began with very compact representations of the past.
+Recurrent neural networks ) learn to represent the history of observations in a compressed state vector. The state is compressed because it uses far less space than the
+history of observations — the model only preserving information that is pertinent to the optimization
+of the loss. The LSTM is perhaps the most ubiquitous RNN
+variant; it uses learned gates on its state vector to determine what information is stored or forgotten
+from memory.
+However since the LSTM, there has been great beneﬁt discovered in not bottlenecking all historical information in the state, but instead in keeping past activations around in an external memory
+and attending to them. The Transformer is a sequence model which stores
+the hidden activation of every time-step, and integrates this information using an attention operator
+ . The Transformer will thus represent the past with a tensor (depth × memory size × dimension) of past observations that is, in practice, an order of magnitude larger than an
+LSTM’s hidden state. With this granular memory, the Transformer has brought about a step-change
+in state-of-the-art performance, within machine translation , language modelling , video captioning , and a multitude
+of language understanding benchmarks amongst others.
+One drawback in storing everything is the computational cost of attending to every time-step and
+the storage cost of preserving this large memory. Several works have focused on reducing the
+computational cost of attention with sparse access mechanisms . However sparse attention does not solve the storage
+problem, and often requires custom sparse kernels for efﬁcient implementation. Instead we look
+back to the notion of compactly representing the past. We show this can be built with simple dense
+linear-algebra components, such as convolutions, and can reduce both the space and compute cost
+of our models.
+We propose the Compressive Transformer, a simple extension to the Transformer which maps past
+hidden activations (memories) to a smaller set of compressed representations (compressed memories). The Compressive Transformer uses the same attention mechanism over its set of memories
+and compressed memories, learning to query both its short-term granular memory and longer-term
+coarse memory. We observe this improves the modelling of text, achieving state-of-the-art results
+in character-based language modelling — 0.97 bpc on Enwik8 from the Hutter Prize 
+— and word-level language modelling — 17.1 perplexity on WikiText-103 .
+Speciﬁcally, we see the Compressive Transformer improves the modelling of rare words.
+We show the Compressive Transformer works not only for language, but can also model the
+waveform of high-frequency speech with a trend of lower likelihood than the TransformerXL and
+Wavenet when trained over 400,000 steps. We also show the Compressive Transformer can be used as a memory component within an RL agent, IMPALA ,
+and can successfully compress and make use of past observations.
+Furthermore we present a new book-level language-modelling benchmark PG-19, extracted from
+texts in Project Gutenberg1, to further promote the direction of long-context sequence modelling.
+This is over double the size of existing LM benchmarks and contains text with much longer contexts.
+RELATED WORK
+There have been a variety of recent attempts to extend the range of attention, particularly in the
+Transformer, or to replace the attention operation with something less expensive. Wu et al. 
+show that a convolution-like operator that runs in linear time can actually exceed the performance
+of the quadratic-time self-attention layer in the Transformer at sentence-to-sentence translation and
+sentence-level language modelling. However such a mechanism inhibits the ﬂow of information
+across a large number of time-steps for a given layer, and has not shown to be beneﬁcial for longrange sequence modelling.
+Dai et al. propose the TransformerXL, which keeps past activations around in memory. They
+also propose a novel relative positional embedding scheme which they see outperforms the Transformer’s original absolute positional system. Our model incorporates both of these ideas, the use of
+a memory to preserve prior activations and their relative positional embedding scheme.
+The Sparse Transformer uses ﬁxed sparse attention masks to attend to roughly
+√n locations in memory. This approach still requires keeping all memories around during training,
+however with careful re-materialization of activations and custom kernels, the authors are able to
+train the model with a reasonable budget of memory and compute. When run on Enwik8, the much
+larger attention window of 8, 000 improves model performance, but overall it does not signiﬁcantly
+outperform a simpler TransformerXL with a much smaller attention window.
+The use of dynamic attention spans is explored in Sukhbaatar et al. . Different attention heads
+can learn to have shorter or longer spans of attention — and they observe this achieves state-ofthe-art in character-based language modelling. This idea could easily be combined with our contribution — a compressive memory. However an efﬁcient implementation is not possible on current
+dense-linear-algebra accelerators, such as Google’s TPUs, due to the need for dynamic and sparse
+computation. Our approach builds on simple dense linear algebra components, such as convolutions.
+We present the Compressive Transformer, a long-range sequence model which compacts past activations into a compressed memory. The Compressive Transformer is a variant of the Transformer
+1 
+Compressed Memory
+Figure 1: The Compressive Transformer keeps a ﬁne-grained memory of past activations, which are
+then compressed into coarser compressed memories. The above model has three layers, a sequence
+length ns = 3, memory size nm = 6, compressed memory size ncm = 6. The highlighted memories
+are compacted, with a compression function fc per layer, to a single compressed memory — instead
+of being discarded at the next sequence. In this example, the rate of compression c = 3.
+ , a deep residual network which only uses attention to propagate information
+over time (namely multi-head attention). We build on the ideas of the TransformerXL which maintains a memory of past activations at each layer to preserve a longer history of context. The TransformerXL discards past activations when they become sufﬁciently old (controlled by
+the size of the memory). The key principle of the Compressive Transformer is to compress these old
+memories, instead of discarding them, and store them in an additional compressed memory.
+DESCRIPTION
+We deﬁne nm and ncm to be the number of respective memory and compressive memory slots in the
+model per layer. The overall input sequence S = x1, x2, . . . , x|s| represents input observations (e.g.
+tokens from a book). These are split into ﬁxed-size windows of size ns for the model to process in
+parallel. The model observes x = xt, . . . , xt+ns at time t, which we refer to as the sequence (e.g. in
+Figure 1). As the model moves to the next sequence, its ns hidden activations are pushed into a ﬁxedsized FIFO memory (like the TransformerXL). The oldest ns activations in memory are evicted, but
+unlike the TransformerXL we do not discard them. Instead we apply a compression operation,
+fc : Rns×d →R⌊ns
+c ⌋×d, mapping the ns oldest memories to ⌊ns
+c ⌋compressed memories which we
+then store in a secondary FIFO compressed memory. d denotes the hidden size of activations and c
+refers to the compression rate, a higher value indicates more coarse-grained compressed memories.
+The full architecture is described in Algorithm 1.
+Algorithm 1 Compressive Transformer
+At time zero
+// Initialize memory to zeros (l × nm × d)
+// Initialize compressed memory to zeros (l × ncm × d)
+3: h(1) ←xWemb
+// Embed input sequence(ns × d)
+4: for layer i = 1, 2, . . . , l do
+mem(i) ←concat(cm(i)
+// ((ncm + nm) × d)
+˜a(i) ←multihead attention(i)(h(i), mem(i)
+// MHA over both mem types (ns × d)
+a(i) ←layer norm(˜a(i) + h(i))
+// Regular skip + layernorm (ncm × d)
+old mem(i) ←m(i)
+// Oldest memories to be forgotten (ns × d)
+new cm(i) ←f (i)
+c (old mem(i))
+// Compress oldest memories by factor c (⌊ns
+t+1 ←concat(m(i)
+t , h(i))[−nm :]
+// Update memory (nm × d)
+←concat(cm(i)
+t , new cm(i))[−ncm :]
+// Update compressed memory (ncm × d)
+h(i+1) ←layer norm(mlp(i)(a(i)) + a(i))
+// Mixing MLP (ns × d)
+Algorithm 2 Attention-Reconstruction Loss
+1: Lattn ←0
+2: for layer i = 1, 2, . . . , l do
+h(i) ←stop gradient(h(i))
+// Stop compression grads from passing...
+old mem(i) ←stop gradient(old mem(i))
+// ...into transformer network.
+Q, K, V ←stop gradient(attention params at layer i)
+// Re-use attention weight matrices.
+def attn(h, m) ←σ((hQ) (mK))(mV)
+// Use content-based attention (no relative).
+new cm(i) ←f (i)
+c (old mem(i))
+// Compression network (to be optimized).
+Lattn ←Lattn + ||attn(h(i), old mem(i)) −attn(h(i), new cm(i))||2
+COMPRESSION FUNCTIONS AND LOSSES
+For choices of compression functions fc we consider (1) max/mean pooling, where the kernel and
+stride is set to the compression rate c;
+(2) 1D convolution also with kernel & stride set to c;
+(3) dilated convolutions; (4) most-used where the memories are sorted by their average attention
+(usage) and the most-used are preserved. The pooling is used as a fast and simple baseline. The mostused compression scheme is inspired from the garbage collection mechanism in the Differentiable
+Neural Computer where low-usage memories are erased. The convolutional
+compression functions contain parameters which require training.
+One can train the compression network using gradients from the loss; however for very old memories
+this requires backpropagating-through-time (BPTT) over long unrolls. As such we also consider
+some local auxiliary compression losses. We consider an auto-encoding loss where we reconstruct
+the original memories from the compressed memories Lae = ||old mem(i) −g(new cm(i))||2,
+where g : R
+c ×d →Rns×d is learned. This is a lossless compression objective — it attempts
+to retain all information in memory. We also consider an attention-reconstruction loss described
+in Algorithm 2 which reconstructs the content-based attention over memory, with content-based
+attention over the compressed memories. This is a lossy objective, as information that is no longer
+attended to can be discarded, and we found this worked best. We stop compression loss gradients
+from passing into the main network as this prevents learning. Instead the Transformer optimizes
+the task objective and the compression network optimizes the compression objective conditioned on
+task-relevant representations; there is no need to mix the losses with a tuning constant.
+TEMPORAL RANGE
+The TransformerXL with a memory of size n has a maximum temporal range of l × n with an
+attention cost of O(n2
+s + nsn) for a detailed discussion). The Compressive
+Transformer now has a maximum temporal range of l × (nm + c ∗ncm) with an attention cost of
+s + ns(nm + ncm)). For example, setting ncm = nm = n/2 and c = 3 we obtain a maximum
+temporal range that is two times greater than the TransformerXL with an identical attention cost.
+Thus if we can learn in the c > 1 compressed setting, the temporal range of the model can be
+signiﬁcantly increased.
+PG-19 BENCHMARK
+As models begin to incorporate longer-range memories, it is important to train and benchmark them
+on data containing larger contexts. Natural language in the form of text provides us with a vast
+repository of data containing long-range dependencies, that is easily accessible. We propose a new
+language modelling benchmark, PG-19, using text from books extracted from Project Gutenberg 2.
+We select Project Gutenberg books which were published over 100 years old, i.e. before 1919
+(hence the name PG-19) to avoid complications with international copyright, and remove short texts.
+The dataset contains 28, 752 books, or 11GB of text — which makes it over double the size of
+BookCorpus and Billion Word Benchmark.
+2The authors intend to release the PG-19 dataset along with the split into train, validation and test subsets.
+Table 1: Comparison to existing popular language modelling benchmarks.
+Avg. length (words)
+Train Size
+News (sentences)
+Penn Treebank
+News (articles)
+WikiText-103
+Wikipedia (articles)
+RELATED DATASETS
+The two most benchmarked word-level language modelling datasets either stress the modelling of
+stand-alone sentences ) or the modelling of a
+small selection of short news articles ). Merity
+et al. proposed the WikiText-103 dataset, which contains text from a high quality subset of
+English-language wikipedia articles. These articles are on average 3, 600 words long. This dataset
+has been a popular recent LM benchmark due to the potential to exploit longer-range dependencies
+ . However recent Transformer models, such
+as the TransformerXL appear to be able to exploit temporal dependencies on the
+order of several thousand words. This motivates a larger dataset with longer contexts.
+Books are a natural choice of long-form text, and provide us with stylistically rich and varied natural
+language. Texts extracted from books have been used for prior NLP benchmarks; such as the Children’s Book Test and LAMBADA . These benchmarks use
+text from Project Gutenberg, an online repository of books with expired US copyright, and Book-
+Corpus , a prior dataset of 11K unpublished (at time of authorship) books. CBT
+and LAMBADA contain extracts from books, with a speciﬁc task of predicting held-out words. In
+the case of LAMBADA the held-out word is speciﬁcally designed to be predictable for humans with
+access to the full textual context — but difﬁcult to guess with only a local context.
+CBT and LAMBADA are useful for probing the linguistic intelligence of models, but are not ideal
+for training long-range language models from scratch as they truncate text extracts to at most a
+couple of paragraphs, and discard a lot of the books’ text. There has been prior work on training
+models on book data using BookCorpus directly ) however
+BookCorpus is no longer distributed due to licensing issues, and the source of data is dynamically
+changing — which makes exact benchmarking difﬁcult over time.
+The NarrativeQA Book Comprehension Task uses Project Gutenberg texts
+paired with Wikipedia articles, which can be used as summaries. Due to the requirement of needing
+a corresponding summary, NarrativeQA contains a smaller selection of books: 1,527 versus the
+28,752 books in PG-19. However it is reasonable that PG-19 may be useful for pre-training book
+summarisation models.
+STATISTICS
+A brief comparison of PG-19 to other LM datasets can be found in Table 1. We intentionally do not
+limit the vocabulary by unk-ing rare words, and release the dataset as an open-vocabulary benchmark. To compare models we propose to continue measuring the word-level perplexity. This can
+still be computed for any chosen character-based, byte-based or subword-based scheme. To do this,
+one calculates the total cross-entropy loss L = −P
+t log(pt|p<t) over the given validation or test
+subset using a chosen tokenization scheme, and then one normalizes this value by the number of
+words: L/nwords where nwords is the total number of words in the given subset, taken from Table
+2. The word-level perplexity is thus eL/nwords. For sake of model comparisons, it is important to
+use the exact number of words computed in Table 2 as the normalisation constant.
+Alongside quantitative analyses, we build an LDA topic model for a qualitative
+inspection of the text. We present key words for several topics in the Supplementary Table 10. These
+topics include art, education, naval exploration, geographical description, war, ancient civilisations,
+and more poetic topics concerning the human condition — love, society, religion, virtue etc. This
+contrasts to the more objective domains of Wikipedia and news corpora.
+Table 2: PG-19 statistics split by subsets.
+1,973,136,207
+Table 3: Eval. perplexities on PG-19.
+36L TransformerXL
+36L Compressive Transf.
+Table 4: State-of-the-art results on Enwik8.
+7L LSTM 
+LN HyperNetworks Ha et al. 
+LN HM-LSTM Chung et al. 
+ByteNet 
+RHN Zilly et al. 
+mLSTM Krause et al. 
+64L Transf. Al-Rfou et al. 
+24L TXL 
+Sparse Transf. 
+Adaptive Transf. 
+24L TXL (ours)
+24L Compressive Transformer
+Table 5: Compression approaches on Enwik8.
+Compression fn
+Compression loss
+Max Pooling
+Auto-encoding
+Mean Pooling
+Dilated conv
+EXPERIMENTS
+We optimised all models with Adam . We used a learning rate schedule
+with a linear warmup from 1e-6 to 3e-4 and a cosine decay back down to 1e-n6. For characterbased LM we used 4, 000 warmup steps with 100, 000 decay steps, and for word-based LM we used
+16, 000 warmup steps with 500, 000 decay steps. We found that decreasing the optimisation update
+frequency helped (see Section 5.5.1), namely we only applied parameter updates every 4 steps after
+60, 000 iterations. However we found the models would optimise well for a range of warmup/warmdown values. We clipped the gradients to have a norm of at most 0.1, which was crucial to successful
+optimisation.
+We benchmark the Compressive Transformer against the TransformerXL on the newly proposed PG-
+19 books dataset. Because it is open-vocabulary, we train a subword vocabulary of size 32000 with
+SubwordTextEncoder from the tfds package in TensorFlow and use the dataset statistics to compute
+word-level perplexity, as described in Section 4.2. We train a 36 layer Compressive Transformer with
+a window size of 512, both memory and compressed memory size of 512, and compression rate C =
+2. We compare this to a 36 layer TransformerXL trained with window size 512 and attention window
+1024. The model was trained on 256 TPUv3 cores with a total batch size of 512 and converged after
+processing around 100 billion subword tokens. We display the results in Table 3 where we see the
+Compressive Transformer obtains a test perplexity of 33.6 versus the TransformerXL’s 36.3. Despite
+the dataset size, it is clearly a challenging domain. This can suit as a ﬁrst baseline on the proposed
+long-range language modelling benchmark. We show samples from this model in Supplementary
+Section E. The model is able to generate long-form narrative of varying styles: from character
+dialogue, ﬁrst person diary entries, to descriptive third-person text.
+We compare the TransformerXL and the Compressive Transformer on the standard character-level
+language modelling benchmark Enwiki8 taken from the Hutter Prize , which contains
+100M bytes of unprocessed Wikipedia text. We select the ﬁrst 90MB for training, 5MB for validation, and the latter 5MB for testing — as per convention. We train 24-layer models with a sequence
+window size of 768. During training, we set the TransformerXL’s memory size to 2304, and for
+the Compressive Transformer we use memory of size 768 and compressed memory of size 1152
+with compression rate C = 3. During evaluation, we increased the TransformerXL memory size
+to 4096 and the compressed memory in our model to 3072 (after sweeping over the validation set),
+obtaining the numbers reported in Table 4. We show the effect of scaling the compressed memory
+size and evaluation performance in Supplementary Section B. The proposed model achieves the new
+state-of-the-art on this dataset with 0.97 bits-per-character.
+We compare compression functions and the use of auxiliary losses in Table 5. We sweep over
+compression rates of 2, 3, and 4 and report results with the best performing value for each row.
+BPTT signiﬁes that no auxiliary compression loss was used to train the network other than the
+overall training loss. To feed gradients into the compression function we unrolled the model over
+double the sequence length and halved the batch size to ﬁt the larger unroll into memory.
+WIKITEXT-103
+We train an eighteen-layered Compressive Transformer on the closed-vocabulary word-level language modelling benchmark WikiText-103, which contains articles from Wikipedia. We train the
+model with a compressed memory size, memory size, and a sequence window size all equal to 512.
+We trained the model over 64 Tensor Processing Units (TPU) v3 with a batch size of 2 per core —
+making for a total batch size of 128. The model converged in a little over 12 hours. We found the
+single-layer convolution worked best, with a compression rate of c = 4. This model obtained 17.6
+perplexity on the test set. By tuning the memory size over the validation set — setting the memory
+size to 500, and compressed memory size to 1, 500 — we obtain 17.1 perplexity. This is 1.2 perplexity points over prior state of the art, and means the model places a ≈5% higher probability on
+the correct word over the prior SotA TransformerXL.
+It is worth noting that in Table 6 we do not list methods that use additional training data, or that make
+use of test-time labels to continue training the model on the test set ). If we incorporate a very naive dynamic evaluation approach of loading a model
+checkpoint and continuing training over one epoch of the test set, then we obtain a test perplexity
+of 16.1. This is slightly better than the published 16.4 from Krause et al. — which uses a
+more sophisticated dynamic evaluation approach on top of the TransformerXL. However in most
+settings, one does not have access to test-time labels — and thus we do not focus on this setting.
+Furthermore there has been great progress in showing that more data equates to much better language modelling; Shoeybi et al. ﬁnd a large transformer 8B-parameter transformer trained
+on 170GB of text obtains 10.7 word-level perplexity on WikiText-103. However it is not clear to
+what extent the WikiText-103 test set may be leaked inside these larger training corpora. For clarity
+of model comparisons, we compare to published results trained on the WikiText-103 training set.
+Certainly the direction of larger scale and more data appear to bring immediate gains to the quality
+of existing language models. Both data scale and quality alongside intelligent model design are
+complementary lines of research towards better sequence modelling.
+We break perplexity down by word frequency in Table 7 and see the Compressive Transformer makes only a small modelling improvement for frequent words (2.6% over the TransformerXL baseline) but obtains a much larger improvement of ≈20% for infrequent words. Furthermore, we see 10X improvement in modelling rare words over the prior state-of-the-art LSTM
+language model published in 2018 — which demonstrates the rate of progress in this area.
+COMPRESSIBILITY OF LAYERS
+We can use compression to better understand the model’s mode of operation. We inspect how
+compressible Transformer’s activations are as they progress through higher layers in the network.
+One may expect representations to become more difﬁcult to compress at higher layers, if more
+semantic information is represented there. We monitor the compression loss at each layer of our
+best-performing Compressive Transformer models trained on Enwik8 and WikiText-103 and display
+these in Supplementary Section A Figure 6. We note that the compression loss is about one order of
+magnitude higher for word-level language modelling (WikiText-103) over character-level langauge
+modelling (Enwik8). Furthermore the ﬁrst layer of the Transformer is highly compressible. However
+there is not a clear trend of compression cost increasing with layer depth.
+Table 6: Validation and test perplexities on WikiText-103.
+LSTM 
+Temporal CNN 
+GCNN-14 
+Quasi-RNN Bradbury et al. 
+RMC 
+LSTM+Hebb. 
+Transformer 
+18L TransformerXL, M=384 
+18L TransformerXL, M=1024 (ours)
+18L Compressive Transformer, M=1024
+Table 7: WikiText-103 test perplexity broken down by word frequency buckets. The most frequent
+bucket is words which appear in the training set more than 10, 000 times, displayed on the left. For
+reference, a uniform model would have perplexity |V | = 2.6e5 for all frequency buckets. *LSTM
+comparison from Rae et al. 
+TransformerXL (ours)
+Compressive Transformer
+Relative gain over TXL
+We inspect where the network is attending to on average, to determine whether it is using its compressed memory. We average the attention weight over a sample of 20, 000 sequences from a trained
+model on Enwik8. We aggregate the attention into eighteen buckets, six for each of the compressed
+memory, memory, and sequence respectively. We set the size of the sequence, memory and compressed memory all to be 768. We plot this average attention weight per bucket in Figure 2 with a
+1σ standard error. We see most of the attention is placed on the current sequence; with a greater
+weight placed on earlier elements of the sequence due to the causal self-attention mechanism which
+masks future attention weights. We also observe there is an increase in attention from the oldest
+activations stored in the regular memory, to the activations stored in the compressed memory. This
+goes against the trend of older memories being accessed less frequently — and gives evidence
+that the network is learning to preserve salient information.
+OPTIMISATION SCHEDULE
+We make an observation about an interesting but undesirable meta-learning phenomenon during
+long-context training. When the learning rate is tuned to be much smaller (or set to zero) during
+training, performance degrades drastically both for the TransformerXL and the Compressive Transformer. This is displayed in Figure 3.
+Usually we consider distributional shift from the training data to the test data, but we can also
+observe a shift in the model when transferring from a training to evaluation mode (even when the
+model is evaluated on the training data). In this case, this is due to the online updating of parameters
+whilst processing long contiguous articles. We would like the model to generalise well to scenarios
+where it is not continuously optimised. Updating the parameters only at article boundaries (and then
+resetting the state) could be one solution for long-range memory models, but this would slow down
+learning signiﬁcantly.
+Instead, we propose reducing the frequency of optimisation updates during training. We ﬁnd this
+allows for the best of both worlds — fast initial learning with frequent updates, and better generalisation near the end of training with less frequent updates (e.g. every 4 steps). Reducing the
+optimisation frequency increases the effective batch size, which has also been shown to be prefer-
+10 11 12 13 14 15 16 17 18
+Compressed Memory Memory Sequence
+Average attention weight
+Figure 2: Attention weight on Enwik8. Average attention weight from the sequence over
+the compressed memory (oldest), memory, and
+sequence (newest) respectively. The sequence
+self-attention is causally masked, so more attention is placed on earlier elements in the sequence. There is an increase in attention at the
+transition from memory to compressed memory.
+Training iterations
+Training BPC
+Change learning rate
+during training
+Learning Rate
+3e-4 update period=2
+Figure 3: Learning rate analysis. Reducing the
+learning rate (e.g. to zero) during training (on
+Enwik8) harms training performance. Reducing the frequency of optimisation updates (effectively increasing the batch size) is preferable.
+able to learning rate decay in image modelling . We observed a ﬁnal performance
+improvement in our TransformerXL baseline on Enwik8, from 0.995 — which approximately replicates the published result — to 0.984 — which matches the most recent SotA architecture. We note,
+the additional space and compute cost of accumulating gradients is negligible across iterations, so
+there was no performance regression in using this scheme.
+We train the Compressive Transformer on the waveform of speech to assess its performance on
+different modalities. Speech is interesting because it is sampled at an incredibly high frequency, but
+we know it contains a lot of information on the level of phonemes and entire phrases.
+To encourage long-term reasoning, we refrain from conditioning the model on speaker identity or
+text features, but focus on unconditional speech modelling. We train the model on 24.6 hours of
+24kHz North American speech data. We chunk the sequences into windows of size 3840, roughly
+80ms of audio, and compare a 20-layer Compressive Transformer to a 20-layer TransformerXL
+and a 30-layer WaveNet model — a state-of-the-art audio generative model
+used to serve production speech synthesis applications at Google . All networks
+have approximately 40M parameters, as WaveNet is more parameter-efﬁcient per layer. We train
+each network with 32 V100 GPUs, and a batch size of 1 per core (total batch size of 32) using
+synchronous training.
+WaveNet processes an entire chunk in parallel, however the TransformerXL and Compressive Transformer are trained with a window size of 768 and a total memory size of 1, 568 (for the Compressive Transformer we use 768 memory + 768 compressed). We thus unroll the model over the sequence. Despite this sequential unroll, the attention-based models train at only half the speed of
+WaveNet. We see the test-set negative-log-likelihood in Figure 4, and observe that a Compressive
+Transformer with a compression rate of 4 is able to outperform the TransformerXL and maintain
+a slim advantage over WaveNet. However we only trained models for at most one week (with
+32GPUs) and it would be advantageous to continue training until full convergence — before deﬁnitive conclusions are made.
+REINFORCEMENT LEARNING
+Compression is a good ﬁt for video input sequences because subsequent frames have high mutual
+information. Here we do not test out the Compressive Transformer on video, but progress straight to
+a reinforcement learning agent task that receives a video stream of visual observations — but must
+ultimately learn to use its memory to reason over a policy.
+50000 100000 150000 200000 250000 300000 350000 400000
+Training Iterations
+Compressive Transformer 20L C=4
+TransformerXL 20L
+Wavenet 30L
+Figure 4: Speech Modelling. We see the Compressive Transformer is able to obtain competitive results against the state-of-the-art WaveNet
+in the modelling of raw speech sampled at
+Human Normalised Score
+Compression Rate
+Figure 5: Vision and RL. We see the Compressive Transformer integrates visual information across time within an IMPALA RL agent,
+trained on an object matching task.
+We test the Compressive Transformer as a drop-in replacement to an LSTM in the IMPALA setup
+ . Otherwise, we use the same training framework and agent architecture as
+described in the original work with a ﬁxed learning rate of 1.5e-5 and entropy cost coefﬁcient of
+2e-3. We test the Compressive Transformer on a challenging memory task within the DMLab-30
+ domain, rooms select nonmatching object. This requires the agent to explore
+a room in a visually rich 3D environment and remember the object present. The agent can then
+advance to a second room where it must select the object not present in the original room. This
+necessitates that the agent both remember events far in the past, and also learn to efﬁciently reason
+about them.
+We ﬁx both the memory and compressed memory sizes to 64. In Figure 5, we present results for a
+range of compression rates, averaged over 3 seeds. We see that the best performing agents endowed
+with the Compressive Transformer are able to solve the task to human-level. We note that the model
+with compression rate 1 is unable to learn the task to the same proﬁciency. The speed of learning
+and stability seem to increase proportionally with higher rates of compression (up to a limit) – i.e.
+the effective memory window of the agent – and we ﬁnd compression rate 4 to once again be the
+best performing. We see this as a promising sign that the architecture is able to efﬁciently learn,
+and suitably use, compressed representations of its visual input and hope to test this more widely in
+future work.
+CONCLUSION
+In this paper we explore the notion of compression as a means of extending the temporal receptive
+ﬁeld of Transformer-based sequence models. We see a beneﬁt to this approach in the domain of
+text, with the Compressive Transformer outperforming existing architectures at long-range language
+modelling. To continue innovation in this area, we also propose a new book-level LM benchmark,
+PG-19. This may be used to compare long-range language models, or to pre-train on other longrange reasoning language tasks, such as NarrativeQA .
+We see the idea of compressive memories is applicable not only to the modality of text, but also
+audio, in the form of modelling the waveform of speech, and vision, within a reinforcement-learning
+agent trained on a maze-like memory task. In both cases, we compare to very strong baselines
+ and IMPALA ).
+The main limitation of this work is additional complexity, if the task one wishes to solve does not
+contain long-range reasoning then the Compressive Transformer is unlikely to provide additional
+beneﬁt. However as a means of scaling memory and attention, we do think compression is a simpler
+approach to dynamic or sparse attention — which often requires custom kernels to make efﬁcient.
+One can build effective compression modules from simple neural network components, such as
+convolutions. The compression components are immediately efﬁcient to run on GPUs and TPUs.
+Memory systems for neural networks began as compressed state representations within RNNs. The
+recent wave of progress using attention-based models with deep and granular memories shows us
+that it is beneﬁcial to refrain from immediately compressing the past. However we hypothesise that
+more powerful models will contain a mixture of granular recent memories and coarser compressed
+memories. Future directions could include the investigation of adaptive compression rates by layer,
+the use of long-range shallow memory layers together with deep short-range memory, and even the
+use of RNNs as compressors. Compressive memories should not be forgotten about just yet.
+ACKNOWLEDGEMENTS
+We thank Chris Dyer, Felix Gimeno, and Koray Kavukcuoglu for reviewing the manuscript. We
+thank Peter Dayan, Adam Santoro, Jacob Menick, Emilio Parisotto, Hyunjik Kim, Simon Osindero, Sergey Bartunov, David Raposo, and Daan Wierstra for ideas regarding model design. We
+thank Yazhe Li and Aaron Van de Oord for their help and advice in instrumenting speech modelling
+experiments. Finally, we thank our wider DeepMind colleagues for supporting this project with
+stimulating discussions, engineering infrastructure, and positive reinforcement signals.
+AUTHOR CONTRIBUTIONS
+Model and Experiment design: JR, TL, AP, SJ
+Dataset creation: AP, JR, CH
+Text experiments: JR, AP
+RL experiments: SJ
+Speech experiments: JR
+This research was funded by DeepMind.
+COMPETING INTERESTS
+The authors declare no competing ﬁnancial interests.

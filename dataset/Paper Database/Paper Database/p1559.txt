@@ -1,0 +1,644 @@
+InnoDB Database Forensics:
+Reconstructing Data Manipulation Queries from Redo Logs
+Peter Fr¨uhwirt, Peter Kieseberg, Sebastian Schrittwieser, Markus Huber, and Edgar Weippl
+SBA-Research
+Vienna, Austria
+Email: pfruehwirt,pkieseberg,sschrittwieser,mhuber, 
+Abstract—InnoDB is a powerful open-source storage engine
+for MySQL that gained much popularity during the recent
+years. This paper proposes methods for forensic analysis of
+InnoDB databases by analyzing the redo logs, primarily used
+for crash recovery within the storage engine. This new method
+can be very useful in forensic investigations where the attacker
+got admin privileges, or was the admin himself. While such a
+powerful attacker could cover tracks by manipulating the log
+ﬁles intended for fraud detection, data cannot be changed easily
+in the redo logs. Based on a prototype implementation, we show
+methods for recovering Insert, Delete and Update statements
+issued against a database.
+Keywords-InnoDB, digital forensics, databases, log ﬁles;
+I. INTRODUCTION AND BACKGROUND
+When executing a SQL statement, the InnoDB storage
+engine keeps parts of the statements in several storage
+locations . Thus, forensic analysis engaging with these
+locations can reveal recent activities, can help creating
+a (partial) timeline of past events and recover deleted
+or modiﬁed data . While this fact is well known in
+computer forensics research and several forensic tools 
+as well as approaches , , , exist to analyze
+data, the systematic analysis of database systems has only
+recently begun , , , . Still, to this day,
+none of these approaches incorporate the data stored in
+InnoDB’s redo logs, which not only constitute a rich vault
+of information regarding transactions, but even allow the
+reconstruction of previous states of the database.
+engine for MySQL databases. It is transaction-safe and
+crash-recovery
+ . Transaction-safe means that every change of data
+implemented
+mini-transaction
+which is logged for redo purposes. Therefore, every data
+manipulation leads to at least one call of the function
+mtr_commit(), which writes the log records to the
+InnoDB redo log. Since MySQL version 5.1, InnoDB
+compresses the written data with a special algorithm 2.
+ 
+2See Appendix A for a description of the algorithm
+In our research, we disassembled the redo log ﬁles, which
+are used internally for crash-recovery, in order to identify
+and recover transactions for digital forensic purposes.
+In Section II we describe the general structure of the log
+ﬁles that are used in the course of our analysis, in Section III
+we detail our approach for identifying recent operations, as
+well as using the redo information for recovering overwritten
+data. Section IV gives a detailed demonstration on the
+capabilities of our forensic method by analyzing example
+log entries. In Section V we conclude our work and give
+an outlook to future plans regarding the development of
+additional methods for recovering more complex statement
+II. LOG FILE STRUCTURE
+A. General Structure
+ib_logfile0 and ib_logfile1 with the default size
+of ﬁve megabytes each if MySQL is launched with the
+innodb_file_ per_table option activated . Both
+ﬁles have the same structure and InnoDB rotates between
+them and eventually overwrites old data. Similar to the data
+ﬁles , the log ﬁles are separated into several fragments
+(see Figure 1):
+1) One Header block containing general information on
+the log ﬁle.
+2) Two Checkpoints securing the log ﬁles against corruption.
+3) Several Log Blocks containing the actual log data.
+The header block combined with the two checkpoints and
+padding is often referred to as ﬁle header and is exactly
+2048 bytes long. Each log block contains a header, a trailer
+and several log block entries. Since each log block is exactly
+512 bytes long, log block entries can be split and stored in
+two log blocks (see the description of the log block header
+for further information).
+B. Header Block
+The ﬁrst part of the log ﬁle consists of the header block,
+which contains general information about the ﬁle. This block
+has a ﬁxed length of 48 bytes and starts at offset 0x00, i.e.
+Structure of the log ﬁles
+at the beginning of the ﬁle header. Table I gives an overview
+on the contents of the header block.
+Interpretation
+Group Number of the log ﬁle
+First log sequence number (lsn) of this log ﬁle
+Archived log ﬁle number
+This ﬁeld is used by InnoDB Hot Backup. It contains the ibbackup and the creation time in which
+the backup was created. It is used for displaying
+information to the user when mysqld is started for
+the ﬁrst time on a restored database.
+INTERPRETATION OF THE HEADER BLOCK
+C. Checkpoints
+InnoDB uses a checkpoint system in the log ﬁles. It
+ﬂushes changes and modiﬁcations of database pages from
+the doublewrite-buffer , , into small batches,
+because processing everything in one single batch would
+hinder the processing of SQL statements issued by users
+during the checkpoint process.
+Crash Recovery: The system of checkpoints is vitally
+important for crash recovery: The two checkpoints in each
+log ﬁle are written on a rotating basis. Because of this
+method there always exists at least one valid checkpoint
+in the case of recovery. During crash recovery , 
+InnoDB loads the two checkpoints and compares their
+contents. Each checkpoint contains an eight byte long log
+sequence number (lsn). The lsn guarantees that the data
+pages contain all previous changes to the database (i.e.
+all entries with a smaller lsn). Therefore, each change
+that is not written to the disk has to be stored in the
+logs for crash recovery or rollbacks. InnoDB is forced to
+create the checkpoints in order to ﬂush data to the disk .
+Location in the log ﬁles: The two checkpoints are
+located in the log ﬁles ib_logfile0 and ib_logfile1
+at addresses 0x200 and 0x400 respectively. Every checkpoint
+has the same structure with a ﬁxed length of 304 bytes.
+A detailed explanation of the checkpoint structure can
+be found in Table II. When ﬂushing the log data to the
+disk, the current checkpoint information is written to
+the currently unﬁnished log block header by the method
+log_group_checkpoint() .
+Interpretation
+Log checkpoint number
+Log sequence number of checkpoint
+calculated
+log_group_calc_lsn_offset() 
+Size of the buffer (a ﬁxed value: 2 · 1024 · 1024)
+UNIV_LOG_ARCHIVE is not activated, InnoDB
+inserts FF FF FF FF FF FF FF FF here.
+Spacing and padding
+Checksum 1 (validating the contents from offset
+0x00 to 0x19F)
+Checksum 2 (validating the block without the log
+sequence number, but including checksum 1, i.e.
+values from 0x08 to0x124)
+Current fsp free limit in tablespace 0, given in units
+of one megabyte; used by ibbackup to decide if
+unused ends of non-auto-extending data ﬁles in space
+0 can be truncated 
+Magic number that tells if the checkpoint contains
+the ﬁeld above (added to InnoDB version 3.23.50
+INTERPRETATION OF THE CHECKPOINTS
+D. Structure of the Log Blocks
+The log ﬁle entries are stored in the log blocks (the log
+ﬁles are not organized in pages but in blocks). Every block
+allocates 512 byte of data, thus matching the standard
+disk sector size at the time of the implementation of
+InnoDB . Each block is separated into three parts:
+The log block header, data and the log block footer. This
+structure is used by InnoDB in order to provide better
+performance and to allows fast navigation in the logs.
+In the following subchapters, we discuss the structures
+of header and trailer records, in Section III we demonstrate
+how to reconstruct previous queries from the actual content
+of the log blocks.
+1) Log Block Header: The ﬁrst 14 bytes of each block
+are called the log block header. This header contains all the
+information needed by the InnoDB Storage Engine in order
+to manage and read the log data. After every 512 bytes
+InnoDB automatically creates a new header, thus generating
+a new log block. Since the log ﬁle header containing the
+header block, the checkpoints and additional padding is
+exactly 2048 bytes long, the absolute address of the ﬁrst
+log block header in a log ﬁle is 0x800.
+Interpretation
+Log block header number. If the most signiﬁcant bit
+is 1, the following block is the ﬁrst block in a log
+ﬂush write segment. .
+Number of bytes written to this block.
+Offset to the ﬁrst start of a log record group of this
+block (see II-D3 for further details).
+Number of the currently active checkpoint (see II-C).
+INTERPRETATION OF THE LOG BLOCK HEADER
+As described in Section II-C, the currently active log
+block always holds a reference to the currently active
+checkpoint. This information is updated every time log
+contents is ﬂushed to the disk.
+2) Log Block Trailer: The log block trailer only contains
+a checksum for veriﬁcation of the validity of the log block.
+Interpretation
+not contain the checksum but the same value as
+LOG_BLOCK_HDR_NO .
+INTERPRETATION OF THE LOG BLOCK TRAILER
+3) Splitting log entries over log blocks: In case a log
+entry is too big to ﬁt into the remaining space left in the
+currently active 512-byte log block, it is split over two log
+blocks. To this end, the currently active block is ﬁlled up
+until the last four bytes that are needed for the log block
+trailer. A new log block is then generated, holding a log
+block header and the remaining contents of the split log
+entry. The offset at position 0x04 and 0x05 in the log block
+header is used to specify the beginning of the next log entry,
+i.e. the byte after the end of the split entry (see Table 2).
+This is needed in order to identify the beginning of the next
+entry without having to refer to the log block before, thus
+enhancing navigation in the log ﬁle drastically.
+III. QUERY RECONSTRUCTION
+In this section we demonstrate how to reconstruct
+executed queries on the basis of information derived from
+the log ﬁles described in the last chapter. As several parts
+of the data are stored in a compressed form (see Appendix
+A), it is not always possible to give an exact length
+deﬁnition for each ﬁeld, since the length of these ﬁelds
+is determined by the decompression routine. These values
+are marked with a circle symbol (◦) in the ﬁeld “length”.
+Length deﬁnitions containing an asterisk are deﬁned by
+other ﬁelds in the log entry, whereas the number before the
+asterisk refers to the ﬁeld where the length was deﬁned.
+Splitting a log entry over two log blocks
+In this paper, we focus on the analysis of InnoDB’s new
+compact ﬁle format, which is recognized by the preﬁx
+mlog comp in the log types. Older versions of InnoDB logs
+need much more space and are not in the scope of this paper.
+In our analysis, we focus on three different basic
+statements, Insert, Delete and Update, since they form the
+majority of all log entries. Furthermore they are of main
+interest in most cases of forensic analysis.
+Descriptions of the log entries: Since the lengths,
+amounts and the positions of the relevant ﬁelds inside the
+log entries are highly variable, we refrain from giving any
+offsets for the data ﬁelds in question. In order to provide
+a certain amount of clarity, the ﬁelds are numbered in
+ascending order and ﬁelds being of the same type (e.g. a
+variable number of ﬁelds containing length deﬁnitions) are
+given the same value.
+A. Statement Identiﬁcation
+All log entries can be identiﬁed by their log entry type
+which is provided by the ﬁrst byte of each entry. A complete
+list of all existing log entry types can be found in the source
+code 3. However, for our forensic analysis, all information
+needed can be harvested from only a few, distinctive log
+entries (see Table IX).
+Description
+mlog undo insert
+Identiﬁes data manipulation statements.
+mlog comp rec insert
+Insertion of a new record.
+DISTINCTIVE LOG ENTRIES
+For every data manipulation statement, InnoDB creates at
+least one new log entry of the type mlog_undo_insert.
+3innobase/include/mtr0mtr.h
+This log type stores the identiﬁcation number of the affected
+table, an identiﬁer for the statement type (Insert, Update,
+Delete . . .), as well as additional information that is largely
+depending on the speciﬁc statements type.
+Interpretation
+Log entry type (always 0x14).
+Tablespace id.
+Length of the log entry.
+Data manipulation type.
+Rest of the log entry, depending on the data
+manipulation type.
+GENERAL STRUCTURE OF A MLOG UNDO INSERT LOG ENTRY
+The most important ﬁeld for the identiﬁcation of the
+statement is the ﬁeld holding the data manipulation type. In
+our analysis, we focus on the values for this key parameter
+shown in Table VII.
+Data manipulation type
+Description
+Insert statement.
+Update statement.
+Mark for Delete.
+ANALYZED VALUES FOR THE DATA MANIPULATION TYPE
+The form of each mlog_undo_insert log entry is
+very much depending on the content of the actual statement
+it represents. Therefore, there is no general structure for
+the log entries, but every type of entry is represented
+differently, to allow an economical form of storing the log
+entries without any padding. In the case of Update and
+Delete statements, the remaining log_undo_insert log
+entry speciﬁes the statement completely, whereas in the
+case of Inserts, the mlog_comp_rec_insert log entry
+following the log_undo_insert log entry provides
+information on parameters of the statement.
+B. Reconstructing Insert Statements
+In the case of Update or Delete statements, most of the
+information needed is stored in this mlog_undo_insert
+log entry, which is not valid in the case of Insert statements.
+In the course of inserting a new record into a table, InnoDB
+creates nine log entries in the log ﬁles (see Table VIII for
+an ordered list).
+this paper,
+mlog_comp_rec_insert-log entry (log entry code
+0x26) contains a variety of detailed information that can
+be used to reconstruct the logged Insert statement (the
+Log entry type
+Log entry type
+multi rec end
+undo hdr reuse
+undo insert
+comp rec insert
+Table VIII
+ALL LOG ENTRIES FOR AN INSERT STATEMENT
+identiﬁcation of the Insert statement was done by checking
+the data manipulation type in the mlog_undo_insert
+entry right before).
+Table IX gives a detailed description of the ﬁelds found
+inside the mlog_comp_rec_insert log entry for Insert
+statements.
+Interpretation
+Log entry type (ﬁxed value: 0x26)
+Tablespace ID
+Number of ﬁelds in this entry (n)
+Number of unique ﬁelds (nunique)
+Length of the 1st unique ﬁeld (primaryKey).
+Length entries for unique ﬁelds.
+Length of the last unique ﬁeld.
+Length of the transaction ID )
+Length of the data rollback pointer
+Length of the 1st non-unique column.
+deﬁnitions
+non-unique
+Length of the last non-unique column.
+Length of the end segment.
+Info and status bits.
+Origin offset.
+Mismatch index.
+Length of the 1st dynamic ﬁeld like varchar.
+Length entries for dynamic ﬁelds.
+Length of the last dynamic ﬁeld.
+Data for the ﬁrst unique column.
+Data for unique columns.
+Data for the last unique column.
+Transaction ID
+Data rollback pointer
+Data for the last non-unique column.
+Data for non-unique columns.
+Data for the ﬁrst non-unique column.
+MLOG COMP REC INSERT LOG ENTRY FOR INSERT STATEMENTS
+comp_rec_insert is quite complex. After the ﬁrst
+general log entry data ﬁelds (log entry type, tablespace ID
+and page ID), which also deﬁne the database table used,
+two data entries holding information on the columns of
+the underlying table are provided: n and nunique. n deﬁnes
+the number of data ﬁelds that can be expected in this
+log record, whereas nunique speciﬁes the number of data
+ﬁelds holding primary keys. The number n of data ﬁelds
+is not equal to the number of columns in the table, since
+deﬁnitions for system internal ﬁelds like the transaction
+ID and the data rollback pointer are stored in data ﬁelds too.
+Following the deﬁnition of nunique, the next 2·nunique bytes
+are reserved for the deﬁnition of the lengths of these unique
+columns, two bytes for each column. Furthermore, the
+lengths of data ﬁelds holding the transaction ID and the data
+rollback pointer are deﬁned. The following 2 · (n −nunique)
+bytes hold the length deﬁnitions for the columns that do not
+contain primary keys. It must be taken into account that the
+length deﬁnitions given in the section refer to the lengths
+deﬁned by the table deﬁnition, not the actual length of the
+inserted data. In case of static data types like int, the actual
+length is always the deﬁned length, however in the case of
+dynamic data types like varchar (containing data of variable
+length), the above mentioned length deﬁnitions only hold
+the ﬁxed value 0x8000. The actual length of the data to be
+inserted is deﬁned later in the log entry. Figure 3 shows
+the context between the length deﬁnitions and the data ﬁelds.
+The following bytes contain various information about
+the record which is not needed for the reconstruction of the
+Insert statement.
+The following ﬁelds hold the length information of
+all columns containing dynamic data types (the length
+deﬁnitions of these columns are ﬁlled with the ﬁxed value
+0x8000 as mentioned before), each one byte long and in
+compressed form (see Figure 3). The next ﬁve bytes are
+additional bytes and ﬂags, which are not needed for our
+forensic approach.
+Finally, the content of the inserted record is deﬁned
+column by column: The ﬁrst nunique ﬁelds hold the data of
+the primary key columns (lengths of the ﬁelds are deﬁned
+before in the record), followed by one ﬁeld holding the
+transaction ID and one ﬁeld holding the data rollback
+pointer. These are followed by the n −nunique −2 ﬁelds
+holding the non-primary key columns, lengths again with
+respect to the deﬁnitions given before at the start of the
+record. Still, for the correct interpretation of the data ﬁelds
+(especially the data type), knowledge on the underlying
+table deﬁnition is needed, which can be derived from an
+analysis of the .frm ﬁles .
+In case of Update statements, two log entries are
+needed for the reconstruction: The mlog_undo_insert
+log entry (which in case of Insert statements is only
+used for determining the statements type) is needed for
+Context between the data ﬁelds in a mlog comp rec insert log
+recovering the data that was overwritten, the following
+mlog_comp_rec_insert
+reconstructing the data that was inserted in the course of
+the Update. In this demonstration we focus on Update
+statements which do not change the value of a primary key,
+since these would result in more log entries and changes in
+the overall index structure.
+1) Reconstruction of the overwritten data: As InnoDB
+internally stores overwritten data for recovery and rollbacks,
+we focus on the mlog_undo_insert log entry for our
+forensic purposes.
+Interpretation
+Log entry type (ﬁxed value: 0x94).
+Tablespace ID
+Length of the log entry
+Data manipulation type (0x1C = update existing
+Last transaction ID on updated ﬁeld
+Last data rollback pointer
+Length of the primary key
+Affected primary key
+Number of changed ﬁelds
+Field id of ﬁrst changed ﬁeld
+Length of ﬁrst changed ﬁeld
+Overwritten data value of ﬁrst changed ﬁeld
+MLOG UNDO INSERT LOG ENTRY FOR UPDATE STATEMENTS
+For an interpretation of the ﬁrst ﬁve ﬁelds, please refer
+to section III-A.
+The next two bytes hold a table identiﬁer. This identiﬁer
+can also be found in the table deﬁnition (it is stored
+in the .frm ﬁles at address 0x26). In combination with
+this information it is possible to derive the name of the table.
+The next six bytes hold the transaction identiﬁcation
+number and the following compressed ﬁeld holds the
+data rollback pointer of the data ﬁeld. The transaction ID
+identiﬁes the last executed transaction before the Update.
+By using these references it is possible to reconstruct the
+complete history holding all changes of a data set, even
+spanning multiple Updates of the same records while
+maintaining the correct order.
+The following ﬁelds hold information on the updated
+primary ﬁelds involved. For each primary key, there is a
+ﬁeld holding the length of the new value (one byte) and
+one containing the updated value itself. This is repeated
+for every primary key of the underlying table, thus it is
+important to know the number of primary keys for the
+forensic analysis. The next byte deﬁnes the number of
+non-primary columns affected by the Update, therefore the
+following three ﬁelds exist for each updated non-primary
+column: The id of the changed ﬁeld, length information on
+the updated value and the new value for the ﬁeld.
+2) Reconstruction of the executed query: InnoDB creates
+a mlog comp rec insert log entry containing information
+on the newly inserted data after the mlog undo insert entry,
+i.e. the updating with new data is logged similar to an
+statement.
+mlog comp rec insert
+entry described in Section III-B, thus the only way to
+distinguish Update statements from Inserts lies in the
+evaluation of the mlog undo insert entry preceding the
+mlog comp rec insert entry.
+The reconstruction of Delete statements is similar to
+reconstructing Update queries. Basically, two forms of
+Delete operations have to be discerned: Physical deletion of
+a data row and execution of queries, which mark a record as
+deleted. In the current analysis we only consider the second
+form, since physical deletion can happen at an arbitrary time.
+Log records of statements which mark records as
+deleted are very short, they usually only generate four log
+entries. For forensic reconstruction, only the data in the
+mlog undo insert log entry is needed. Table XI shows
+the log entry for an executed Delete statement which
+is rather similar to the one generated in the course of
+an Update statement without information on the values
+of the deleted record, except the primary keys involved.
+Still, these can be identiﬁed by using ﬁeld number 7, the
+last transaction id on the deleted record. For an detailed
+interpretation of the log record, please refer to Section III-C.
+As a precondition for a correct analysis the number of
+primary keys of the table needs to be known. Otherwise it
+is not possible to calculate the number of affected primary
+key ﬁelds (ﬁelds 9 and 10). Note that this log record only
+gives information on the primary key of the record marked
+Interpretation
+Log entry type (ﬁxed value: 0x94).
+Tablespace ID
+Length of the log entry
+Data manipulation type (0x0E = delete record)
+Last transaction ID on deleted record
+Last data rollback pointer
+Length of the primary key
+Affected primary key
+Length of primaryKey ﬁeld
+PrimaryKey of deleted ﬁeld
+MLOG UNDO INSERT LOG ENTRY FOR DELETE STATEMENTS
+as deleted.
+IV. DEMONSTRATION
+In this section we demonstrate the techniques outlined in
+Section III by analyzing real-life log entries derived from a
+demonstration database.
+A. Demonstration database
+All examples in this Section are presented with respect
+to the following table model (listing in Table 1).
+Listing 1.
+Used table structure
+CREATE TABLE ‘ f r u i t s ‘
+‘ primaryKey ‘
+i n t (10) NOT NULL,
+‘ f i e l d 1 ‘
+varchar (255) NOT NULL,
+‘ f i e l d 2 ‘
+varchar (255) NOT NULL,
+‘ f i e l d 3 ‘
+varchar (255) NOT NULL,
+PRIMARY KEY ( ‘ primaryKey ‘ )
+) ENGINE=InnoDB DEFAULT CHARSET= u t f 8 ;
+varchar) in order to demonstrate the procedure of
+reconstruction. InnoDB stores values of an integer ﬁeld
+with a ﬁxed length of 4 bytes. The other ﬁelds of the
+type varchar have variable lengths, most other data
+types can be reconstructed in the same way except for the
+interpretation of their content. For our forensic analysis,
+knowledge on the exact table structure is required, which
+can be reconstructed from the table description ﬁle (.frm
+B. Reconstructing Inserts
+In our example we use the excerpt shown in Table XII
+containing a comp_rec_insert log entry. In order to
+improve the clarity of our example, the blocks inside the
+log entry are distinguished by colors.
+EXAMPLE FOR A COMP REC INSERT LOG ENTRY
+The ﬁrst entry (containing the value 0x26) marks the
+entry as comp_rec_insert log entry. The two bytes
+at offset 0x03 and 0x04 denote the number of data ﬁelds
+in this Insert statement (0x0006, i.e. 6 data ﬁelds), the
+two bytes at offset 0x05 and 0x06 the number of unique
+columns (0x0001, i.e. one unique column). Since two of the
+data ﬁelds are reserved for transaction ID and data rollback
+pointer, we can derive that four columns were inserted,
+with one being a column containing unique values. The
+length of the unique column is given in the two bytes at
+offset 0x07 and 0x08 (encoded as signed integers, thus
+0x8004 represents 4) followed by the length deﬁnitions for
+the transaction ID and data rollback pointer (0x8006 and
+0x8007 respectively). The length deﬁnitions for the three
+remaining data columns are set to the key value 0x8000,
+thus denoting columns of dynamic length — the values
+of the actual data inserted can be found at offsets 0x19,
+0x1A and 0x1B respectively (containing the values 0x04,
+0x05 and 0xA). Using the length deﬁnitions, the rest of
+the log entry can be split into the data inserted into the
+table: An unique column containing the value 0x80000004,
+transaction
+0x00000000332128)
+and a data rollback pointer (value 0x00000000332128),
+followed by the data in the non-unique columns number
+3 (value 0x73747261776265727279), number 2 (value
+0x6170706265) and number 1 (value 0x6B697769).
+Together with knowledge on the table model extracted
+from the corresponding .frm ﬁles, we can derive the correct
+interpretation of the data ﬁelds: The primary key ﬁeld holds
+an integer (4), the non-unique columns one to three ASCIIencoded strings (”kiwi”, ”apple” and ”strawberry”). Thus, it
+is possible to reconstruct the Insert statement (see Listing
+Listing 2.
+Reconstructed Insert Statement
+INSERT INTO f r u i t s
+( primaryKey ,
+f i e l d 1 ,
+f i e l d 2 ,
+f i e l d 3 )
+VALUES (4 ,
+’ s t r a w b e r r y ’ , ’ apple ’ , ’ kiwi ’ ) ;
+C. Reconstructing updated data
+In this demonstration, we reconstruct data that was overwritten by an Update statement. Since, from the logging
+Table XIII
+EXAMPLE OF A MLOG UNDO INSERT LOG ENTRY FOR AN UPDATE
+EXAMPLE OF A MLOG UNDO INSERT LOG ENTRY FOR A DELETE
+point of view, an Update can be considered as overwriting
+a data ﬁeld together with an additional Insert statement,
+we only demonstrate recovering the overwritten data, a
+demonstration on recovery of the inserted data can be found
+in Section IV-B.
+In our example we use the record shown in Table XIII.
+After interpreting the header identifying this log entry
+as an Update, the table ID (0x0068) (which is the Table
+“fruits” according to the .frm ﬁle), the last transaction id
+on the updated ﬁeld (0x000000004001) and the last data
+rollback pointer (0x0000332128) can be retrieved. The
+byte at address 0x13 identiﬁes the length of the value for
+the primary key ﬁeld (0x80000004), which is the signed
+integer representation of 4, i.e. the primary key ﬁeld with
+value 4 was updated. Furthermore, we conclude that one
+(address 0x00018) data ﬁeld, the fourth (address 0x00019),
+got changed and that the old value was 0x6170706C65, i.e.
+D. Reconstructing Deletes
+This example refers to the excerpt shown in Table XIV
+containing a mlog_undo_insert log entry. Again, the
+blocks inside the log entry are distinguished using colors.
+Together with knowledge on the table structure, we
+can reconstruct the query (see Listing 3): The row where
+the primary key with id one (addresses 0x18-0x0x1B)
+containing the original value 0x80000001 (addresses 0x20-
+0x23) was deleted.
+Listing 3.
+Reconstructed Delete statement
+DELETE FROM f r u i t s
+WHERE primaryKey =1;
+E. Prototype implementation
+We validated our approach described in this paper with
+a prototype implementation written in Java. Our tool ﬁrst
+analyzes the structure of an InnoDB table based on the
+its format stored in the table deﬁnition ﬁle (.frm). As
+described in the paper, the table’s structure is ultimately
+required for further analysis of the redo log ﬁles as it is used
+for calculating offsets in the log ﬁles, which are parsed in
+the second analysis step performed by our tool. We assume
+a static table structure, thus, Alter table statements are
+not supported in the current version of the tool. The result
+of the analysis is a history of Insert, Delete and Update
+statements. Additional types of SQL statements can be added
+easily because of the modular architecture of the tool. It
+allows deep insights into the history of a InnoDB table, thus
+it’s main application area is the forensic investigation of a
+MySQL database using InnoDB as storage engine.
+V. CONCLUSION
+reconstructing
+statements
+redo logs. Our techniques make it possible to gain deep
+insights in the complete history of tables, including the
+possibility of restoring deleted or updated values. Since
+InnoDB stores log information for every single transaction,
+these methods are to be considered powerful allies in
+the task of reconstructing whole timelines and table
+histories for forensic purposes. We veriﬁed our methods by
+implementing a prototype for recovering Insert, Delete and
+Update statements.
+For future research we aim at raising the prototype version
+of our forensic tool to a more enhanced state, which includes
+the ability of recovering data in more complex scenarios with
+DDL (Data Deﬁnition Language) statements such as Create
+Table/Alter Table/Drop Table.
+InnoDB uses a special compression method for writing
+unsigned integers (smaller than 232), where the most significant bits (msbs) are used to store the length of the data.
+Table XV gives an overview on the encoding-modes.
+First byte
+Compressed data
+The ﬁrst byte is interpreted as number smaller than 128.
+The ﬁrst byte is xored with 0x80, this and the second
+byte are interpreted as number.
+The ﬁrst byte is xored with 0xC0, this and the following
+two bytes are interpreted as number.
+1110[rest]
+The ﬁrst byte is xored with 0xE0, this and the following
+three bytes are interpreted as number.
+1111[rest]
+The ﬁrst byte is omitted, the following 4 bytes are
+interpreted as number.
+COMPRESSING UNSIGNED INTEGERS
+ACKNOWLEDGMENTS
+The research was funded by COMET K1 and grant
+825747 by the FFG - Austrian Research Promotion Agency.

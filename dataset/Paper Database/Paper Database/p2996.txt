@@ -1,0 +1,534 @@
+Learning Transferable Architectures for Scalable Image Recognition
+Barret Zoph
+Google Brain
+ 
+Vijay Vasudevan
+Google Brain
+ 
+Jonathon Shlens
+Google Brain
+ 
+Quoc V. Le
+Google Brain
+ 
+Developing neural network image classiﬁcation models
+often requires signiﬁcant architecture engineering. In this
+paper, we study a method to learn the model architectures
+directly on the dataset of interest. As this approach is expensive when the dataset is large, we propose to search for
+an architectural building block on a small dataset and then
+transfer the block to a larger dataset. The key contribution of this work is the design of a new search space (which
+we call the “NASNet search space”) which enables transferability. In our experiments, we search for the best convolutional layer (or “cell”) on the CIFAR-10 dataset and
+then apply this cell to the ImageNet dataset by stacking together more copies of this cell, each with their own parameters to design a convolutional architecture, which we name
+a “NASNet architecture”. We also introduce a new regularization technique called ScheduledDropPath that significantly improves generalization in the NASNet models. On
+CIFAR-10 itself, a NASNet found by our method achieves
+2.4% error rate, which is state-of-the-art. Although the cell
+is not searched for directly on ImageNet, a NASNet constructed from the best cell achieves, among the published
+works, state-of-the-art accuracy of 82.7% top-1 and 96.2%
+top-5 on ImageNet. Our model is 1.2% better in top-1 accuracy than the best human-invented architectures while having 9 billion fewer FLOPS – a reduction of 28% in computational demand from the previous state-of-the-art model.
+When evaluated at different levels of computational cost,
+accuracies of NASNets exceed those of the state-of-the-art
+human-designed models. For instance, a small version of
+NASNet also achieves 74% top-1 accuracy, which is 3.1%
+better than equivalently-sized, state-of-the-art models for
+mobile platforms. Finally, the image features learned from
+image classiﬁcation are generically useful and can be transferred to other computer vision problems. On the task of object detection, the learned features by NASNet used with the
+Faster-RCNN framework surpass state-of-the-art by 4.0%
+achieving 43.1% mAP on the COCO dataset.
+1. Introduction
+Developing neural network image classiﬁcation models
+often requires signiﬁcant architecture engineering. Starting
+from the seminal work of on using convolutional architectures for ImageNet classiﬁcation, successive advancements through architecture engineering have
+achieved impressive results .
+In this paper, we study a new paradigm of designing convolutional architectures and describe a scalable method to
+optimize convolutional architectures on a dataset of interest, for instance the ImageNet classiﬁcation dataset. Our
+approach is inspired by the recently proposed Neural Architecture Search (NAS) framework , which uses a reinforcement learning search method to optimize architecture conﬁgurations.
+Applying NAS, or any other search
+methods, directly to a large dataset, such as the ImageNet
+dataset, is however computationally expensive. We therefore propose to search for a good architecture on a proxy
+dataset, for example the smaller CIFAR-10 dataset, and then
+transfer the learned architecture to ImageNet. We achieve
+this transferrability by designing a search space (which we
+call “the NASNet search space”) so that the complexity of
+the architecture is independent of the depth of the network
+and the size of input images. More concretely, all convolutional networks in our search space are composed of convolutional layers (or “cells”) with identical structure but different weights. Searching for the best convolutional architectures is therefore reduced to searching for the best cell
+structure. Searching for the best cell structure has two main
+beneﬁts: it is much faster than searching for an entire network architecture and the cell itself is more likely to generalize to other problems. In our experiments, this approach
+signiﬁcantly accelerates the search for the best architectures
+using CIFAR-10 by a factor of 7× and learns architectures
+that successfully transfer to ImageNet.
+Our main result is that the best architecture found on
+CIFAR-10, called NASNet, achieves state-of-the-art accuracy when transferred to ImageNet classiﬁcation without much modiﬁcation. On ImageNet, NASNet achieves,
+among the published works, state-of-the-art accuracy of
+82.7% top-1 and 96.2% top-5. This result amounts to a
+ 
+1.2% improvement in top-1 accuracy than the best humaninvented architectures while having 9 billion fewer FLOPS.
+On CIFAR-10 itself, NASNet achieves 2.4% error rate,
+which is also state-of-the-art.
+Additionally, by simply varying the number of the convolutional cells and number of ﬁlters in the convolutional
+cells, we can create different versions of NASNets with different computational demands. Thanks to this property of
+the cells, we can generate a family of models that achieve
+accuracies superior to all human-invented models at equivalent or smaller computational budgets . Notably,
+the smallest version of NASNet achieves 74.0% top-1 accuracy on ImageNet, which is 3.1% better than previously
+engineered architectures targeted towards mobile and embedded vision tasks .
+Finally, we show that the image features learned by
+NASNets are generically useful and transfer to other computer vision problems.
+In our experiments, the features
+learned by NASNets from ImageNet classiﬁcation can be
+combined with the Faster-RCNN framework to achieve
+state-of-the-art on COCO object detection task for both the
+largest as well as mobile-optimized models. Our largest
+NASNet model achieves 43.1% mAP, which is 4% better
+than previous state-of-the-art.
+2. Related Work
+The proposed method is related to previous work in hyperparameter optimization – especially recent approaches in designing architectures such
+as Neural Fabrics , DiffRNN , MetaQNN and
+DeepArchitect . A more ﬂexible class of methods for
+designing architecture is evolutionary algorithms , yet they have not had as much success
+at large scale. Xie and Yuille also transferred learned
+architectures from CIFAR-10 to ImageNet but performance
+of these models (top-1 accuracy 72.1%) are notably below
+previous state-of-the-art (Table 2).
+The concept of having one neural network interact with a
+second neural network to aid the learning process, or learning to learn or meta-learning has attracted much
+attention in recent years . Most
+of these approaches have not been scaled to large problems
+like ImageNet. An exception is the recent work focused
+on learning an optimizer for ImageNet classiﬁcation that
+achieved notable improvements .
+The design of our search space took much inspiration from LSTMs , and Neural Architecture Search
+Cell . The modular structure of the convolutional cell is
+also related to previous methods on ImageNet such as VGG
+ , Inception , ResNet/ResNext , and
+Xception/MobileNet .
+Our work makes use of search methods to ﬁnd good convolutional architectures on a dataset of interest. The main
+search method we use in this work is the Neural Architecture Search (NAS) framework proposed by . In NAS,
+a controller recurrent neural network (RNN) samples child
+networks with different architectures. The child networks
+are trained to convergence to obtain some accuracy on a
+held-out validation set. The resulting accuracies are used
+to update the controller so that the controller will generate
+better architectures over time. The controller weights are
+updated with policy gradient (see Figure 1).
+The controller (RNN)
+Train a child network!
+with architecture A to !
+convergence to get !
+validation accuracy R
+Sample architecture A!
+with probability p
+Scale gradient of p by R!
+to update the controller
+Figure 1. Overview of Neural Architecture Search . A controller RNN predicts architecture A from a search space with probability p. A child network with architecture A is trained to convergence achieving accuracy R. Scale the gradients of p by R to
+update the RNN controller.
+The main contribution of this work is the design of a
+novel search space, such that the best architecture found
+on the CIFAR-10 dataset would scale to larger, higherresolution image datasets across a range of computational
+We name this search space the NASNet search
+space as it gives rise to NASNet, the best architecture found
+in our experiments. One inspiration for the NASNet search
+space is the realization that architecture engineering with
+CNNs often identiﬁes repeated motifs consisting of combinations of convolutional ﬁlter banks, nonlinearities and a
+prudent selection of connections to achieve state-of-the-art
+results (such as the repeated modules present in the Inception and ResNet models ). These observations suggest that it may be possible for the controller RNN
+to predict a generic convolutional cell expressed in terms of
+these motifs. This cell can then be stacked in series to handle inputs of arbitrary spatial dimensions and ﬁlter depth.
+In our approach, the overall architectures of the convolutional nets are manually predetermined. They are composed of convolutional cells repeated many times where
+each convolutional cell has the same architecture, but different weights. To easily build scalable architectures for
+images of any size, we need two types of convolutional cells
+to serve two main functions when taking in a feature map
+Figure 2. Scalable architectures for image classiﬁcation consist of
+two repeated motifs termed Normal Cell and Reduction Cell. This
+diagram highlights the model architecture for CIFAR-10 and ImageNet. The choice for the number of times the Normal Cells that
+gets stacked between reduction cells, N, can vary in our experiments.
+as input: (1) convolutional cells that return a feature map of
+the same dimension, and (2) convolutional cells that return
+a feature map where the feature map height and width is reduced by a factor of two. We name the ﬁrst type and second
+type of convolutional cells Normal Cell and Reduction Cell
+respectively. For the Reduction Cell, we make the initial
+operation applied to the cell’s inputs have a stride of two to
+reduce the height and width. All of our operations that we
+consider for building our convolutional cells have an option
+of striding.
+Figure 2 shows our placement of Normal and Reduction
+Cells for CIFAR-10 and ImageNet. Note on ImageNet we
+have more Reduction Cells, since the incoming image size
+is 299x299 compared to 32x32 for CIFAR. The Reduction
+and Normal Cell could have the same architecture, but we
+empirically found it beneﬁcial to learn two separate architectures. We use a common heuristic to double the number
+of ﬁlters in the output whenever the spatial activation size is
+reduced in order to maintain roughly constant hidden state
+dimension . Importantly, much like Inception and
+ResNet models , we consider the number of
+motif repetitions N and the number of initial convolutional
+ﬁlters as free parameters that we tailor to the scale of an
+image classiﬁcation problem.
+What varies in the convolutional nets is the structures of
+the Normal and Reduction Cells, which are searched by the
+controller RNN. The structures of the cells can be searched
+within a search space deﬁned as follows (see Appendix,
+Figure 7 for schematic). In our search space, each cell receives as input two initial hidden states hi and hi−1 which
+are the outputs of two cells in previous two lower layers
+or the input image. The controller RNN recursively predicts the rest of the structure of the convolutional cell, given
+these two initial hidden states (Figure 3). The predictions
+of the controller for each cell are grouped into B blocks,
+where each block has 5 prediction steps made by 5 distinct
+softmax classiﬁers corresponding to discrete choices of the
+elements of a block:
+Step 1. Select a hidden state from hi, hi−1 or from the set of hidden
+states created in previous blocks.
+Step 2. Select a second hidden state from the same options as in Step 1.
+Step 3. Select an operation to apply to the hidden state selected in Step 1.
+Step 4. Select an operation to apply to the hidden state selected in Step 2.
+Step 5. Select a method to combine the outputs of Step 3 and 4 to create
+a new hidden state.
+The algorithm appends the newly-created hidden state to
+the set of existing hidden states as a potential input in subsequent blocks. The controller RNN repeats the above 5
+prediction steps B times corresponding to the B blocks in
+a convolutional cell. In our experiments, selecting B = 5
+provides good results, although we have not exhaustively
+searched this space due to computational limitations.
+In steps 3 and 4, the controller RNN selects an operation
+to apply to the hidden states. We collected the following set
+of operations based on their prevalence in the CNN literature:
+• identity
+• 1x3 then 3x1 convolution
+• 1x7 then 7x1 convolution
+• 3x3 dilated convolution
+• 3x3 average pooling
+• 3x3 max pooling
+• 5x5 max pooling
+• 7x7 max pooling
+• 1x1 convolution
+• 3x3 convolution
+• 3x3 depthwise-separable conv
+• 5x5 depthwise-seperable conv
+• 7x7 depthwise-separable conv
+In step 5 the controller RNN selects a method to combine
+the two hidden states, either (1) element-wise addition between two hidden states or (2) concatenation between two
+hidden states along the ﬁlter dimension. Finally, all of the
+unused hidden states generated in the convolutional cell are
+concatenated together in depth to provide the ﬁnal cell output.
+To allow the controller RNN to predict both Normal Cell
+and Reduction Cell, we simply make the controller have
+2 × 5B predictions in total, where the ﬁrst 5B predictions
+are for the Normal Cell and the second 5B predictions are
+for the Reduction Cell.
+controller!
+hidden layer
+Select one!
+hidden state
+Select second!
+hidden state
+Select operation for !
+ﬁrst hidden state
+Select operation for!
+second hidden state
+Select method to!
+combine hidden state
+repeat B times
+new hidden layer
+3 x 3 conv
+2 x 2 maxpool
+hidden layer B
+hidden layer A
+Figure 3. Controller model architecture for recursively constructing one block of a convolutional cell. Each block requires selecting 5
+discrete parameters, each of which corresponds to the output of a softmax layer. Example constructed block shown on right. A convolutional cell contains B blocks, hence the controller contains 5B softmax layers for predicting the architecture of a convolutional cell. In our
+experiments, the number of blocks B is 5.
+Finally, our work makes use of the reinforcement learning proposal in NAS ; however, it is also possible to
+use random search to search for architectures in the NAS-
+Net search space. In random search, instead of sampling
+the decisions from the softmax classiﬁers in the controller
+RNN, we can sample the decisions from the uniform distribution. In our experiments, we ﬁnd that random search is
+slightly worse than reinforcement learning on the CIFAR-
+10 dataset. Although there is value in using reinforcement
+learning, the gap is smaller than what is found in the original
+work of . This result suggests that 1) the NASNet search
+space is well-constructed such that random search can perform reasonably well and 2) random search is a difﬁcult
+baseline to beat. We will compare reinforcement learning
+against random search in Section 4.4.
+4. Experiments and Results
+In this section, we describe our experiments with the
+method described above to learn convolutional cells.
+summary, all architecture searches are performed using the
+CIFAR-10 classiﬁcation task . The controller RNN was
+trained using Proximal Policy Optimization (PPO) by
+employing a global workqueue system for generating a pool
+of child networks controlled by the RNN. In our experiments, the pool of workers in the workqueue consisted of
+The result of this search process over 4 days yields several candidate convolutional cells. We note that this search
+procedure is almost 7× faster than previous approaches 
+that took 28 days.1 Additionally, we demonstrate below that
+the resulting architecture is superior in accuracy.
+Figure 4 shows a diagram of the top performing Normal
+Cell and Reduction Cell. Note the prevalence of separable
+1In particular, we note that previous architecture search used 800
+GPUs for 28 days resulting in 22,400 GPU-hours. The method in this paper uses 500 GPUs across 4 days resulting in 2,000 GPU-hours. The former effort used Nvidia K40 GPUs, whereas the current efforts used faster
+NVidia P100s. Discounting the fact that the we use faster hardware, we
+estimate that the current procedure is roughly about 7× more efﬁcient.
+convolutions and the number of branches compared with
+competing architectures . Subsequent
+experiments focus on this convolutional cell architecture,
+although we examine the efﬁcacy of other, top-ranked convolutional cells in ImageNet experiments (described in Appendix B) and report their results as well. We call the three
+networks constructed from the best three searches NASNet-
+A, NASNet-B and NASNet-C.
+We demonstrate the utility of the convolutional cells by
+employing this learned architecture on CIFAR-10 and a
+family of ImageNet classiﬁcation tasks. The latter family of
+tasks is explored across a few orders of magnitude in computational budget. After having learned the convolutional
+cells, several hyper-parameters may be explored to build a
+ﬁnal network for a given task: (1) the number of cell repeats
+N and (2) the number of ﬁlters in the initial convolutional
+cell. After selecting the number of initial ﬁlters, we use a
+common heuristic to double the number of ﬁlters whenever
+the stride is 2. Finally, we deﬁne a simple notation, e.g.,
+4 @ 64, to indicate these two parameters in all networks,
+where 4 and 64 indicate the number of cell repeats and the
+number of ﬁlters in the penultimate layer of the network,
+respectively.
+For complete details of of the architecture learning algorithm and the controller system, please refer to Appendix A.
+Importantly, when training NASNets, we discovered ScheduledDropPath, a modiﬁed version of DropPath , to be
+an effective regularization method for NASNet. In Drop-
+Path , each path in the cell is stochastically dropped
+with some ﬁxed probability during training. In our modiﬁed version, ScheduledDropPath, each path in the cell is
+dropped out with a probability that is linearly increased
+over the course of training. We ﬁnd that DropPath does not
+work well for NASNets, while ScheduledDropPath signiﬁcantly improves the ﬁnal performance of NASNets in both
+CIFAR and ImageNet experiments.
+Normal Cell
+Reduction Cell
+Figure 4. Architecture of the best convolutional cells (NASNet-A) with B = 5 blocks identiﬁed with CIFAR-10 . The input (white) is the
+hidden state from previous activations (or input image). The output (pink) is the result of a concatenation operation across all resulting
+branches. Each convolutional cell is the result of B blocks. A single block is corresponds to two primitive operations (yellow) and a
+combination operation (green). Note that colors correspond to operations in Figure 3.
+4.1. Results on CIFAR-10 Image Classiﬁcation
+For the task of image classiﬁcation with CIFAR-10, we
+set N = 4 or 6 (Figure 2).
+The test accuracies of the
+best architectures are reported in Table 1 along with other
+state-of-the-art models. As can be seen from the Table, a
+large NASNet-A model with cutout data augmentation 
+achieves a state-of-the-art error rate of 2.40% (averaged
+across 5 runs), which is slightly better than the previous
+best record of 2.56% by . The best single run from our
+model achieves 2.19% error rate.
+4.2. Results on ImageNet Image Classiﬁcation
+We performed several sets of experiments on ImageNet
+with the best convolutional cells learned from CIFAR-10.
+We emphasize that we merely transfer the architectures
+from CIFAR-10 but train all ImageNet models weights from
+Results are summarized in Table 2 and 3 and Figure 5.
+In the ﬁrst set of experiments, we train several image classiﬁcation systems operating on 299x299 or 331x331 resolution images with different experiments scaled in computational demand to create models that are roughly on par
+in computational cost with Inception-v2 , Inception-v3
+ and PolyNet . We show that this family of models achieve state-of-the-art performance with fewer ﬂoating
+point operations and parameters than comparable architectures. Second, we demonstrate that by adjusting the scale
+of the model we can achieve state-of-the-art performance
+at smaller computational budgets, exceeding streamlined
+CNNs hand-designed for this operating regime .
+Note we do not have residual connections between convolutional cells as the models learn skip connections on
+their own. We empirically found manually inserting residual connections between cells to not help performance. Our
+training setup on ImageNet is similar to , but please see
+Appendix A for details.
+Table 2 shows that the convolutional cells discovered with CIFAR-10 generalize well to ImageNet problems.
+In particular, each model based on the convolutional cells exceeds the predictive performance of the corresponding hand-designed model. Importantly, the largest
+model achieves a new state-of-the-art performance for ImageNet (82.7%) based on single, non-ensembled predictions,
+surpassing previous best published result by ∼1.2% .
+Among the unpublished works, our model is on par with
+the best reported result of 82.7% , while having significantly fewer ﬂoating point operations. Figure 5 shows a
+complete summary of our results in comparison with other
+published results. Note the family of models based on convolutional cells provides an envelope over a broad class of
+human-invented architectures.
+Finally, we test how well the best convolutional cells
+may perform in a resource-constrained setting, e.g., mobile
+devices (Table 3). In these settings, the number of ﬂoating point operations is severely constrained and predictive
+performance must be weighed against latency requirements
+on a device with limited computational resources.
+MobileNet and ShufﬂeNet provide state-of-the-art results obtaining 70.6% and 70.9% accuracy, respectively on
+error rate (%)
+DenseNet (L = 40, k = 12) 
+DenseNet(L = 100, k = 12) 
+DenseNet (L = 100, k = 24) 
+DenseNet-BC (L = 100, k = 40) 
+Shake-Shake 26 2x32d 
+Shake-Shake 26 2x96d 
+Shake-Shake 26 2x96d + cutout 
+NAS v3 
+NAS v3 
+NASNet-A (6 @ 768)
+NASNet-A (6 @ 768) + cutout
+NASNet-A (7 @ 2304)
+NASNet-A (7 @ 2304) + cutout
+NASNet-B (4 @ 1152)
+NASNet-C (4 @ 640)
+Table 1. Performance of Neural Architecture Search and other state-of-the-art models on CIFAR-10. All results for NASNet are the mean
+accuracy across 5 runs.
+# Mult-Add operations (millions)
+accuracy (precision @1)
+Inception-v1
+Inception-v3
+Inception-v2
+ResNeXt-101
+ResNet-152
+Inception-v4
+Inception-ResNet-v2
+NASNet-A (6 @ 4032)
+NASNet-A 
+NASNet-A (5 @ 1538)
+NASNet-A (4 @ 1056)
+# parameters (millions)
+accuracy (precision @1)
+NASNet-A (5 @ 1538)
+NASNet-A (4 @ 1056)
+Inception-v1
+ResNeXt-101
+Inception-v2
+Inception-v4
+Inception-ResNet-v2
+ResNet-152
+Inception-v3
+NASNet-A (6 @ 4032)
+NASNet-A 
+Figure 5. Accuracy versus computational demand (left) and number of parameters (right) across top performing published CNN architectures on ImageNet 2012 ILSVRC challenge prediction task. Computational demand is measured in the number of ﬂoating-point multiplyadd operations to process a single image. Black circles indicate previously published results and red squares highlight our proposed
+224x224 images using ∼550M multliply-add operations.
+An architecture constructed from the best convolutional
+cells achieves superior predictive performance (74.0% accuracy) surpassing previous models but with comparable
+computational demand.
+In summary, we ﬁnd that the
+learned convolutional cells are ﬂexible across model scales
+achieving state-of-the-art performance across almost 2 orders of magnitude in computational budget.
+4.3. Improved features for object detection
+Image classiﬁcation networks provide generic image features that may be transferred to other computer vision problems . One of the most important problems is the spatial localization of objects within an image.
+To further
+validate the performance of the family of NASNet-A networks, we test whether object detection systems derived
+from NASNet-A lead to improvements in object detection
+To address this question, we plug in the family of
+NASNet-A networks pretrained on ImageNet into the
+Faster-RCNN object detection pipeline using an opensource software platform . We retrain the resulting object detection pipeline on the combined COCO training plus
+validation dataset excluding 8,000 mini-validation images.
+image size
+# parameters
+Top 1 Acc. (%)
+Top 5 Acc. (%)
+Inception V2 
+NASNet-A (5 @ 1538)
+Inception V3 
+Xception 
+Inception ResNet V2 
+NASNet-A 
+ResNeXt-101 (64 x 4d) 
+PolyNet 
+DPN-131 
+SENet 
+NASNet-A (6 @ 4032)
+Table 2. Performance of architecture search and other published state-of-the-art models on ImageNet classiﬁcation. Mult-Adds indicate
+the number of composite multiply-accumulate operations for a single image. Note that the composite multiple-accumulate operations are
+calculated for the image size reported in the table. Model size for calculated from open-source implementation.
+# parameters
+Top 1 Acc. (%)
+Top 5 Acc. (%)
+Inception V1 
+MobileNet-224 
+ShufﬂeNet (2x) 
+NASNet-A (4 @ 1056)
+NASNet-B (4 @ 1536)
+NASNet-C (3 @ 960)
+Table 3. Performance on ImageNet classiﬁcation on a subset of models operating in a constrained computational setting, i.e., < 1.5 B
+multiply-accumulate operations per image. All models use 224x224 images. † indicates top-1 accuracy not reported in but from
+open-source implementation.
+resolution
+mAP (mini-val)
+mAP (test-dev)
+MobileNet-224 
+ShufﬂeNet (2x) 
+NASNet-A (4 @ 1056)
+ResNet-101-FPN 
+800 (short side)
+Inception-ResNet-v2 (G-RMI) 
+Inception-ResNet-v2 (TDM) 
+600 × 1000
+NASNet-A (6 @ 4032)
+NASNet-A (6 @ 4032)
+1200 × 1200
+ResNet-101-FPN (RetinaNet) 
+800 (short side)
+Table 4. Object detection performance on COCO on mini-val and test-dev datasets across a variety of image featurizations. All results
+are with the Faster-RCNN object detection framework from a single crop of an image. Top rows highlight mobile-optimized image
+featurizations, while bottom rows indicate computationally heavy image featurizations geared towards achieving best results. All mini-val
+results employ the same 8K subset of validation images in .
+We perform single model evaluation using 300-500 RPN
+proposals per image. In other words, we only pass a single image through a single network. We evaluate the model
+on the COCO mini-val and test-dev dataset and report
+the mean average precision (mAP) as computed with the
+standard COCO metric library . We perform a simple
+search over learning rate schedules to identify the best possible model. Finally, we examine the behavior of two object
+detection systems employing the best performing NASNet-
+A image featurization (NASNet-A, 6 @ 4032) as well as
+the image featurization geared towards mobile platforms
+(NASNet-A, 4 @ 1056).
+For the mobile-optimized network, our resulting system
+achieves a mAP of 29.6% – exceeding previous mobileoptimized networks that employ Faster-RCNN by over
+5.0% (Table 4). For the best NASNet network, our resulting
+network operating on images of the same spatial resolution
+(800 × 800) achieves mAP = 40.7%, exceeding equivalent
+object detection systems based off lesser performing image
+featurization (i.e. Inception-ResNet-v2) by 4.0% 
+(see Appendix for example detections on images and sideby-side comparisons). Finally, increasing the spatial resolution of the input image results in the best reported, single
+model result for object detection of 43.1%, surpassing the
+best previous best by over 4.0% .2 These results provide
+further evidence that NASNet provides superior, generic
+image features that may be transferred across other computer vision tasks. Figure 10 and Figure 11 in Appendix C
+show four examples of object detection results produced by
+NASNet-A with the Faster-RCNN framework.
+4.4. Efﬁciency of architecture search methods
+Number of Models Sampled
+Accuracy at 20 Epochs
+RL Top 1 Unique Models
+RL Top 5 Unique Models
+RL Top 25 Unique Models
+RS Top 1 Unique Models
+RS Top 5 Unique Models
+RS Top 25 Unique Models
+Figure 6. Comparing the efﬁciency of random search (RS) to reinforcement learning (RL) for learning neural architectures. The
+x-axis measures the total number of model architectures sampled,
+and the y-axis is the validation performance on CIFAR-10 after 20
+epochs of training.
+Though what search method to use is not the focus of
+the paper, an open question is how effective is the reinforcement learning search method. In this section, we study
+the effectiveness of reinforcement learning for architecture
+search on the CIFAR-10 image classiﬁcation problem and
+compare it to brute-force random search (considered to be
+a very strong baseline for black-box optimization ) given
+an equivalent amount of computational resources.
+Figure 6 shows the performance of reinforcement learning (RL) and random search (RS) as more model architec-
+2A primary advance in the best reported object detection system is the
+introduction of a novel loss . Pairing this loss with NASNet-A image
+featurization may lead to even further performance gains. Additionally,
+performance gains are achievable through ensembling multiple inferences
+across multiple model instances and image crops (e.g., ).
+tures are sampled. Note that the best model identiﬁed with
+RL is signiﬁcantly better than the best model found by RS
+by over 1% as measured by on CIFAR-10. Additionally, RL
+ﬁnds an entire range of models that are of superior quality
+to random search. We observe this in the mean performance
+of the top-5 and top-25 models identiﬁed in RL versus RS.
+We take these results to indicate that although RS may provide a viable search strategy, RL ﬁnds better architectures
+in the NASNet search space.
+5. Conclusion
+In this work, we demonstrate how to learn scalable, convolutional cells from data that transfer to multiple image
+classiﬁcation tasks. The learned architecture is quite ﬂexible as it may be scaled in terms of computational cost
+and parameters to easily address a variety of problems. In
+all cases, the accuracy of the resulting model exceeds all
+human-designed models – ranging from models designed
+for mobile applications to computationally-heavy models
+designed to achieve the most accurate results.
+The key insight in our approach is to design a search
+space that decouples the complexity of an architecture from
+the depth of a network. This resulting search space permits identifying good architectures on a small dataset (i.e.,
+CIFAR-10) and transferring the learned architecture to image classiﬁcations across a range of data and computational
+The resulting architectures approach or exceed stateof-the-art performance in both CIFAR-10 and ImageNet
+datasets with less computational demand than humandesigned architectures .
+The ImageNet results are particularly important because many state-of-theart computer vision problems (e.g., object detection ,
+face detection , image localization ) derive image features or architectures from ImageNet classiﬁcation
+For instance, we ﬁnd that image features obtained from ImageNet used in combination with the Faster-
+RCNN framework achieves state-of-the-art object detection
+results. Finally, we demonstrate that we can use the resulting learned architecture to perform ImageNet classiﬁcation with reduced computational budgets that outperform
+streamlined architectures targeted to mobile and embedded
+platforms .

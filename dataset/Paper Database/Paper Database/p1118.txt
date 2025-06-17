@@ -1,0 +1,558 @@
+Domain-adaptive deep network compression
+Marc Masana, Joost van de Weijer, Luis Herranz
+CVC, Universitat Aut`onoma de Barcelona
+Barcelona, Spain
+{mmasana,joost,lherranz}@cvc.uab.es
+Andrew D. Bagdanov
+MICC, University of Florence
+Florence, Italy
+ 
+Jose M ´Alvarez
+Toyota Research Institute
+ 
+Deep Neural Networks trained on large datasets can be
+easily transferred to new domains with far fewer labeled
+examples by a process called ﬁne-tuning. This has the advantage that representations learned in the large source domain can be exploited on smaller target domains. However,
+networks designed to be optimal for the source task are often prohibitively large for the target task. In this work we
+address the compression of networks after domain transfer.
+We focus on compression algorithms based on low-rank
+matrix decomposition. Existing methods base compression
+solely on learned network weights and ignore the statistics of network activations. We show that domain transfer leads to large shifts in network activations and that it
+is desirable to take this into account when compressing.
+We demonstrate that considering activation statistics when
+compressing weights leads to a rank-constrained regression
+problem with a closed-form solution. Because our method
+takes into account the target domain, it can more optimally
+remove the redundancy in the weights. Experiments show
+that our Domain Adaptive Low Rank (DALR) method signiﬁcantly outperforms existing low-rank compression techniques. With our approach, the fc6 layer of VGG19 can be
+compressed more than 4x more than using truncated SVD
+alone – with only a minor or no loss in accuracy. When
+applied to domain-transferred networks it allows for compression down to only 5-20% of the original number of parameters with only a minor drop in performance.
+1. Introduction
+One of the important factors in the success of deep learning for computer vision is the ease with which features,
+pre-trained on large datasets such as Imagenet and
+Places2 , can be transferred to other computer vision
+: input fc6 (size 25088)
+:input fc7 (size 4096)
+output fc7 (size 4096)
+: input fc6 (size 25088)
+:input fc7 (size 4096)
+output fc7 (size 4096)
+Figure 1. Example of compressing last two layers of the VGG-16
+network (fc6, fc7). The original weight matrix is approximated by
+two matrices. The main novelty in this paper is that we consider
+the input X of each layer when compressing the corresponding
+weight matrix W. This is especially relevant when doing domain
+transfer from pre-trained networks where activation statistics can
+be signiﬁcantly skewed in the target domain.
+domains. These new domains often have far fewer labeled
+samples available but which, due to the high correlation
+which exists between visual data in general, can exploit an
+already learned representation trained on large datasets. The
+most popular method to transfer the representations is by
+means of ﬁne-tuning, where the network is initialized with
+the pre-trained network weights, after which they are further adjusted on the smaller target domain . These ﬁnetuned networks, which have the same size as the originally
+trained network, can then be applied to the task of the target domain. However, one must question whether a target
+domain task requires such a large network and whether the
+resulting network is not highly redundant.
+ 
+A drawback of Convolutional Neural Networks (CNNs)
+is that they generally require large amounts of memory and
+computational power (often provided by GPU). As a result
+they are less suitable for small devices, like cell phones,
+where requirements for energy efﬁciency limit CPU, GPU,
+and memory usage. This observation has motivated much
+research into network compression.
+Approaches include
+methods based on weight quantization , weight
+removal from fully-connected or convolutional layers , compact representations of convolutional layers
+through tensor decompositions , as well as training of thinner networks from predictions of a larger teacher
+network .
+One efﬁcient method for the compression of fully connected layers is based on applying singular value decomposition (SVD) to the weight matrix . Compression
+is achieved by removing columns and rows related to the
+least signiﬁcant singular values. Then, the original layer is
+replaced by two layers which have fewer parameters than
+the original layer. The method has been successfully applied to increase efﬁciency in detection networks like Fast
+R-CNN . In these networks the truncated SVD approach
+is applied to the fc6 and fc7 layers, and the authors showed
+that with only a small drop in performance these layers can
+be compressed to 25% of their original sizes. In the original
+paper the compression is always applied on the
+source domain, and no analysis of its efﬁciency for domain
+transfer exists.
+In this work we investigate network compression in the
+context of domain transfer from a network pre-trained on
+a large dataset to a smaller dataset representing the target
+domain. To the best of our knowledge we are the ﬁrst to
+consider network compression within the context of domain transfer, even though this is one of the most common settings for the application of deep networks. Our approach is based on weight matrix decomposition that takes
+into account the activation statistics of the original network
+on the target domain training set1. We ﬁrst adapt a pretrained network with ﬁne-tuning to a new target domain
+and then proceed to compress this network. We argue that,
+because the statistics of the activations of network layers
+change from the source to the target domain, it is bene-
+ﬁcial to take this shift into account.
+Most current compression methods do not consider activation statistics and
+base compression solely on the values in the weight matrices . We show how the activation statistics
+can be exploited and that the resulting minimization can be
+written as a rank-constrained regression problem for which
+there exists a closed-form solution. We call our approach
+Domain Adaptive Low Rank (DALR) compression, since
+it is a low-rank approximation technique that takes into ac-
+1With activation statistics we refer to their direct usage during compression, but we do not explicitly model the statistical distribution.
+count the shift in activation statistics that occurs when transferring to another domains. As an additional contribution,
+we show that the original SVD algorithm can be improved
+by compensating the bias for the activations.
+The paper is organized as follows. In the next section
+we discuss work from the literature related to network compression. In section 3 we discuss in detail the motivation
+behind our network compression approach, and in section 4
+we show how network compression can be formulated as a
+rank constraint regression problem. In section 5 we report
+on a range of compression experiments performed on standard benchmarks. Finally, we conclude with a discussion of
+our contribution in section 6.
+2. Related Work
+Network compression has received a great deal of attention recently. In this section we brieﬂy review some of the
+works from the literature relevant to our approach.
+Network pruning.
+A straight forward way to reduce the
+memory footprint of a neural network is by removing unimportant parameters. This process can be conducted while
+training , or by analyzing the inﬂuence of
+each parameter once the network has been trained . For
+instance, in , the authors use tensor low rank constraints
+to (iteratively) reduce the number of parameters of the fully
+connected layer.
+Computationally efﬁcient layer representations.
+Several approaches have addressed the problem of reducing
+computational resources by modifying the internal representation of each layer taking into account the inherent redundancy of its parameters. Common approaches exploit
+linear structures within convolutional layers and approach
+each convolutional kernel using low-rank kernels .
+The main idea relies on the fact that performing a convolution with the original kernels is equivalent to convolving with a set of base ﬁlters followed by a linear combination of their output. In , the authors propose two network layers that are based on dictionary learning to perform
+sparse representation learning, directly within the network.
+In general, these approaches show signiﬁcant reduction in
+the computational needs with a minimum drop of performance.
+Parameter quantization.
+Previous works mentioned
+above on efﬁcient representations focus on modifying the
+representation of a complete layer. Parameter quantization
+is slightly different as it aims at ﬁnding efﬁcient representations of each parameter individually (ie, representing each
+parameter with fewer bits). A common practice to minimize
+the memory footprint of the network and reduce the computational cost during inference consists of training using 32
+bit to represent the parameters while performing inference
+more efﬁciently using 16-bits without signiﬁcantly affecting
+the performance. More aggressive quantization processes
+have been also analyzed in where the authors propose
+an approach to directly thresholding values at 0 resulting
+in a decrease of the top-1 performance on ImageNet by less
+tan 10%. More recently, several works have adopted quantization schemes into the training process . For instance,
+in , the authors propose an approach to train a network
+directly using binary weights resulting in very efﬁcient networks with a very limited accuracy.
+In the authors propose an approach to combine
+pruning, quantization and coding to reduce the computational complexity of the network. The authors ﬁrst analyze
+the relevance of each parameter pruning the irrelevant ones
+and then, after ﬁne-tuning the pruned network, the remaining parameters are quantized. Results show a signiﬁcant
+reduction in the number of parameters (up to 35x) without
+affecting the performance of the network.
+Network distillation.
+These approaches aim at mimicking a complicated model using a simpler one. The key idea
+consists of training an ensemble of large networks and then
+use their combined output to train a simpler model . Several approaches have built on this idea to train the network
+based on the soft output of the ensemble , or to train the
+network mimicking the behavior not only of the last layer
+but also of intermediate ones .
+All these methods for pruning, quantization, or compression in general, have shown results for reducing the footprint of networks and for reducing its computational complexity. However, they are usually applied to the same target
+domain as the one used for training the original network. In
+contrast, in this paper we investigate network compression
+in the context of domain transfer. That is, compressing a
+network that has been trained on a generic large dataset in
+order to reduce its computational complexity when used in a
+different target domain using a smaller dataset. In this context, the most related work is the approach presented in 
+exploring non-negative matrix factorization to identify an
+interesting set of variables for domain transfer. However,
+the work in does not consider network compression
+and focuses on unsupervised tasks.
+3. Motivation
+Training networks for a speciﬁc task starting from a network pre-trained on a large, generic dataset has become
+very common practice, and to the best of our knowledge
+we are the ﬁrst to consider compression of these types of
+domain-adapted networks. We investigate the compression
+of fully connected layers by means of matrix decomposition. The basic principle is to decompose a weight matrix
+into two matrices which contain fewer parameters than the
+original weight matrix. This decomposition can then be applied to the network by replacing the original layer with
+two new layers (see Fig. 1). An existing approach is based
+on truncated Singular Value Decomposition . The
+decomposition of that method is determined solely by the
+weight matrix and ignores the statistics of layer activations
+in the new domain.
+To gain some insight into this shifting of the activation
+distributions in deep networks when changing domain, we
+take a closer look at the inputs to the two fully connected
+layers fc6 and fc7 (which are the output of pool5 and fc6,
+respectively), of the VGG19 network . We analyze the
+activation rate of neurons which is the fraction of images
+in which a neuron has non-zero response. A value of 0.3
+means that the neuron is activated in 30% of the images
+in the data set. In Fig. 2 we show the activation rates of the
+VGG19 network on ImageNet, on the CUB-200-2011 Birds
+dataset , on the Oxford 102 Flowers dataset and on
+the Stanford 40 actions dataset .
+The ﬁrst thing to observe is that the activation rate is
+fairly constant across all the input dimensions (i.e. activation rate of neurons in the previous layer) when computed
+on the ImageNet dataset (i.e. source domain). Apparently
+the network has optimized its efﬁciency by learning representations which have a similar frequency of occurrence in
+the ImageNet dataset. However, if we look at the activation
+rates in the three target domains we see that the distributions
+are signiﬁcantly skewed: a fraction of neurons is much more
+frequent than the rest, and the activation rates are lower than
+in the source domain. This is especially clear for the input
+to fc7 where activation rates vary signiﬁcantly. If we consider the percentage of input dimensions which accumulates
+50% of the activations (which is the point where the area
+under the curve to the left is equal to the area under the
+curve to the right), we see a clear shift from ImageNet with
+41.38% to 19.51% in Flowers, 24.93% in Birds and 29.44%
+in Stanford (and from 32.29% to 14.61%, 19.13% and 25%
+for fc6, respectively). This clearly shows that there exists
+a signiﬁcant change in the relative importance of neurons
+from previous layers, optimized for a source domain, when
+applied on new domains. Given this signiﬁcant shift, we
+believe that it is important to take these activation statistics
+into account when compressing network layers after domain
+transfer. Keeping lower weights connected to high activation neurons can lead to more efﬁcient compression rather
+than only focusing on the value of the weights themselves
+as is done by current compression methods.
+4. Compression by matrix decomposition
+We start by introducing some notations. Consider a single fully connected layer, with input and bias x, b ∈Rn, the
+output y ∈Rm and the layer weights W ∈Rm×n, related
+according to:
+y = Wx + b,
+Filter (ranked in descending order)
+Activation rate (%)
+ILSVRC2012 (val)
+Birds (test)
+Flowers (test)
+Stanford (test)
+Filter (ranked in descending order)
+Activation rate (%)
+ILSVRC2012 (val)
+Birds (test)
+Flowers (test)
+Stanford (test)
+Figure 2. Activation rates (ranked in decreasing order) of the input
+to (top) fc6, and (bottom) fc7 for the Birds, Flowers and Stanford
+datasets in the VGG19 trained on ILSVRC2012. The dimensions
+of the inputs are 7 × 7 × 512 = 25088 (output of pool5) and 4096
+(output of fc6), respectively. Note the more uniform distribution
+for ILSVRC2012 (no domain change). Best viewed in color.
+or when considering a set of p inputs to the layer:
+Y = WX + b1T
+where 1p is a vector with ones of size p × 1, Y ∈Rm×p is
+the set of outputs, and X ∈Rn×p is the set of p inputs to
+the layer.
+Several compression works have focused on compressing W into ˆW so that ||W −ˆW||F is minimized .
+The novelty of our work is that we also consider the inputs
+X. As a consequence we will focus on compressing W into
+ˆW in such a way that ||Y −ˆY ||F is minimal.
+4.1. Truncated SVD and Bias Compensation (BC)
+One approach to compression is to apply SVD such
+= USV T where U
+∈Rm×m, S ∈Rm×n,
+V ∈Rn×n . The layer weights W can be approximated by keeping the k most signiﬁcant singular vectors,
+ˆW = ˆU ˆS ˆV T where ˆU ∈Rm×k, ˆS ∈Rk×k, ˆV ∈Rn×k.
+Compression is obtained by replacing the original layer by
+two new ones: the ﬁrst with weights ˆS ˆV T and the second
+with weights ˆU. Note it is crucial that the two new layers
+contain fewer parameters than the original network (i.e. that
+nm > (n + m)k).
+In this truncated SVD approach the bias term b of the
+original network is added to the second layer. We propose
+an alternative bias term which takes into account the inputs
+X. We deﬁne W =
+W is the residual
+which is lost due to the approximation. We want to ﬁnd
+the new bias that minimizes ||Y −ˆY ||F given inputs X.
+Accordingly:
+||Y −ˆY ||F
+||WX + b1T
+p −( ˆWX + ˆb1T
+The bias which minimizes this is then:
+WX1p = b +
+where ¯x = X1p is the mean input response. Note that if X
+were zero centered, then ¯x would be zero and the optimal
+bias ˆb = b. However, since X is typically taken right after
+a ReLU layer, this is generally not the case and SVD can
+introduce a systematic bias in the output which in our case
+can be compensated for using Eq. 4.
+4.2. Domain Adaptive Low Rank Matrix Decomposition (DALR)
+In the previous subsection we considered the inputs to
+improve the reconstruction error by compensating for the
+shift in the bias. Here, we also take into account the inputs
+for the computation of the matrix decomposition. In contrast, the SVD decomposition does not take them into account. Especially in the case of domain transfer, where the
+statistics of the activations can signiﬁcantly differ between
+source and target domain, decomposition of the weight matrix should consider this additional information. A network
+trained on ImageNet can be highly redundant when applied
+to for example a ﬂower dataset; in this case most features
+important for man-made objects will be redundant.
+The incorporation of input X is done by minimizing
+||Y −ˆY ||F . We want to decompose the layer with weights
+W into two layers according to:
+W ≈ˆW = ABT ,
+where ˆW ∈Rm×n, A ∈Rm×k and B ∈Rn×k again
+chosen in such a way that m × n > (m + n) × k.
+We want the decomposition which minimizes:
+A,B ||Y −ˆY ||F = min
+A,B ||WX −ABT X||F ,
+where we have set ˆb = b and subsequently removed it from
+the equation. Eq. 6 is a rank constrained regression problem
+which can be written as:
+||Z −CX||2
+F +λ||C||2
+s.t. rank(C) ≤k,
+where C = ABT and Z = WX, and we have added a ridge
+penalty which ensures that C is well-behaved even when X
+is highly co-linear.
+We can rewrite Eq 7 as:
+||Z∗−CX∗||2
+s.t. rank(C) ≤k,
+where we use
+In Ashin the authors show that there is a closed form
+solution for such minimization problems based on the SVD
+of Z. Applying SVD we obtain Z = USV T . Then the
+matrices A and B in Eq. 5 which minimize Eq. 8 are:
+B = ˆU T ZXT  XXT + λI
+where ˆU ∈Rm×k consists of the ﬁrst k columns of U.
+Network compression is obtained by replacing the layer
+weights W by two layers with weights B and A, just as
+in the truncated SVD approach. The ﬁrst layer has no biases and the original biases b are added to the second layer.
+Again we could apply Eq. 4 to compensate the bias for the
+difference between W and ˆW. However, this was not found
+to further improve the results.
+4.3. Reconstruction error analysis
+We discussed three different approaches to compressing
+a weight matrix W. They lead to the following approximate
+outputs ˆY :
+ˆU ˆS ˆV TX + b
+SVD + BC : ˆY
+ˆU ˆS ˆV TX + ˆb
+To analyze the ability of each method to approximate the
+original output Y we perform an analysis of the reconstruction error given by:
+ε = ||Y −ˆY ||F .
+We compare the reconstruction errors on the CUB-200-
+2011 Birds and the Oxford-102 Flowers datasets. The reconstruction error is evaluated on the test set, whereas the
+Figure 3. Reconstruction error as a function of dimensions kept k
+for (top) fc6 and (bottom) fc7 layers on CUB-200-2011 Birds and
+Oxford-102 Flowers depending on the degree of compression.
+inputs and outputs of the layers are extracted from the training set for computing the matrix approximations ˆY . We
+provide results for fc6 and fc7, the two fully connected layers of the VGG19 network.
+In Figure 3 we show the results of this analysis. We see
+that bias compensation provides a drop in error with respect
+to SVD for layer fc6, however the gain is insigniﬁcant for
+layer fc7. Our DALR method obtains lower errors for both
+layers on both datasets for most of the compression settings. This shows the importance of taking activation statistics into account during compression.
+5. Experimental results
+Here we report on a range of experiments to quantify the
+effectiveness of our network compression strategy. Code is
+made available at 
+5.1. Datasets
+We evaluate our DALR approach to network compression on a number of standard datasets for image recognition
+and object detection.
+CUB-200-2011 Birds:
+consists of 11,788 images (5,994
+train) of 200 bird species . Each image is annotated
+with bounding box, part location (head and body), and attribute labels. Part location and attributes are not used in
+the proposed experiments. However, bounding boxes are
+used when ﬁne-tuning the model from VGG19 pre-trained
+on ImageNet in order to provide some data augmentation
+for the existing images.
+Oxford 102 Flowers:
+consists of 8,189 images (2,040
+train+val) of 102 species of ﬂowers common in the United
+Kingdom . Classes are not equally represented across
+the dataset, with the number of samples ranging from 40 to
+258 per class.
+Stanford 40 Actions:
+consists of 9,532 images (4,000
+for training) of 40 categories that depict different human
+actions . Classes are equally represented on the training
+set and all samples contain at least one human performing
+the corresponding action.
+PASCAL 2007:
+consists of approximately 10,000 images
+(5,011 train+val) containing one or more instances of 20
+classes . The dataset contains 24,640 annotated objects,
+with that the training and validation sets having a mean of
+2.52 objects per image, and the test set a mean of 2.43 objects per image. This dataset is used to evaluate our approach for object detection.
+consists of more than 14 million images of
+thousands of object classes. The dataset is organized using the nouns from the WordNet hierarchy, with each class
+having an average of about 500 images. We use CNNs pretrained on the 1,000-class ILSVRC subset.
+5.2. Compression on source domain
+Before performing experiments on domain adaptation,
+we applied Bias Compensation and DALR compression on
+the source domain and compare it to the truncated SVD
+method as baseline. We used the original VGG19 network
+trained on the 1,000 ImageNet classes. Since ImageNet is
+a very large dataset, we randomly selected 50 images from
+each class to build our training set for DALR and truncated
+SVD compression. Then, we extracted the activations of
+this training set for the fc6 and fc7 layers to compress the
+network using DALR at different rates. The compressed
+networks were evaluated on the ImageNet validation set.
+Results are provided in Tables 1 and 2. Results on fc6
+show a slight performance increase for the most restricting
+compression settings (k = 32, 64, 128). However the gain
+is relatively small. On fc7 the results are even closer and
+the best results are obtained with bias compensation. Even
+though the proposed compression methods outperform standard SVD the gain is small when done on the source domain. This is most probably due to the fact that the inputs have relatively uniform activation rates and considerdim kept
+Table 1. Top-1 error rate results on ImageNet when compressing
+fc6 in the source domain. We report the dimensions k kept in the
+layer and the percentage of parameters compressed. The uncompressed top-1 error rate is 34.24%.
+Table 2. ImageNet fc7 - uncompressed top-1 error rate: 34.24%.
+ing them does not signiﬁcantly change the matrix decomposition (see also the discussion in Section 4.3). In general these results suggest that compressing a model without
+changing the domain can be done effectively with decompositions of ﬁlter weights (e.g truncated SVD), and does not
+beneﬁt signiﬁcantly from the additional information coming from the inputs, in contrast to when there is a domain
+change involved (see the following sections).
+5.3. Image recognition
+Here we use the CUB-200 Birds, Oxford-102 Flowers
+and Stanford 40 Actions datasets to evaluate our compression strategies. We apply the Bias Compensation and the
+DALR compression techniques to ﬁne-tuned VGG19 models. For all image recognition experiments we used the publicly available MatConvNet library .
+Fine-tuning:
+The VGG19 is trained on ImageNet.
+Since this network excelled on the ImageNet Large-Scale
+Visual Recognition Challenge in 2014 , it
+is a strong candidate as a pre-trained CNN source for the
+transfer learning. Very deep CNNs are commonly used as
+pre-trained CNNs in order to initialize the network parameters before ﬁne-tuning. For each dataset, a ﬁne-tuned version of VGG19 was trained using only the training set. Although initialized with the VGG19 weights, layers fc6 and
+fc7 are given a 0.1 multiplier to the network’s learning rate.
+The number of outputs of the fc8 layer is changed to ﬁt the
+number of classes in the dataset. All the convolutional layers are frozen and use the VGG19 weights.
+Evaluation metrics:
+All results for image recognition are
+reported in terms of classiﬁcation accuracy. The compression rate of fully connected layers is the percentage of the
+number of parameters of the compressed layer with respect
+to the original number of parameters.
+Baseline performance:
+We ﬁrst apply truncated SVD to
+the fc6 and fc7 weight matrices. In the original VGG19
+and ﬁne-tuned models, Wfc6 has 25088 × 4096 parameters
+Pruning (mean)
+Pruning (max)
+Table 3. Birds fc6 compression - original accuracy: 55.73%.
+Pruning (mean)
+Pruning (max)
+Table 4. Birds fc7 compression - original accuracy: 55.73%.
+and Wfc7 has 4096 × 4096 parameters. Applying truncated
+SVD results in a decomposition of each weight matrix into
+the two smaller matrices. If we keep the k largest singular
+vectors, those two matrices will change to (25088+4096)k
+and (4096+4096)k parameters for fc6 and fc7 respectively.
+Since SVD does not take into account activations, and there
+is no compression method to our knowledge that uses activations in order to reduce the number of parameters in
+the weight matrices, we also show results for activationbased pruning. The pruning strategy consists of removing
+the rows or columns of the weight matrices which are less
+active for that speciﬁc dataset, following the work on .
+Results: Tables 3 to 8 show the performance of compressing the fc6 and fc7 layers using SVD and pruning baselines,
+as well as the proposed Bias Compensation and DALR techniques. Results conﬁrm the tendency observed in the analysis of the L2-error reconstruction curves in Figure 3. DALR
+compression has a better performance than the other methods at the same compression rates on both fc6 and fc7 for
+CUB-200 Birds, Oxford-102 Flowers and Stanford-40 Actions. In all our experiments DALR provides a slight boost
+in performance even when compressing to 25% of the original parameters. Bias compensation slightly improves the
+original SVD method on both layers except on Flowers for
+fc7. Since the fc6 layer has more parameters, it is the layer
+that allows for more compression at a lower loss in performance. The advantages of DALR are especially clear for
+that layer, and for a typical setting where one would accept
+a loss of accuracy of around one percent, truncated SVD
+must retain between 4x and 8x the number of parameters
+compared to DALR to maintain the same level of performance. Finally, both pruning methods are consistently outperformed by compression methods, probably due to the effect pruning has on subsequent layers (fc7 and fc8).
+In the previous experiment we evaluated the layer compression separately for fc6 and fc7. To get a better understanding of the potential joint compression, we perform a
+Pruning (mean)
+Pruning (max)
+Table 5. Flowers fc6 compression - original accuracy: 78.84%.
+Pruning (mean)
+Pruning (max)
+Table 6. Flowers fc7 compression - original accuracy: 78.84%.
+Pruning (mean)
+Pruning (max)
+Table 7. Stanford fc6 compression - original accuracy: 68.73%.
+Pruning (mean)
+Pruning (max)
+Table 8. Stanford fc7 compression - original accuracy: 68.73%.
+compression experiment with DALR on both layers simultaneously. In order to ﬁnd suitable compression pairs for
+both layers at the same time, we implemented an iterative
+solution. At each step, we slightly increase the compression on both layers. Then, both options are evaluated on
+the validation set, and the compression rate with better performance is applied to the network and used on the next
+iteration. When both steps in compression exceed a deﬁned
+drop in performance (here set to a 1% accuracy drop), the
+iterative process stops and the compressed network is evaluated on the test set. Results are shown in Table 10. This
+implementation tends to compress fc6 more because fc6 has
+more room for compression than fc7, as seen also in the experiments reported in Tables 4 to 8. The results show that
+we can compress the parameters of the fully connected layers to as few as 14.88% for Flowers, as few as 6.81% for
+Birds, and as few as 29.85% for Stanford while maintaining
+close to optimal performance.
+5.4. Object detection
+One of the most successful approaches to object detection is RCNN (including its Fast and Faster 
+variants). This approach is also an example of the effectiveaeroplane
+diningtable
+pottedplant
+No Compression
+SVD @ 1024
+SVD + BC @ 1024
+DALR @ 1024
+SVD + BC @ 768
+DALR @ 768
+Table 9. Compression and bias compensation results on Fast-RCNN on PASCAL 2007.
+Compr. Acc
+total red.
+Table 10. Reduction in number of parameters for both fc6 and fc7.
+ness of the ﬁne-tuning approach to domain transfer, and also
+of the importance of network compression for efﬁcient detection. The authors of analyzed the timings of forward
+layer computation and found that 45% of all computation
+time was spent in fc6 and fc7. They then applied truncated
+SVD to compress these layers to 25% of their original size.
+This compression however came with a small drop in performance of 0.3 mAP in detection on PASCAL 2007.
+For comparison, we have also run SVD with bias compensation and our compression approach based on low-rank
+matrix decomposition. Results are presented in Table 9.
+Here we apply compression at varying rates to fc6 (which
+contains signiﬁcantly more parameters), and compress fc7
+to 256 pairs of basis vectors (which is the same number used
+in ). What we see here is that at the same compression
+rate for fc6 (1024) proposed in , our low-rank compression approach does not impact performance and performs
+equal to the uncompressed network. When we increase the
+compression rate of fc6 (768) we see a drop of 0.4% mAP
+for standard SVD and only half of that for both SVD with
+bias compensation and DALR.
+6. Conclusions and discussion
+We proposed a compression method for domain-adapted
+networks. Networks which are designed to be optimal on a
+large source domain are often overdimensioned for the target domain. We demonstrated that networks trained on a
+speciﬁc domain tend to have neurons with relatively ﬂat activations rates, indicating that almost all neurons are equally
+important in the network. However, after transferring to a
+target domain, activation rates tend to be skewed. This motivated us to consider activation statistics in the compression
+process. We show that compression which takes activations
+into account can be formulated as a rank-constrained regression problem which has a closed-form solution. As an additional contribution we show how to compensate the bias for
+the matrix approximation done by SVD. This is consistently
+shown to obtain improved results over standard SVD.
+Experiments show that DALR not only removes redundancy in the weights, but also balances better the parameter
+budget by keeping useful domain-speciﬁc parameters while
+removing unnecessary source-domain ones, thus achieving
+higher accuracy with fewer parameters, in contrast to truncated SVD, which is blind to the target domain. On further
+experiments in image recognition and object detection, the
+DALR method signiﬁcantly outperforms existing low-rank
+compression techniques. With our approach, the fc6 layer
+of VGG19 can be compressed 4x more than using truncated
+SVD alone – with only minor or no loss in accuracy.
+The Bias Compensation and DALR techniques were applied to fully connected layers in this work. To show the
+effectiveness of those methods we applied them to standard
+networks with large fully connected layers. On more recent
+networks, like ResNets , most of the computation has
+moved to convolutional layers, and the impact of the proposed method would be restricted to the last layer. However, VGG-like networks are very much used in current architectures . Extending the proposed compression method to convolutional layers is an important research
+question which we aim to address in future works.
+Our paper shows that domain transferred networks can
+be signiﬁcantly compressed. The amount of compression
+seems to correlate with the similarity between the
+source and target domain when we compare it to the ordering proposed in (see Table II). According to this ordering, the similarity with respect to ImageNet in descending
+order is image classiﬁcation (PASCAL), ﬁne-grained recognition (Birds, Flowers) and compositional (Stanford). We
+found found that higher compression rates can be applied in
+target domains further away from the source domain.
+Acknowledgements
+We thank Adri`a Ruiz for his advice on optimization.
+Herranz acknowledges the European Union’s H2020 research under Marie Sklodowska-
+Curie grant No. 6655919. Masana acknowledges 2017FI-
+B-00218 grant of Generalitat de Catalunya, and their
+CERCA Programme. We acknowledge the Spanish project
+TIN2016-79717-R, the CHISTERA project M2CR . We also acknowledge the generous GPU support from Nvidia.

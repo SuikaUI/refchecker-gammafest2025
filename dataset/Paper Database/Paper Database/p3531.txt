@@ -1,0 +1,542 @@
+DP Compress: a Model Compression Scheme for Generating
+Eﬃcient Deep Potential Models
+Denghui Lu
+HEDPS, CAPT, College of Engineering,
+Peking University, Beijing 100871, P.R. China
+Wanrun Jiang
+Songshan Lake Materials Laboratory, Dongguan,
+Guangdong 523808, P.R. China and
+Institute of Physics, Chinese Academy of Sciences, Beijing 100190, P.R. China
+Yixiao Chen
+Program in Applied and Computational Mathematics,
+Princeton University, Princeton, NJ, USA
+Linfeng Zhang
+Beijing Institute of Big Data Research, Beijing 100871, P.R. China
+Institute of Computing Technology, Chinese Academy
+of Sciences, Beijing 100190, P.R. China and
+University of Chinese Academy of Sciences, Beijing 100049, P.R. China
+Laboratory of Computational Physics,
+Institute of Applied Physics and Computational Mathematics,
+Fenghao East Road 2, Beijing 100094, P.R. China and
+HEDPS, CAPT, College of Engineering,
+Peking University, Beijing 100871, P.R. China
+Mohan Chen∗
+HEDPS, CAPT, College of Engineering,
+ 
+Peking University, Beijing 100871, P.R. China
+Machine-learning-based interatomic potential energy surface (PES) models are revolutionizing
+the ﬁeld of molecular modeling. However, although much faster than electronic structure schemes,
+these models suﬀer from costly computations via deep neural networks to predict the energy and
+atomic forces, resulting in lower running eﬃciency as compared to the typical empirical force
+ﬁelds. Herein, we report a model compression scheme for boosting the performance of the Deep
+Potential (DP) model, a deep learning based PES model. This scheme, we call DP Compress, is an
+eﬃcient post-processing step after the training of DP models (DP Train). DP Compress combines
+several DP-speciﬁc compression techniques, which typically speed up DP-based molecular dynamics
+simulations by an order of magnitude faster, and consume an order of magnitude less memory. We
+demonstrate that DP Compress is suﬃciently accurate by testing a variety of physical properties
+of Cu, H2O, and Al-Cu-Mg systems. DP Compress applies to both CPU and GPU machines and
+is publicly available online.
+Keywords: Deep Potential Molecular Dynamics, Model Compression, Machine Learning
+∗Electronic address: 
+INTRODUCTION
+Deep learning is leading to a paradigm shift in molecular dynamics (MD), the de facto lens
+for the microscopic understanding of a broad spectrum of issues, such as drug discovery, complex chemical processes, nanotechnology, etc. Some protocols that integrate physics-based
+principles and advantages of deep neural networks (DNN), while retaining the accuracy of
+quantum mechanics (or ab initio) models, can greatly boost the accessible time and size
+scales by several orders of magnitude . Recently, a highly optimized implementation
+of linear-scaling Deep Potential Molecular Dynamics (DeePMD), a deep learning-based MD
+scheme, has pushed the limit of molecular dynamics with ab initio accuracy to 100 million
+atoms, with a computational cost that typically requires one day for nano-second (ns) simulations . DeePMD has enabled various applications in, for example, reactive uptake of
+nitrogen oxides by aqueous aerosol , crystal nucleation of liquid silicon , liquid-liquid
+phase transition of water , one dimensional cooperative diﬀusion in three dimensional
+crystal , structural order in quasicrystal growth , phase diagram of water , and
+warm dense matter , etc. However, for many important problems that require large
+system sizes or long time scales, the estimated computational cost is still prohibitive. For
+example, in order to perform a 1-ns simulation of 1 million Cu atoms using the DeePMD-kit
+code on a machine with 150 V100 GPU cards, about half a week would be needed.
+Therefore, to truly make large-scale molecular simulation with ab initio accuracy a routine
+procedure, a major demand is to improve the eﬃciency of model inference, while reducing
+the computational cost.
+In conventional deep learning territories like speech recognition, visual object recognition,
+object detection, etc., it has become a common practice to conduct model compression between two stages: model training and model inference. The model architecture has
+to be carefully designed, typically in the form of large and deep neural networks, so that
+the parameters are easy to optimize. On the one hand, the model architecture has
+to be carefully designed, typically in the form of large and deep neural networks, so that
+the parameters are easy to optimize. Regarding the DeePMD method, the designing
+principles of the model architecture have been described in previous works . On the
+other hand, after training the model, the computational cost for model inference may be
+greatly reduced without signiﬁcant drop in accuracy by using model compression methods
+such as parameter pruning, low-rank factorization, weight quantization, as well as some
+judiciously designed neural architecture search and grow-and-prune schemes . We
+refer to recent review articles for thorough discussions of the related issues in the
+model compression methods.
+Two issues need to be addressed when the model compression techniques are used for
+deep learning assisted physical models. We take Deep Potential (DP) , the interatomic
+potential energy model for driving DeePMD simulations, as an example. First, the accuracy
+requirement for DP is much more strict than conventional model compression tasks. For a
+system, the energy and the forces, and hence many calculated properties, predicted by the
+compressed DP model should show negligible diﬀerences with the original model. Second, the
+network structure is not as deep and large as in conventional deep learning tasks. Therefore,
+many existing compression techniques are not directly applicable.
+In this work, we introduce DP Compress, an eﬃcient post-processing step after the training of DP models (DP Train), the resulting compressed model can be directly utilized in
+atomistic simulations. DP Compress combines several DP-speciﬁc compression techniques,
+which typically speedup the state-of-the-art DeePMD code by an order of magnitude faster,
+and an order of magnitude more memory-eﬃcient. We demonstrate that the error induced
+by the compression process is suﬃciently small, and such an improvement applies to both
+CPU and GPU machines, so that users with diﬀerent hardware environments can beneﬁt
+from it. In practice, we generate compressed models for Cu, H2O and Al-Cu-Mg alloy systems, and investigate their performances on the predictions of various physical properties,
+using both CPU and GPU machines. Moreover, to provide the users with a better guidance,
+we study in detail how the performance changes with the architectures of the neural network
+The DP Compress scheme has been implemented in the open-source package DeePMDkit , which is written in Python and C++. For eﬃcient and ﬂexible training, the code
+has been interfaced with major machine learning frameworks like TensorFlow . For largescale MD simulations, it has been interfaced with popular MD software like LAMMPS .
+Using DP Compress, with a simple command, the users of DeePMD-kit can typically gain
+an order of magnitude eﬃciency when performing DeePMD simulations.
+We divide the typical DeePMD workﬂow into four steps. First, the preparation of the
+training data, which consists of a set of atomic types and atomic coordinates, as well as corresponding labels (energies, forces, and optionally, virials) obtained from quantum mechanical
+calculations. Note that an advanced scheme to generate an optimal set of training data
+involves a concurrent learning procedure that iteratively conducts model training, DeePMD
+exploration, and quantum mechanics calculations (See, e.g., Refs. for details). The
+second step is the model training procedure with the training data, which optimizes the
+neural network parameters in a DP model. The typical training time spans from several
+hours to one week on a single GPU card, depending on the complexity of the data. Third,
+the model freezing process identiﬁes and saves all of the required model information, including the computational graph, neural network parameters, etc., in a single ﬁle. Finally, the
+frozen model can be used for DeePMD simulations, during which the interatomic energies,
+forces, and/or virials, are calculated on-the-ﬂy using the frozen model.
+The total interatomic energy E is constructed as the summation of contributions from
+all of the atomic energy contributions Ei, i.e., E = P
+i Ei. The procedure of computing the
+the atomic energy Ei from the relative coordinates between atom i and its near neighbors
+is referred as “single-atom workﬂow” .
+We use Ni = {j|rij < rc} to denote the set
+of neighboring atoms of atom i within a real-space cutoﬀrc, and rij denotes the distance
+between atoms i and j. Importantly, the DP model preserves necessary symmetry properties
+of a PES model, i.e., translational symmetry, rotational symmetry, as well as permutational
+symmetry, and it is fully end-to-end . Note that for simplicity, here we only introduce the
+procedure to compute Ei, but similar considerations apply to the calculations of the forces
+and the virials, which involve the derivatives of Ei with respect to i and j.
+We ﬁrst construct an environment matrix ˜Ri to characterize the environment of a given
+atom i, which is illustrated in Fig. 1(a). In order to obtain ˜Ri, for each pair distance rij, we
+FIG. 1: (a) Schematic plot of the single-atom workﬂow in the original and compressed DP
+models. {rij} depicts the coordinates of neighboring atoms j relative to atom i. The
+environment matrix of atom i is denoted as ˜Ri, which has dimensions of Ncut × 4 with Ncut
+being the cutoﬀnumber. (b) In the original DP model, the embedding net maps the
+normalized weighting function ˆs(rij), sliced from the ﬁrst column of ˜Ri, to the local
+embedding matrix Gi, which leads to the Si = (Gi)T ˜Ri matrix that has dimensions of
+M × 4. The resulting descriptor Di is mapped by the ﬁtting net to the energy Ei. (c) In
+the compressed DP model, the embedding net operations are replaced by calculations based
+on tabulated ﬁfth-order polynomials, enabling eﬃcient computations of Si via the kernel
+fusion operation.
+introduce a weighting function s(rij) with the form of
+[u3(−6u2 + 15u −10) + 1]
+rcs ≤rij < rc
+u = rij −rcs
+Here rcs is a smooth cutoﬀthat allows ˜Ri to smoothly decay to zero as rij approaches
+the cutoﬀrc. The use of s(rij) enforces a continuous evolution when atoms enter/exit the
+neighborhood of i by describing the atomic coordinates rij = (xij, yij, zij) with a 4-vector
+(s(rij), s(rij)xij, s(rij)yij, s(rij)zij), which then undergoes a normalization procedure. The
+normalization procedure is explained as follows: First, the data sampled from the training
+set. Second, we calculate the mean value and standard deviation of each element in the
+4-vector. To be speciﬁc, for the ﬁrst element s(rij), we subtract the mean value s(rij) and
+divide the result by the standard deviation of s(rij) , which is labelled as σ(s(rij)). Third,
+we collect all of the data and denote the whole map as ˆs(rij) :
+ˆs(rij) = s(rij) −s(rij)
+σ(s(rij)).
+For the remaining three elements, since they are equivalent under arbitrary spatial rotation operations, we divide them by their overall standard deviation σall.
+s(rij)xij, s(rij)yij and s(rij)zij are put together to calculate the standard deviation σall:
+σall = σ({s(rij)xij, s(rij)yij, s(rij)zij}).
+After the above procedures, we denote the resulting 4-vector as ˜rij with the form of
+ˆs(rij), s(rij)xij
+, s(rij)yij
+, s(rij)zij
+which is then used to deﬁne the environment matrix ˜Ri.
+Next, a descriptor Di is generated based on the environment matrix ˜Ri. First, in the
+original single-atom workﬂow of DeePMD-kit, the rows of ˜Ri are mostly given by ˜rij, with
+the neighbors j sorted ﬁrst according to their types α, and then according to their distances
+to i. Meanwhile, one needs to set the maximal number of neighbors of each atom type,
+denoted as selα. As a result, the number of rows of ˜Ri, we call the cutoﬀnumber, is ﬁxed to
+be Ncut = P
+α selα. If the number of neighbors of type α is smaller than selα, the remaining
+rows of ˜Ri for that type are fed with zeros. Second, the embedding matrix Gi = (Gi
+m(ˆs(rij))), with Ncut rows and M columns, is generated by a DNN named embedding net.
+Third, multiplication of (Gi)T by ˜Ri yields the matrix Si = (Gi)T ˜Ri with M rows and 4
+columns. Let Si< be the matrix formed by the ﬁrst M ′ (< M) rows of Si. In practice, we
+found a small M ′ value still preserves the accuracy and reduces the computational costs.
+Finally, the descriptor is generated via Di = Si(Si<)T with M rows and M ′ columns. The
+descriptor is then passed to a ﬁtting net, a fully connected DNN, which outputs the atomic
+energy contribution Ei.
+Now, we describe the process to compress the single-atom workﬂow after training. First of
+all, during the model inference procedure, the calculations of the embedding and Si matrices
+are the most computationally expensive parts in both calculations of the forward and the
+backward propagation. Typically, more than 80% of the computational time (detailed in
+section III) is spent on this part by using either CPU or GPU machines. Essentially, by
+using the ˆs(rij) as inputs, the trained embedding network learns a list of 1-dimensional
+functions. Therefore, the embedding network can be substituted with tabulated functions to
+largely speedup the computations. Here we adopt the Hermite interpolation method and use
+piecewise ﬁfth-order polynomials to interpolate the embedding functions. Speciﬁcally, the
+multi-valued embedding network can be replaced by a set of multiple single-valued functions:
+Gm, m = 1, 2, . . . , M. We divide the domain of the input tensor ˆs(rij) into L equally spaced
+components, and the L + 1 interpolation points are labelled as x1, x2, ..., xl, ..., xL+1. The
+value of “L” can be chosen to yield a small value of tabulation step ∆t that meets the
+accuracy requirements. Within the region [xl, xl+1), we deﬁne a ﬁfth-order polynomial gl
+according to the following formula:
+m, and f l
+m are ﬁtting parameters.
+In addition, we prepare six constraints at the two mesh points xl and xl+1 in order to
+compute the above six coeﬃcients. To be speciﬁc, for each mesh point, we compute the
+value of the embedding function
+yl = Gm(xl),
+the ﬁrst-order derivative
+and the second-order derivative
+The resulting formulas for the six coeﬃcients can be written as
+2∆t5[12h −6(y
+2∆t4[−30h + (14y
+l)∆t + (3y
+2∆t3[20h −(8y
+where the tabulation step ∆t = xl+1 −xl and h = yl+1 −yl.
+In practice, both G
+m(xl) can be eﬃciently evaluated, which enables the model compression process to be
+ﬁnished within a few minutes on a single-node CPU machine.
+The accuracy of the compressed DP model depends on the tabulation step ∆t, while
+the range of rij being interpolated is determined by the training data. For example, the
+lower bound of rij, which is denoted as rl, is chosen by scanning all of the training data.
+In addition, the algorithm guarantees that the upper bound of rij used in the compression
+model is larger than the maximum value found in the training data. In this regard, the
+range of ˆs(rij) being interpolated is [ˆs(rc), ˆs(rl)]. As shown in Fig. 2(a), with a tabulation
+step of 10−2, the errors of energy and force can be controlled below 10−3 meV/atom and
+10−4 meV/˚A, respectively, much lower than the typical training errors of the DP model.
+Therefore, we set the default tabulation step to be 10−2.
+In the original DP workﬂow, the embedding matrices from all of the atoms typically
+consume more than 90 percent of the total host/device memory usage , which becomes a
+bottleneck for simulating a larger number of atoms. Speciﬁcally, in the single-atom workﬂow,
+the embedding matrices are loaded to the registers and the matrix product Si = (Gi)T ˜Ri
+is computed. The above process causes a huge data movement overhead between the registers and the host/device memory, which is memory-bound by the host/device memory
+throughput . In the compressed DP workﬂow illustrated in Fig. 1(c), after tabulating the
+embedding matrix Gi with ﬁfth-order polynomials, we perform an eﬃcient kernel fusion step
+to yield Si. Taking the GPU implementation as an example, for each atom i, the matrix
+multiplication Si = (Gi)T ˜Ri is handled by a single thread block. In detail, when one column
+of (Gi)T is evaluated and stored in registers (without storing back to global memory), the
+corresponding row of the environment matrix ˜
+Ri is loaded into the register to perform an
+outer-product with the column of (Gi)T. The outer-product has to be performed at most
+Ncut times to yield Si, which has dimensions of M × 4. We remark that Gi neither allocated nor moved between global memory and registers in the optimized code, and both the
+memory footprint and computational time are signiﬁcantly reduced after the kernel fusion.
+In a practical simulation, the number of neighbors with type α can be much smaller than
+selα, so that the environment matrix ˜Ri may have a large number of redundant zeros. This
+issue is particularly serious when one trains a DP model with data in a large concentration
+range for a few types of atoms, so that selα has to be very large for each type. In the fused
+kernel of matrix product Si = (Gi)T ˜Ri, the column of (Gi)T is evaluated and the following
+outer product is performed only when j is a valid neighbor of atom i. This ﬁne-grained
+and conditional matrix production is not possible in the original DP workﬂow, in which the
+matrix product is performed by a GEMM (General Matrix Multiplication) call. As a result,
+these operations reduce the ﬂoating operations per second (FLOPS) and data access at the
+same time.
+RESULTS AND DISCUSSION
+We adopt three well-benchmarked systems, i.e., Cu, H2O, and Al-Cu-Mg, to validate the
+DP Compress scheme. First, for the Cu system, the authors in Ref. adopted a concurrent
+learning scheme to prepare an optimal set of ab initio training data and generated
+a Cu model with an uniform accuracy over a wide range of thermodynamic conditions
+(temperatures up to ∼2600 K and pressures up to ∼5 GPa). Second, for the H2O system,
+previous works in Refs. have shown that DeePMD can accurately capture the delicate
+balance between weak non-covalent intermolecular interactions, thermal eﬀects, as well as
+nuclear quantum eﬀects in water. Extensions of the DP formulation have made possible
+accurate predictions of the infrared and Raman spectra of water. More recently, part
+of the authors have generated a DP model to study the phase diagram of water ranging from
+low temperatures to about 2400 K and low pressures to 50 GPa, excluding the vapor stability
+region . Last, for the Al-Cu-Mg system in the full concentration range, a DP model
+was generated that yields predictions consistent with ﬁrst-principles calculations for various
+binary and ternary systems on their fundamental energetic and mechanical properties .
+We list the parameters utilized in the calculations. For Cu , H2O , and Al-
+Cu-Mg , the cutoﬀradii rc (number of neighbors Ncut) are chosen to be 8.0 ˚A (512),
+6.0 ˚A (144), and 9.0 ˚A (1800), respectively.
+The cutoﬀradii are the same as those reported in the corresponding original publications. The size of the ﬁtting nets are set to
+(240, 240, 240), while the sizes of the embedding nets are (32, 64, 128) for Cu and H2O systems and (25, 50, 100) for Al-Cu-Mg systems. More details of these models and training
+data can be found in the Supporting Information. While using the above protocol for the
+following tests, we also study the inﬂuences of diﬀerent setups on the ﬁnal results, including
+the type of precision, the length of the tabulation step, as well as the network structure.
+All of the calculations are performed with the LAMMPS package that has an interface
+with DeePMD-kit.
+Fig. 2 illustrates the performances of the original and compressed models on the Cu,
+H2O, and Al-Cu-Mg systems. By using the original DP model, we ﬁnd 94.2%, 87.5% and
+97.3% of the forward and the backward propagation time is spent on the calculations of the
+Gi and Si matrices in the Cu, H2O, and Al-Cu-Mg systems, respectively. In Fig. 2(a), we
+adopt three tabulation steps, i.e., ∆t =0.1, 0.01, and 0.001, to generate three compressed
+models for each system.
+We observe that the energy deviation ∆E and force deviation
+∆F decrease as ∆t becomes smaller, and conclude that ∆t =0.01 is accurate enough for
+most DeePMD applications. In Fig. 2(b), we compare the number of atoms that can be
+simulated on one single V100 GPU by using the original and compressed models. By using
+the compressed model, we ﬁnd that the number of atoms in the Cu/H2O/Al-Cu-Mg system
+increases by roughly an order of magnitude. For example, the maximal number of atoms
+calculated by one GPU increases from 12/49/5 thousands to 129/246/61 thousands for the
+FIG. 2: Performances of the original and compressed DP models, tested on three systems:
+Cu, H2O, and Al-Cu-Mg. (a) Root mean square errors of energy and forces as functions of
+the tabulation step; (b) Maximal number of atoms that can be simulated on an NVIDIA
+V100 GPU (32 GB memory); (c) Time-to-solution (µs/atom/step) of DP models tested on
+a 6-core Intel Xeon 8163 CPU; (d) Time-to-solution (µs/atom/step) of DP models tested
+on an NVIDIA V100 GPU. The Cu, H2O, and Al-Cu-Mg systems being tested for (a), (c),
+and (d) contain 6912, 12288, and 5120 atoms, respectively. For producing (c) and (d), the
+MD equations are numerically integrated for 500 steps (the energy and forces are evaluated
+for 501 times).
+Cu/H2O/Al-Cu-Mg system, respectively. Because the compressed DP model does not store
+the local embedding matrix, DeePMD is able to handle a larger number of atoms on a
+given machine. Meanwhile, the compressed model signiﬁcantly speeds up the single-atom
+Figs. 2(c) and (d) show that the DeePMD simulations with the compressed
+%  $%!
+%  $%!
+%  #) eV/atom
+ Å/atom
+  $# 
+( $&# #) J/m2
+FIG. 3: Root-mean-squared error (RMSE) of four properties for 6 Cu structures and 58
+binary and ternary Al-Cu-Mg alloys. The properties include the formation energy, the
+equilibrium volume, the bulk and shear moduli, and the unrelaxed surface energy. Three
+tabulation steps are used with both double and single precisions. Note that we set the
+lower bound of errors to be 10−16 by considering the limit of signiﬁcant digits under double
+precision, and the resulting points are connected with dashed lines.
+models are much faster than the original models on CPU and GPU machines, respectively.
+For instance, the speedups for Cu, H2O, and Al-Cu-Mg are 9.69, 3.67, and 16.22 on a single
+V100 GPU, respectively.
+We summarize two major factors that aﬀect the performance of DP Compress and its
+improvement over the original model.
+First, the maximum number (Ncut) of neighbors
+(H2O<Cu<Al-Cu-Mg) depends on the cutoﬀradius rc and the density of a system; with
+similar network architectures, this factor roughly determines the maximal number of atoms
+that can be simulated on a given machine (H2O>Cu>Al-Cu-Mg in Fig. 2 (b)), as well
+as the ultimate time-to-solution of the compressed model (H2O<Cu<Al-Cu-Mg in Figs. 2
+(c-d)). Second, the diﬀerence between the cutoﬀnumber Ncut and the average number of
+neighbors also plays an important role in determining the speed-up ratio. In the case of
+water, the Ncut and the average number of neighbors are 144 and 88, respectively, while
+those of the Al-Cu-Mg system are 1800 and 171, respectively. This explains why on both
+CPU and GPU, the speed-up ratio for H2O is much smaller than that for Al-Cu-Mg. On
+one hand, the H2O model is trained from snapshots of liquid water at ambient conditions,
+so the local density ﬂuctuation is small in water and Ncut is close to the average number
+of neighbors. On the other hand, the trained DP model for Al-Cu-Mg system covers the
+full concentration range, so selα has to be large enough (600) to cover the highest density
+cases of pure metal conﬁgurations. Therefore, in practical simulations, the average number
+of neighbors is much smaller than Ncut and a substantial amount of redundant zeros exist in
+the environment matrix ˜Ri; this redundant problem is well addressed by the kernel fusion
+procedure in the compressed model.
+To validate the accuracy and applicability of the DP Compress scheme, we ﬁrst evaluate
+the compressed model by computing several physical properties of the Cu and Al-Cu-Mg
+systems and compare them to the original model.
+Speciﬁcally, we study four energetic
+and mechanical properties of the Cu and Al-Cu-Mg systems: the formation energies, the
+equilibrium volumes, the elastic moduli, and the unrelaxed surface formation energies. In
+these test, we collect 6 crystal structures of Cu and 58 crystal structures of binary and
+ternary alloys consisting of Al, Mg and Cu elements; these structures are taken from the
+Materials Projects (MP) database . Note that the test set covers all of the documented
+crystals under corresponding elements combinations, and most of them are not explicitly
+covered by the training sets of the DP model.
+Fig. 3 demonstrates the general eﬀect of the tabulation step on these properties under
+both single and double precisions. Detailed results demonstrating each data point and the
+error distribution can be found in Fig. S1. While the results under single precision are
+less satisfactory due to the limitation of signiﬁcant digits, decreasing the tabulation step
+under the double precision reasonably improves the accuracy.
+The results suggest that
+∆t =0.01 or smaller tabulation steps under double precision could ensure reliable results for
+the tested properties. Negligible diﬀerences in most cases are observed in such occasions,
+and in particular, the root-mean-square error (RMSE) of formation energies compared with
+FIG. 4: Radial distribution functions gOO(r), gOH(r), and gHH(r) of liquid water at
+ambient conditions. The methods used include the ab initio MD and four DP models:
+the original DP model (DP BASELINE) and the compressed DP model (DP COMPRESS)
+with tabulation steps being 0.1, 0.01, and 0.001. The DP data are collected from 100-ps
+MD simulations of 512 water molecules with a time step of 0.5 fs.
+the original DP model is smaller than the accuracy limit of double precision.
+We ﬁnd that the RMSE of elastic moduli is higher than other properties by using the double precision. This is caused by the presence of one and two outlier points when ∆t =0.001
+and ∆t =0.01 are adopted in DP Compress, respectively. Despite the overall excellent agreement, which yields absolute errors smaller than 10−3 GPa for all of the rest data points. The
+outliter is caused by the high instability of the initial deformed structure used to calculate
+the elastic property with a ﬁnite-diﬀerence method. Therefore, this feature implies that
+detailed tests should be performed before the usage of DP Compress for extensive studies.
+We suggest that the tests should cover properties related to the high-order derivatives.
+Besides the above solid properties, we further conduct MD simulations for liquid water in
+order to validate the DP compress scheme for liquid systems. The system contains 512 water
+molecules. We ran 100-ps DeePMD simulations with a time step of 0.5 fs. We compute the
+structural property of liquid water by carrying out MD simulations. As shown in Fig. 4, the
+O-O, O-H, and H-H radial distribution functions predicted by all of the compressed models
+with diﬀerent tabulation steps agree fairly well with the baseline results. In particular, the
+resulting radial distribution functions also agree well with the baseline data even when the
+tabulation step is set to as large as 0.1. This implies that the structures of liquid water
+can be well addressed by using diﬀerent lengths of the tabulation step in the DP compress
+The performances of the original and the compressed models depend on the detailed
+structures of the embedding net and the ﬁtting net. To clarify this, we test a system with
+4096 water molecules and the results are shown in Fig. 5. The embedding net structure is
+chosen to be a-2a-4a with a being the number of neurons, while the ﬁtting net structure is
+set to b-b-b with b being the number of neurons. Generally speaking, a larger number of a or
+b leads to more accurate models but a lower eﬃciency. Notably, as illustrated in Fig. 5, we
+observe that the accuracy of DP models saturates when a = 32 and b = 240. In this regard,
+we suggest that the best network structure may be case-speciﬁc and depends on the quality
+and complexity of the training dataset. Furthermore, the conventional compression schemes
+adopted in the machine learning community, such as pruning and neural architecture search,
+should beneﬁt this process, and will be considered in the future.
+With the abovementioned techniques implemented in the compressed model, the computational hotspot of the compressed DP model has changed, which has profound implications.
+On one hand, since the embedding net is the major computational bottleneck in the original
+DP model, a better eﬃciency can be gained only if the size of the embedding net is reduced.
+On the other hand, in the compressed DP model, the computational costs for generating the
+descriptor and for using the ﬁtting net are comparable. Therefore, reducing the number of
+outputs (M) in the embedding net or reduce the size of the ﬁtting net can lead to a better
+FIG. 5: Accuracy and time-to-solution (TtS) of DP models by using CPU and GPU
+devices with diﬀerent neuron network structures. (a) Root mean square errors of energy
+and forces as a function of diﬀerent neuron network structures. (b) Time-to-solution
+(µs/atom/CPU-core/step) of DP models tested on a 6-core Intel Xeon 8163 CPU. (c)
+Time-to-solution (µs/atom/GPU/step) of DP models tested on an NVIDIA V100 GPU.
+The labels on the x-axis, a-b depict the embedding net with layer sizes of a-2a-4a, and the
+ﬁtting net with layer sizes of b-b-b.
+CONCLUSION
+In summary, we propose a DP Compress scheme that can signiﬁcantly boost the performance of DP models with controllable loss of accuracy. We suggest that using double
+precision and a tabulation step of 0.01 or smaller for the DP Compress scheme. The new
+scheme will beneﬁt all of the users of DeePMD-kit, as well as inspire other methodology
+developers in the ﬁeld of machine learning assisted scientiﬁc computing. In the future, more
+optimizations on diﬀerent operators, on the computational graph, and on multiple hardware
+devices, would be needed. Moreover, DP Compress can be generalized to other DP-based
+models, such as vectors and tensors , without essential diﬃculties. With DeePMD-kit
+being an open-source software package, we expect that more innovative and useful schemes
+can be continuously integrated in the code by developers not limited to the authors, and we
+expect that all these later improvements can beneﬁt the users in a timely manner.
+We suggest that the best hyper-parameters for a compressed model are case-speciﬁc,
+which typically depend on the complexity and quality of the training data. For most applications, the default settings for these parameters in the DeePMD-kit package can be used
+without tuning. However, if one wants to achieve a better accuracy under a certain computational budget, he/she has to carefully tune the accuracy- and eﬃciency-relevant hyperparameters. Here we provide some guidances for tuning the relevant hyper-parameters. (1)
+A larger cutoﬀradius usually leads to a better accuracy, but the model may become more
+diﬃcult to train. Note that both training and inference costs increase with the cutoﬀradius.
+(2) Larger sizes of the embedding and ﬁtting networks imply a better accuracy but higher
+computational costs are expected. (3) A larger number of training steps often results in
+generating a model with better accuracy. Although the training cost growth in proportional
+to the number of training steps, the inference operations and MD costs are invariant. (4) A
+smaller tabulation step size leads to a higher accuracy. The memory costs grow in proportion to the inverse of the step size, while the computational costs only marginally increase:
+reducing the tabulation step size by 10 times leads to an increment of less than 5% in the
+time-to-solution.
+Acknowledgements
+The work of D. Lu and M. Chen is supported by the National Science Foundation of China
+under Grant No.12122401 and 12074007. Y. Chen is supported by the DOE Award DE-
+SC0019394 (Center Chemistry in Solution and at Interfaces). L. Zhang is supported by
+Beijing Academy of Artiﬁcial Intelligence(BAAI). W. Jia is supported by Institute of Computing Technology under Grant No. CARCH5101 and 55E061100. The work of H.W. was
+supported by the National Science Foundation of China under Grant No.11871110 and
+Part of the numerical simulations were performed on the High Performance
+Computing Platform of CAPT.
+Data and Code Availability
+The training data sets and the DP models for the Cu, H2O, and Al-Cu-Mg systems can
+be found on the DP-Library (Cu: 
+project_id=202010.008,
+H2O: 
+project_id=202010.001 and Al-Cu-Mg:
+ 
+details?project_id=202010.002). The DP Compress code is publicly available at https:
+//github.com/deepmodeling/deepmd-kit.
+Author contributions
+D.L. implemented the method. D.L., W.J. and Y.C. carried out the simulations and performed the analysis. L.Z., W.J., H.W. and M.C. designed the project. All authors contributed to the discussions and revisions of the manuscript.
+Conﬂict of Interest
+The authors declare no competing interests.
+ J¨org Behler and Michele Parrinello.
+Generalized neural-network representation of highdimensional potential-energy surfaces. Physical Review Letters, 98(14):146401, 2007.
+ Stefan Chmiela, Alexandre Tkatchenko, Huziel E Sauceda, Igor Poltavsky, Kristof T Sch¨utt,
+and Klaus-Robert M¨uller. Machine learning of accurate energy-conserving molecular force
+ﬁelds. Science Advances, 3(5):e1603015, 2017.
+ Kristof Sch¨utt, Pieter-Jan Kindermans, Huziel Enoc Sauceda Felix, Stefan Chmiela, Alexandre Tkatchenko, and Klaus-Robert M¨uller. Schnet: A continuous-ﬁlter convolutional neural
+network for modeling quantum interactions. In Advances in Neural Information Processing
+Systems, pages 992–1002, 2017.
+ Justin S Smith, Olexandr Isayev, and Adrian E Roitberg. ANI-1: an extensible neural network
+potential with dft accuracy at force ﬁeld computational cost. Chemical Science, 8(4):3192–
+3203, 2017.
+ Linfeng Zhang, Jiequn Han, Han Wang, Roberto Car, and Weinan E. Deep potential molecular
+dynamics: A scalable model with the accuracy of quantum mechanics. Physical Review Letters,
+120:143001, Apr 2018.
+ Linfeng Zhang, Jiequn Han, Han Wang, Wissam Saidi, Roberto Car, and Weinan E. End-toend symmetry preserving inter-atomic potential energy model for ﬁnite and extended systems.
+In S. Bengio, H. Wallach, H. Larochelle, K. Grauman, N. Cesa-Bianchi, and R. Garnett,
+editors, Advances in Neural Information Processing Systems 31, pages 4441–4451. Curran
+Associates, Inc., 2018.
+ Yaolong Zhang, Sheng Ye, Jinxiao Zhang, Ce Hu, Jun Jiang, and Bin Jiang. Eﬃcient and
+accurate simulations of vibrational and electronic spectra with symmetry-preserving neural
+network models for tensorial properties. The Journal of Physical Chemistry B, 124(33):7284–
+7290, 2020.
+ Yaolong Zhang, Ce Hu, and Bin Jiang. Accelerating atomistic simulations with piecewise
+machine-learned ab initio potentials at a classical force ﬁeld-like cost. Physical Chemistry
+Chemical Physics, 23(3):1815–1821, 2021.
+ Denghui Lu, Han Wang, Mohan Chen, Lin Lin, Roberto Car, Weinan E, Weile Jia, and Linfeng
+Zhang. 86 pﬂops deep potential molecular dynamics simulation of 100 million atoms with ab
+initio accuracy. Computer Physics Communications, 259:107624, 2021.
+ Weile Jia, Han Wang, Mohan Chen, Denghui Lu, Lin Lin, Roberto Car, Weinan E, and Linfeng
+Zhang. Pushing the limit of molecular dynamics with ab initio accuracy to 100 million atoms
+with machine learning. In Proceedings of the International Conference for High Performance
+Computing, Networking, Storage and Analysis, SC ’20. IEEE Press, 2020.
+ Mirza Galib and David T Limmer. Reactive uptake of n2o5 by atmospheric aerosol is dominated by interfacial processes. Science, 371(6532):921–925, 2021.
+ Luigi Bonati and Michele Parrinello. Silicon liquid structure and crystal nucleation from ab
+initio deep metadynamics. Physical review letters, 121(26):265701, 2018.
+ Thomas E Gartner, Linfeng Zhang, Pablo M Piaggi, Roberto Car, Athanassios Z Panagiotopoulos, and Pablo G Debenedetti.
+Signatures of a liquid–liquid transition in an ab
+initio deep neural network model for water. Proceedings of the National Academy of Sciences,
+117(42):26040–26046, 2020.
+ Yong Wang, Junjie Wang, Andreas Hermann, Cong Liu, Hao Gao, Erio Tosatti, Hui-Tian
+Wang, Dingyu Xing, and Jian Sun. Electronically driven 1d cooperative diﬀusion in a simple
+cubic crystal. Physical Review X, 11(1):011006, 2021.
+ Insung Han, Joseph T McKeown, Ling Tang, Cai-Zhuang Wang, Hadi Parsamehr, Zhucong Xi,
+Ying-Rui Lu, Matthew J Kramer, and Ashwin J Shahani. Dynamic observation of dendritic
+quasicrystal growth upon laser-induced solid-state transformation. Physical Review Letters,
+125(19):195503, 2020.
+ Linfeng Zhang, Han Wang, Roberto Car, and Weinan E. Phase diagram of a deep potential
+water model. Physical Review Letters, 126(23):236001, 2021.
+ Yuzhi Zhang, Chang Gao, Qianrui Liu, Linfeng Zhang, Han Wang, and Mohan Chen. Warm
+dense matter simulation via electron temperature dependent deep potential molecular dynamics. Physics of Plasma, 27:122704, 2020.
+ Qianrui Liu, Denghui Lu, and Mohan Chen. Structure and dynamics of warm dense aluminum:
+a molecular dynamics study with density functional theory and deep potential. Journal of
+Physics: Condensed Matter, 32:144002, 2020.
+ Thomas Elsken, Jan Hendrik Metzen, Frank Hutter, et al. Neural architecture search: A
+survey. J. Mach. Learn. Res., 20(55):1–21, 2019.
+ Tejalal Choudhary, Vipul Mishra, Anurag Goswami, and Jagannathan Sarangapani. A comprehensive survey on model compression and acceleration. Artiﬁcial Intelligence Review, pages
+1–43, 2020.
+ Wenhan Xia, Hongxu Yin, and Niraj K Jha.
+Eﬃcient synthesis of compact deep neural
+networks. In 2020 57th ACM/IEEE Design Automation Conference (DAC), pages 1–6. IEEE,
+ Jing Li, Ji-hang Cheng, Jing-yuan Shi, and Fei Huang. Brief introduction of back propagation
+(bp) neural network algorithm and its improvement. In Advances in computer science and
+information engineering, pages 553–558. Springer, 2012.
+ Massimo Buscema. Back propagation neural networks. Substance use & misuse, 33(2):233–
+270, 1998.
+ Han Wang, Linfeng Zhang, Jiequn Han, and Weinan E. DeePMD-kit: A deep learning package
+for many-body potential energy representation and molecular dynamics. Computer Physics
+Communications, 228:178–184, 2018.
+ Tara N Sainath, Brian Kingsbury, Vikas Sindhwani, Ebru Arisoy, and Bhuvana Ramabhadran.
+Low-rank matrix factorization for deep neural network training with high-dimensional output
+targets. In 2013 IEEE international conference on acoustics, speech and signal processing,
+pages 6655–6659. IEEE, 2013.
+ Song Han, Huizi Mao, and William J Dally.
+Deep compression: Compressing deep neural networks with pruning, trained quantization and huﬀman coding.
+arXiv preprint
+ 
+ Itay Hubara, Matthieu Courbariaux, Daniel Soudry, Ran El-Yaniv, and Yoshua Bengio. Quantized neural networks: Training neural networks with low precision weights and activations.
+The Journal of Machine Learning Research, 18(1):6869–6898, 2017.
+ Barret Zoph and Quoc V Le. Neural architecture search with reinforcement learning. arXiv
+ 
+ Zhuohan Li, Eric Wallace, Sheng Shen, Kevin Lin, Kurt Keutzer, Dan Klein, and Joey Gonzalez. Train big, then compress: Rethinking model size for eﬃcient training and inference of
+transformers. In International Conference on Machine Learning, pages 5958–5968. PMLR,
+ Mart´ın Abadi, Paul Barham, Jianmin Chen, Zhifeng Chen, Andy Davis, Jeﬀrey Dean,
+Matthieu Devin, Sanjay Ghemawat, Geoﬀrey Irving, Michael Isard, Manjunath Kudlur, Josh
+Levenberg, Rajat Monga, Sherry Moore, Derek G. Murray, Benoit Steiner, Paul Tucker, Vijay Vasudevan, Pete Warden, Martin Wicke, Yuan Yu, and Xiaoqiang Zheng. Tensorﬂow:
+A system for large-scale machine learning. In 12th USENIX Symposium on Operating Systems Design and Implementation (OSDI 16), pages 265–283, Savannah, GA, November 2016.
+USENIX Association.
+ Aidan P Thompson, H Metin Aktulga, Richard Berger, Dan S Bolintineanu, W Michael Brown,
+Paul S Crozier, Pieter J in’t Veld, Axel Kohlmeyer, Stan G Moore, Trung Dac Nguyen, et al.
+Lammps-a ﬂexible simulation tool for particle-based materials modeling at the atomic, meso,
+and continuum scales. Computer Physics Communications, 271:108171, 2022.
+ Linfeng Zhang, De-Ye Lin, Han Wang, Roberto Car, and Weinan E.
+Active learning of
+uniformly accurate interatomic potentials for materials simulation. Physical Review Materials,
+3(2):023804, 2019.
+ Yuzhi Zhang, Haidi Wang, Weijie Chen, Jinzhe Zeng, Linfeng Zhang, Han Wang, and Weinan
+E. Dp-gen: A concurrent learning platform for the generation of reliable deep learning based
+potential energy models. Computer Physics Communications, page 107206, 2020.
+ Hsin-Yu Ko, Linfeng Zhang, Biswajit Santra, Han Wang, Weinan E, Robert A DiStasio Jr, and
+Roberto Car. Isotope eﬀects in liquid water via deep potential molecular dynamics. Molecular
+Physics, 117(22):3269–3281, 2019.
+ Linfeng Zhang, Mohan Chen, Xifan Wu, Han Wang, Weinan E, and Roberto Car. Deep neural
+network for the dielectric response of insulators. Phys. Rev. B, 102:041121, Jul 2020.
+ Grace M. Sommers, Marcos F. Calegari Andrade, Linfeng Zhang, Han Wang, and Roberto
+Car. Raman spectrum and polarizability of liquid water from deep neural networks. Phys.
+Chem. Chem. Phys., 22:10592–10602, 2020.
+ Wanrun Jiang, Yuzhi Zhang, Linfeng Zhang, and Han Wang. Accurate deep potential model
+for the al-cu-mg alloy in the full concentration space. Chinese Physics B, 2021.
+ Anubhav Jain, Shyue Ping Ong, Geoﬀroy Hautier, Wei Chen, William Davidson Richards,
+Stephen Dacek, Shreyas Cholia, Dan Gunter, David Skinner, Gerbrand Ceder, et al. The
+materials project: A materials genome approach to accelerating materials innovation. Apl
+Materials, 1(1):011002, 2013.
+ Robert A. DiStasio Jr., Biswajit Santra, Zhaofeng Li, Xifan Wu, and Roberto Car.
+individual and collective eﬀects of exact exchange and dispersion interactions on the ab initio
+structure of liquid water. J. Chem. Phys., 141:084502, August 2014.

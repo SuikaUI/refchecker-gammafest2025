@@ -1,0 +1,791 @@
+Generating Classiﬁcation Weights with GNN Denoising Autoencoders for
+Few-Shot Learning
+Spyros Gidaris1,2 and Nikos Komodakis1
+1University Paris-Est, LIGM, Ecole des Ponts ParisTech
+Given an initial recognition model already trained on
+a set of base classes, the goal of this work is to develop a
+meta-model for few-shot learning. The meta-model, given
+as input some novel classes with few training examples per
+class, must properly adapt the existing recognition model
+into a new model that can correctly classify in a uniﬁed
+way both the novel and the base classes. To accomplish
+this goal it must learn to output the appropriate classiﬁcation weight vectors for those two types of classes. To
+build our meta-model we make use of two main innovations: we propose the use of a Denoising Autoencoder network (DAE) that (during training) takes as input a set of
+classiﬁcation weights corrupted with Gaussian noise and
+learns to reconstruct the target-discriminative classiﬁcation
+weights. In this case, the injected noise on the classiﬁcation
+weights serves the role of regularizing the weight generating meta-model. Furthermore, in order to capture the
+co-dependencies between different classes in a given task
+instance of our meta-model, we propose to implement the
+DAE model as a Graph Neural Network (GNN). In order
+to verify the efﬁcacy of our approach, we extensively evaluate it on ImageNet based few-shot benchmarks and we report strong results that surpass prior approaches. The code
+and models of our paper will be published on: https:
+//github.com/gidariss/wDAE_GNN_FewShot
+1. Introduction
+Over the last few years, deep learning has achieved impressive results on various visual understanding tasks, such
+as image classiﬁcation , object detection ,
+or semantic segmentation . However, their success heavily relies on the ability to apply gradient based optimization
+routines, which are computationally expensive, and having
+access to a large dataset of training data, which often is
+very difﬁcult to acquire. For example, in the case of image
+classiﬁcation, it is required to have available thousands or
+hundreds of training examples per class and the optimization
+routines consume hundreds of GPU days. Moreover, the set
+of classes that a deep learning based model can recognize
+remains ﬁxed after its training. In case new classes need to
+be recognized, then it is typically required to collect thousands / hundreds of training examples for each of them, and
+re-train or ﬁne-tune the model on those new classes. Even
+worse, this latter training stage would lead the model to “forget” the initial classes on which it was trained. In contrast,
+humans can rapidly learn a novel visual concept from only
+one or a few examples and reliably recognize it later on.
+The ability of fast knowledge acquisition is assumed to be
+related with a meta-learning process in the human brain that
+exploits past experiences about the world when learning a
+new visual concept. Even more, humans do not forget past
+visual concepts when learning a new one. Mimicking that
+behavior with machines is a challenging research problem,
+with many practical advantages, and is also the topic of this
+Research on this subject is usually termed few-shot object
+recognition. More speciﬁcally, few-shot object recognition
+methods tackle the problem of learning to recognize a set
+of classes given access to only a few training examples for
+each of them. In order to compensate for the scarcity of
+training data they employ meta-learning strategies that learn
+how to efﬁciently recognize a set of classes with few training data by being trained on a distribution of such few-shot
+tasks (formed from the dataset available during training)
+that are similar (but not the same) to the few-shot tasks
+encountered at test time . Few-shot learning is also
+related to transfer learning since the learned meta-models
+solve a new task by exploiting the knowledge previously
+acquired by solving a different set of similar tasks. There
+is a broad class of few-shot learning approaches, including,
+among many, metric-learning-based approaches that learn a
+distance metric between a test example and the training ex-
+ 
+amples , methods that learn to map a test
+example to a class label by accessing memory modules that
+store the training examples of that task ,
+approaches that learn how to generate model parameters for
+the new classes given access to the few available training
+data of them , gradient descent-based approaches that learn how to rapidly adapt a model
+to a given few-shot recognition task via a small number of
+gradient descent iterations, and training data hallucination
+methods that learn how to hallucinate more examples of a class given access to its few training data.
+Our approach.
+In our work we are interested in learning
+a meta-model that is associated with a recognition model
+already trained on set of classes (these will be denoted as
+base classes hereafter). Our goal is to train this meta-model
+so as to learn to adapt the above recognition model to a set
+of novel classes, for which there are only very few training
+data available (e.g., one or ﬁve examples), while at the same
+time maintaining the recognition performance on the base
+classes. Note that, with few exceptions ,
+most prior work on few-shot learning neglects to fulﬁll the
+second requirement. In order to accomplish this goal we
+follow the general paradigm of model parameter generation
+from few-data . More speciﬁcally, we assume
+that the recognition model has two distinctive components,
+a feature extractor network, which (given as input an image)
+computes a feature representation, and a feature classiﬁer,
+which (given as input the feature representation of an image)
+classiﬁes it to one of the available classes by applying a set
+of classiﬁcation weight vectors (one per class) to the input
+feature. In this context, in order to be able to recognize novel
+classes one must be able to generate classiﬁcation weight
+vectors for them. So, the goal of our work is to learn a metamodel that fulﬁlls exactly this task: i.e., given a set of novel
+classes with few training examples for each of them, as well
+as the classiﬁcation weights of the base classes, it learns to
+output a new set of classiﬁcation weight vectors (both for
+the base and novel classes) that can then be used from the
+feature classiﬁer in order to classify in a uniﬁed way both
+types of classes.
+DAE based model parameters generation.
+Learning to
+perform such a meta-learning task, i.e., inferring the classiﬁcation weights of a set of classes, is a difﬁcult meta-problem
+that requires plenty of training data in order to be reliably
+solved. However, having access to such a large pool of data
+is not always possible; or otherwise stated the training data
+available for learning such meta-tasks might never be enough.
+In order to overcome this issue we build our meta-model
+based on a Denoising Autoencoder network (DAE). During
+training, this DAE network takes as input a set of classiﬁcation weights corrupted with additive Gaussian noise, and is
+SEA ENTITIES
+Scuba Diver
+Coral reef
+WILD-CAT ANIMALS
+Figure 1: Some classes (e.g., wild-cat animals, birds, or sea creatures) are semantically or visually similar. Thus it is reasonable
+to assume that there are correlations between their classiﬁcation
+weight vectors that could be exploited in order to reconstruct a
+more discriminative classiﬁcation weight vector for each of them.
+trained to reconstruct the target-discriminative classiﬁcation
+weights. The injected noise on the inputs of our DAE-based
+parameter generation meta-model helps in the regularization
+of the learning procedure thus allowing us to avoid the danger
+of overﬁtting on the training data. Furthermore, thanks to the
+theoretical interpretation of DAEs provided in , our DAEbased meta-model is able to approximate gradients of the
+log of conditional distribution of the classiﬁcation weights
+given the available training data by computing the difference
+between the input weights and the reconstructed weights .
+Thus, starting by an initial (but not very accurate) estimate of
+classiﬁcation weights, our meta-model is able to perform gradient ascents step(s) that will move the classiﬁcation weights
+towards more likely conﬁgurations (when conditioned on
+the given training data). In order to properly apply the DAE
+framework in the context of few-shot learning, we also adapt
+it so as to follow the episodic formulation typically
+used in few-shot learning. This further improves the performance of the parameters generation meta-task by forcing it
+to reconstruct more discriminative classiﬁcation weights.
+Building the model parameters DAE as a Graph Neural Network.
+Reconstructing classiﬁcation weights conditioned only on a few training data, e.g., one training example
+per class, is an ill-deﬁned task for which it is crucial to exploit as much of the available information on the training
+data of base and novel classes as possible. In our context,
+one way to achieve that is by allowing the DAE model to
+learn the structure of the entire set of classiﬁcation weights
+that has to reconstruct on each instance (i.e., episode) of that
+task. We believe that such an approach is more principled
+and can reconstruct more distriminative classiﬁcation weight
+vectors than reconstructing the classiﬁcation weight of each
+class independently. For example, considering that some of
+the classes (among the classes whose classiﬁcation weight
+vectors must be reconstructed by the DAE model in a given
+task instance) are semantically or visually similar, such as
+different species of birds or see creatures (see Figure 1), it
+would make sense to assume that there are correlations to
+their classiﬁcation weight vectors that could be exploited
+in order to reconstruct a more discriminative classiﬁcation
+weight vector for each of them. In order to capture such
+co-dependencies between different classes (in a given task
+instance of our meta-model), we implement the DAE model
+as a Graph Neural Network (GNN). This is a family of deep
+learning networks designed to process an unordered set of
+entities (in our case a set of classes) associated with a graph
+G such that they take into account their inter-entity relationships (in our case inter-class relationships) when making
+predictions about them (for a recent survey on models and applications of deep learning on graphs
+see also Bronstein et al. ).
+Related to our work, Gidaris and Komodakis also tried
+to capture such class dependencies in the context of fewshot learning, by predicting the classiﬁcation weight of each
+novel class as a mixture of the base classiﬁcation weights
+through an attention mechanism. In contrast to them, we
+consider the dependencies that exist between all the classes,
+both novel and base (and not of a novel class with the base
+ones as in ) and try to capture them in a more principled
+way through GNN architectures, which are more expressive
+compared to the simple attention mechanism proposed in .
+Graph Neural Networks have been also used in the context of
+few-shot learning by Garcia and Juan . However, in their
+work, they give as input to the GNN the labeled training
+examples and the unlabeled test examples of a few-shot
+problem and they train it to predict the label of the test
+examples. Differently from them, in our work we provide as
+input to the GNN some initial estimates of the classiﬁcation
+weights of the classes that we want to learn and we train them
+to reconstruct more discriminative classiﬁcation weights.
+Finally, Graph Neural Networks have been applied on a
+different but related problem, that of zero-shot learning , for regressing classiﬁcation weights. However, in this
+line of work they apply the GNNs to knowledge graphs
+provided by external sources (e.g., word-entity hierarchies)
+while the input that is given to the GNN for a novel class is its
+word-embedding. Differently from them, in our formulation
+we do not consider any side-information (i.e., knowledge
+graphs or word-embeddings), which makes our approach
+more agnostic to the domain of problems that can solve and
+the existence of such knowledge graphs.
+To sum up, our contributions are, (1) the application of
+Denoising Autoencoders in the context of few-shot learning,
+(2) the use of Graph Neural Network architectures for the
+classiﬁcation weight generation task, and (3) performing
+detailed experimental evaluation of our model on ImageNet-
+FS and MiniImageNet datasets and achieving
+state-of-the-art results on ImageNet-FS, MiniImageNet, and
+tiered-MiniImageNet datasets.
+In the following sections, we describe our classiﬁcation
+weights generation methodology in §2, we provide experimental results in §3, and ﬁnally we conclude in §4.
+2. Methodology
+We deﬁne as C(F(·|θ)|w) a recognition model, where
+F(·|θ) is the feature extractor part of the network with parameters θ, and C(·|w) is the feature classiﬁcation part with
+parameters w.
+The parameters w of the classiﬁer consists of N classiﬁcation weight vectors, w = {wi}N
+where N is the number of classes that the network can
+recognize, and wi ∈Rd is the d-dimensional classiﬁcation weight vector of the i-th class. Given an image x,
+the feature extractor will output a d-dimensional feature
+z = F(x|θ) and then the classiﬁer will compute the classi-
+ﬁcation scores [s1, ..., sN] = [z⊺w1, ..., z⊺wN] := C(z|w)
+of the N classes. In our work we use cosine similarity-based
+feature classiﬁers 1 that have been shown to exhibit
+better performance when transferred to a few-shot recognition task and to be more appropriate for performing uniﬁed
+recognition of both base and novel classes. Therefore, for
+the above formulation to be valid, we assume that the features z of the feature extractor and the classiﬁcation weights
+wi ∈w of the classiﬁer are already L2 normalized.
+Following the formulation of Gidaris and Komodakis ,
+we assume that the recognition network has already been
+trained to recognize a set of Nbs base classes using a training
+tr. The classiﬁcation weight vectors that correspond to
+those Nbs classes are deﬁned as wbs = {wbs
+i=1. Our goal
+is to learn a parameter-generating function g(·|φ) that, given
+as input the classiﬁcation weights wbs of the base classes,
+and a few training data Dnv
+= SNbs+Nnv
+i=Nbs+1 {xk,i}K
+Nnv novel classes, it will be able to output a new set of
+classiﬁcation weight vectors
+w = {wi}N=Nbs+Nnv
+tr , wbs|φ)
+for both the base and the novel classes, where K is the number of training examples per novel class, xk,i is the k-th
+training example of i-th novel, N = Nbs + Nnv is the total
+number of classes, and φ are the learnable parameters of the
+weight generating function. This new set of classiﬁcation
+weights w will be used from the classiﬁer C(·|w) for recognizing from now on in a uniﬁed way both the base and the
+novel classes.
+1This practically means that the features z and the classiﬁcation weights
+wi ∈w are L2 normalized
+Figure 2: Given a few training data of some novel classes, our meta-model adapts an existing recognition model such that it can classify
+in a unied way both novel and base classes by generating classication weights for both types of classes. We learn to perform this task by
+employing a Denoising Autoencoders (DAE) for classication weight vectors. Speciﬁcally, given some initial estimate of classication weights
+injected with additive Gaussian noise, the DAE is trained to reconstruct target-discriminative classiﬁcation weights, where the injected noise
+serves the role of regularizing the weight generation meta-model. Furthermore, in order to capture co-dependencies between different classes
+(in a given task instance of our meta-model), we implement the DAE model by use of a Graph Neural Network (GNN) architecture.
+The parameter-generating function consists of a Denoising Autoencoder for classiﬁcation weight vectors implemented with a Graph Neural Network (see Figure 2 for an
+overview). In the remainder of this section we will describe
+in more detail how exactly we implement this parametergenerating function.
+2.1. Denoising Autoencoders for model parameters
+generation
+In our work we perform the task of generating classiﬁcation weights by employing a Denoising Autoencoder (DAE)
+for classiﬁcation weight vectors. The injected noise on the
+classiﬁcation weights that the DAE framework prescribes
+serves the role of regularizing the weights generation model
+g(·|φ) and thus (as we will see in the experimental section)
+boost its performance. Furthermore, the DAE formulation
+allows to perform the weights generation task as that of (iteratively) reﬁning some initial (but not very accurate) estimates
+of the weights in a way that moves them to more probable
+conﬁgurations (when conditioned on the available training
+data). Note that the learnable parameters φ in g(·|φ) refer
+to the learnable parameters of the employed DAE model.
+In the remainder of this section will brieﬂy provide some
+preliminaries about DAE models and then explain how they
+are being used in our case.
+Preliminaries about DAE.
+Denoising autoencoders are
+neural networks that, given inputs corrupted by noise, are
+trained to reconstruct “clean” versions of them. By being
+trained on this task they learn the structure of the data to
+which they are applied. It has been shown that a DAE
+model, when trained on inputs corrupted with additive Gaussian noise, can estimate the gradient of the energy function
+of the density p(w) of its inputs w:
+σ2 · (r(w) −w) ,
+where σ2 is the amount of Gaussian noise injected during
+training, and r(·) is the autoencoder. The approximation becomes exact as σ →0, and the autoencoder is given enough
+capacity and training examples. The direction (r(w) −w)
+points towards more likely conﬁgurations of w. Therefore,
+the DAE learns a vector ﬁeld pointing towards the manifold where the input data lies. Those theoretical results are
+independent of the parametrization of the autoencoder.
+Applying DAE for classiﬁcation weight generation.
+our case we are interested in learning a DAE model that,
+given an initial estimate of the classiﬁcation weight vectors
+w, would provide a vector ﬁeld that points towards more
+probable conﬁgurations of w conditioned on the training
+data Dtr = {Dnv
+tr}. Therefore, we are interested in a
+DAE model that learns to estimate:
+∂log p(w|Dtr)
+σ2 · (r(w) −w) ,
+where p(w|Dtr) is the conditional distribution of w given
+Dtr, and r(w) is a DAE for the classiﬁcation weights.
+So, after having trained our DAE model for the classiﬁcation weights, r(w), we can perform gradient ascent in
+log p(w|Dtr) in order to (iteratively) reach a mode of the
+estimated conditional distribution p(w|Dtr):
+w ←w +ϵ· ∂log p(w|Dtr)
+= w +ϵ·(r(w)−w) , (4)
+where ϵ is the gradient ascent step size.
+Classifier
+Test example
+Train examples
+of novel classes
+Autoencoder
+Base class
+Reconstructed
+weights r (w)
+w ←w+ε(r (w)−w)
+Classifier
+Test example
+Base & novel
+class weights
+Adapted recognition model for base & novel classes
+Existing recognition model for base classes
+Meta-model: adapts the recognition model to recognize both base and novel classes
+Classification scores
+of base & novel classes
+Classification scores
+of base classes
+Figure 3: Overview of how our meta-model (bottom) is applied at test time in order to properly adapt an existing recognition model (top-left)
+into a new model (top-right) that can classify in a uniﬁed way both novel and base classes (where only a few training data are provided at
+test time for the novel classes).
+The above iterative inference mechanism of the classiﬁcation weights requires to have available an initial estimate
+of them. This initial estimate is produced using the training
+tr of the novel classes and the existing classiﬁcation
+weights wbs = {wbs
+i=1 of the base classes. Speciﬁcally,
+for the base classes we build this initial estimate by using
+the classiﬁcation weights already available in wbs and for
+the novel classes by averaging for each of them the feature
+vectors of their few training examples:
+if i is a base class
+k=1 F(xk,i|θ),
+where xk,i is the k-th training example of the novel class i.
+summarize,
+generation
+tr , wbs|φ) is implemented by ﬁrst producing an initial
+estimate of the new classiﬁcation weights by applying
+equation (5) (for which it uses Dnv
+tr , and wbs ) and then
+reﬁning those initial estimates by applying the weight update
+rule of equation (4) using the classiﬁcation weights DAE
+model r(w) (see an overview of this procedure in Figure 3).
+Episodic training of classiﬁcation weights DAE model.
+For training, the DAE framework prescribes to apply Gaussian noise on some target weights and then train the DAE
+model r(·) to reconstruct them. However, in our case, it
+is more effective to follow a training procedure that more
+closely mimics how the DAE model would be used during test time.
+Therefore, we propose to train the DAE
+model using a learning procedure that is based on training
+episodes . More speciﬁcally, during training we form
+training episodes by sampling ˜Nnv “fake” novel classes
+from the available Nbs classes in the training data Dbs
+and use the remaining ˜Nbs = Nbs −˜Nnv classes as base
+ones. We call the sampled novel classes “fake” because
+they actually belong to the set of base classes but during
+this training episode are treated as being novel. So, for each
+“fake” novel class we sample K training examples forming
+a training set for the “fake” novel classes of this training
+episode. We also sample M training examples both from
+the “fake” novel and the remaining base classes forming
+the validation set Dval = {(xm, ym)}M
+m=1 of this training
+episode, where (xm, ym) is the image xm and the label ym
+of the m-th validation example. Then, we produce an initial estimate ˜w of the classiﬁcation weights of the sampled
+classes (both “fake” novel and base) using the mechanics
+of equation (5), and we inject to it Gaussian additive noise
+˜w = {˜wi + ε}
+, where ε ∼N(0, σ). We give
+˜w as input to the DAE model in order to output the reconstructed weights ˆw = {ˆwi} ˜
+i=1. Having computed ˆw we
+apply to them a squared reconstruction loss of the target
+weights w∗= {w∗i} ˜
+i=1 and a classiﬁcation loss of the M
+validation examples of this training episode:
+loss(xm, ym| ˆw) ,
+where loss(xm, ym|ˆw) = −z⊺
+m ˆwym + log(P ˜
+is the cross entropy loss of the m-th validation example
+and zm = F(xm|θ) is the feature vector of the m-th example. Note that the target weights w∗are the corresponding
+base class weight vectors already learned by the recognition
+2.2. Graph Neural Network based Denoising Autoencoder
+Here we describe how we implement our DAE model.
+Reconstructing the classiﬁcation weights of the novel classes,
+for which training data are scarce, is an ill-deﬁned problem.
+One way to boost DAE’s reconstruction performance is by
+allowing it to take into account the inter-class relationships
+when reconstructing the classiﬁcation weights of a set of
+classes. Given the unordered nature in a set of classes, we
+chose to implement the DAE model by use of a Graph Neural
+Network (GNN). In the remainder of this subsection we
+describe how we employed a GNN for the reconstruction
+task and what type of GNN architecture we used.
+GNNs are multi-layer networks that operate on graphs
+G = (V, E) by structuring their computations according to
+the graph connectivity. i.e., at each GNN layer the feature
+responses of a node are computed based on the neighboring
+nodes deﬁned by the adjacency graph (see Figure 4a for
+an illustration). In our case, we associate the set of classes
+i=1 (for which we want to reconstruct their classiﬁcation weights) with a graph G = (V, E), where each node
+vi ∈V corresponds to the class i in Y (either base or novel).
+To deﬁne the set of edges (i, j) ∈E of the graph, we connect
+each class i with its J2 closest classes in terms of the cosinesimilarity of the initial estimates of their classiﬁcation weight
+vectors (before the injection of the Gaussian noise). The edge
+strength aij ∈ of each edge (i, j) ∈E is computed by
+applying the softmax operation over the cosine similarities
+scores of its neighbors N(i) = {j, ∀(i, j) ∈E}, thus forcing P
+j∈N(i) aij = 13. We deﬁne as h(l) = {h(l)
+set of feature vectors that represent the N graph nodes (i.e.,
+the N classes) at the l-th level of the GNN. In this case, the
+input set h(0) to the GNN is the set of classiﬁcation weight
+vectors w = {wi}N
+i=1 = h(0) that the GNN model will
+reﬁne. Each GNN layer, receives as input the set h(l) and
+outputs a new set h(l+1) as:
+N(i) = AGGREGATE
+j , ∀j ∈N(i)}
+where AGGREGATE(·) is a parametric function that for each
+node i aggregates information from its node neighbors N(i)
+to generate the message feature h(l)
+N(i), and UPDATE(·, ·) is
+a parametric function that for each node i will get as input
+the features h(l)
+N(i) and will compute the new feature
+vector h(l+1)
+of that node.
+2In our experiments we use J = 10 classes as neighbors.
+3For this softmax operation we used an inverse temperature value of 5.
+AGGREGATION
+Aggregated
+neighboring
+Input state
+Output state
+Graph G = (V, E)
+Graph Neural Network Layer
+(a) The general architecture of a GNN layer.
+Aggregated
+neighboring
+Input state
+Output state
+Graph Neural Network Layer with RelationNet based Aggregation Function
+Linear Layer +
+Activation function
+RelationNet based
+AGGREGATION FUNCTION
+UPDATE FUNCTION
+PAIRWISE FUNCTION q(. , .)
+Activation
+(b) The architecture of the hidden GNN layers in our work.
+Figure 4: (a) A GNN layer typically consists of two functions, an
+aggregation function that, for a node of interest (e.g., node A in the
+ﬁgure), aggregates information from its neighboring nodes, and an
+update function that updates the state (i.e., the features) of that node
+by taking into account both the state of that node and the aggregated
+information from its neighborhood. (b) The GNN layer architecture
+that we use in our work implements the aggregation function as
+a small Relation-Net network . The two linear layers in the
+pairwise function q(·, ·) are the same (i.e., share parameters).
+Relation-Net based aggregation function.
+Generally,
+the aggregation function is implemented as linear combination of message vectors received from the node neighbors:
+aij · q(l) 
+where q(l) 
+is a function that computes the message vector that node i receives from its neighbor j. Inspired
+by relation networks , we implement q(l) 
+a non-linear parametric function of the feature vectors of
+both the sender and the receiver nodes. Speciﬁcally, given
+the two input vectors, q(l) forwards each of them through
+the same fully connected linear layer, adds their outputs, and
+then applies BatchNorm + Dropout + LeakyReLU units (see
+Figure 4b). Note that in this implementation the message
+between two nodes, is independent of the direction of the
+message, i.e., q(l) 
+Update function.
+The update function of the hidden GNN
+layers is implemented as:
+i ; u(l) h
+where [ααα;βββ] is the concatenation of vectors ααα and βββ, and
+u(l)(·) is a non-linear parametric function that, given as input
+a vector, forwards it through a fully connected linear layer
+followed by BatchNorm + Dropout + LeakyReLU + L2normalization units (see Figure 4b). For the last prediction
+GNN layer, the update function is implemented as:
+δwi, oi = u(L−1) h
+where u(L−1)(·) is a non-linear parametric function that,
+given an input vector, outputs the two d-dimensional vectors
+δwi and oi. u(L−1)(·) is implemented as a fully connected
+linear layer followed by a L2-normalization unit for the δwi
+output, and a Sigmoid unit for the oi output. The ﬁnal output
+of the GNN is computed with the following operation:
+ˆwi = wi + oi ⊙δwi.
+As can be seen, we opted for residual-like predictions of the
+new classiﬁcation weights ˆwi, since this type of operations
+are more appropriate for the type of reﬁning/denoising that
+must be performed by our DAE model. Our particular implementation uses the gating vectors oi to control the amount
+of contribution of the residuals δwi to the input weights wi.
+We named this GNN based DAE model for weights reconstruction wDAE-GNN model. Alternatively, we also
+explored a simpler DAE model that is implemented to reconstruct each classiﬁcation weight vector (in a given task
+instance of our meta-model) independently with a MLP network (wDAE-MLP model). More speciﬁcally, the wDAE-
+MLP model is implemented with layers similar to those of
+the GNN that only include the update function part and not
+the aggregation function part. So, it only includes fully
+connected layers and the skip connections (i.e., 2nd and 3rd
+boxes in update function part of Figure 4b).
+3. Experimental Evaluation
+In this section we ﬁrst compare our method against prior
+work in §3.2 and then in §3.3 we perform a detailed experimental analysis of it.
+Datasets and Evaluation Metrics.
+We evaluate our approach on three datasets, ImageNet-FS , MiniImageNet , and tiered-MiniImageNet . ImageNet-FS
+is a few-shot benchmark created by splitting the ImageNet
+classses into 389 base classes and 611 novel classes;
+193 of the base classes and 300 of the novel classes are used
+for validation and the remaining 196 base classes and 311
+novel classes are used for testing. In this benchmark the models are evaluated based on (1) the recognition performance of
+the 311 test novel classes (i.e., 311-way classiﬁcation task),
+and (2) recognition of all the 507 classes (i.e., both the 196
+test base classes and the 311 novel classes; for more details
+we refer to ). We report result for K = 1, 2, 5, 10,
+or 20 training examples per novel class. For each of those
+K-shot settings we sample 100 test episodes (where each
+episode consists of sampling K training examples per novel
+class and then evaluating on the validation set of ImageNet)
+and compute the mean accuracies over all episodes. Mini-
+ImageNet consists of 100 classes randomly picked from the
+ImageNet with 600 images per class. Those 100 classes
+are divided into 64 base classes, 16 validation novel classes,
+and 20 test novel classes. The images in MiniImageNet
+have size 84 × 84 pixels. tiered-MiniImageNet consists of
+ImageNet 608 classes divided into 351 base classes, 97 validation novel classes, and 160 novel test classes. In total there
+are 779, 165 images again with size 84 × 84. In MiniImageNet and tiered-MiniImageNet, the models are evaluated
+on several 5-way classiﬁcation tasks (i.e., test episodes) created by ﬁrst randomly sampling 5 novel classes from the
+available test novel classes, and then K = 1, or 5 training
+examples and M = 15 test examples per novel class. To
+report results we use 20000 such test episodes and compute
+the mean accuracies over all episodes. Note that when learning the novel classes we also feed the base classes to our
+wDAE-GNN models in order to take into account the class
+dependencies between the novel and base classes.
+3.1. Implementation details
+Feature extractor architectures.
+For the ImageNet-FS
+experiments we use a ResNet-10 architecture that given
+images of size 224 × 224 outputs 512-dimensional feature
+vectors. For the MiniImageNet and tiered-MiniImageNet
+experiments we used a 2-layer Wide Residual Network 
+(WRN-28-10) that receives images of size 80 × 80 (resized
+form 84 × 84) and outputs 640-dimensional feature vectors.
+wDAE-GNN and wDAE-MLP architectures.
+In all our
+experiments we use a wDAE-GNN architecture with two
+GNN layers. In ImageNet-FS (MiniImageNet) the q(l)(·, ·)
+parametric function of all GNN layers and the u(l)(·) parametric function of the hidden GNN layer output features
+of 1024 (320) channels. All dropout units have 0.7 (0.95)
+dropout ratio, and the σ of the Gaussian noise in DAE is
+0.08 (0.1). A similar architecture is used in wDAE-MLP but
+without the aggregation function parts.
+For training we use SGD optimizer with momentum 0.9
+and weight decay 5e −4. We train our models only on the
+1-shot setting and then use them for all the K-shot settings.
+During test time we apply only 1 reﬁnement step of the
+initial estimates of the classiﬁcation weights (i.e., only 1
+application of the update rule (4)). In ImageNet-FS the step
+size ε of the update rule (4) is set to 1.0, 1.0, 0.6, 0.4, and
+0.2 for the K = 1, 2, 5, 10, and 20 shot settings respectively.
+In MiniImageNet ε is set to 1.0 and 0.5 for the K = 1 and
+K = 5 settings respectively. All hyper-parameters were
+Novel classes
+All classes
+Prior work
+Prototypical-Nets (from )
+54.4 66.3 71.2 73.9
+61.0 69.7 72.9 74.6
+Matching Networks (from )
+54.0 66.0 72.5 76.9
+61.0 69.0 73.7 76.5
+Logistic regression 
+51.1 64.8 71.6 76.6
+49.9 64.2 71.9 76.9
+Logistic regression w/ H 
+50.8 62.0 69.3 76.5
+59.4 67.6 72.8 76.9
+SGM w/ H 
+62.1 71.3 75.8 78.1
+Batch SGM 
+60.5 71.4 75.8 78.5
+Prototype Matching Nets w/ H 
+57.8 69.0 74.3 77.4
+64.7 71.9 75.2 77.5
+57.5 69.2 74.8 78.1
+65.2 72.7 76.5 78.7
+59.7 70.3 75.0 77.8
+66.3 73.2 76.1 77.5
+59.2 70.0 74.8 77.7
+66.1 72.9 75.8 77.4
+Ablation study on wDAE-GNN
+Initial estimates
+56.9 68.9 74.5 77.7
+64.3 72.3 75.6 77.3
+wDAE-GNN - No Noise
+59.0 70.0 74.9 77.8
+66.0 72.9 75.8 77.4
+wDAE-GNN - Noisy Targets as Input
+59.4 70.1 74.8 77.7
+66.0 73.1 76.0 77.5
+wDAE-GNN - No Cls. Loss
+59.1 69.8 74.6 77.6
+65.5 72.7 75.8 77.5
+wDAE-GNN - No Rec. Loss
+59.4 70.1 75.0 77.8
+66.0 73.1 76.1 77.6
+Table 1: Top-5 accuracies on the novel and on all classes for the ImageNet-FS benchmark . To report results we use 100 test episodes.
+For all our models the 95% conﬁdence intervals on the K = 1, 2, 5, 10, and 20 settings are (around) ±0.21, ±0.15, ±0.08, ±0.06, and
+±0.05 respectively for Novel classes and ±0.13, ±0.10, ±0.05, ±0.04, and ±0.03 for All classes.
+cross-validated in the validation splits of the datasets.
+We provide the implementation code at https://
+github.com/gidariss/wDAE_GNN_FewShot
+3.2. Comparison with prior work
+Here we compare our wDAE-GNN and wDAE-MLP models against prior work on the ImageNet-FS, MiniImageNet,
+and tiered-MiniImageNet datasets. More speciﬁcally, on
+ImageNet-FS (see Table 1) the proposed models achieve
+in most cases superior performance than prior methods especially on the challenging and interesting scenarios of
+having less than 5 training examples per novel class (i.e.,
+K ≤5). For example, the wDAE-GNN model improves the
+1-shot accuracy for novel classes of the previous state-ofthe-art by around 1.8 accuracy points. On MiniImageNet
+and tiered-MiniImageNet (see Tables 2 and 4 respectively)
+the proposed models surpass the previous methods on all
+settings and achieve new state-of-the-art results. Also, for
+MiniImageNet we provide in Table 3 the classiﬁcation accuracies of both the novel and base classes and we compare
+with the LwoF prior work. Again, we observe that our
+models surpass the prior work.
+3.3. Analysis of our method
+Ablation study of DAE framework.
+Here we perform ablation study of various aspects of our DAE framework on the
+ImageNet and the MiniImageNet datasets (see corresponding results on Tables 1 and 2). Speciﬁcally, we examine the
+cases of (1) training the reconstruction models without noise
+(entries with sufﬁx No Noise), (2) during training providing
+as input to the model noisy versions of the target classiﬁcation weights that has to reconstruct (entries with sufﬁx Noisy
+Targets as Input), (3) training the models without classiﬁcation loss on the validation examples (i.e., using only the
+ﬁrst term of the loss (6); entries with sufﬁx No Cls. Loss),
+and (4) training the models with only the classiﬁcation loss
+on the validation examples and without the reconstruction
+loss (i.e., using only the second term of the loss (6); entries
+with sufﬁx No Rec. Loss). (5) We also provide the recognition performance of the initial estimates of the classiﬁcation
+weight vectors without being reﬁned by our DAE models
+(entries Initial Estimates). We observe that each of those
+ablations to our DAE models lead to worse few-shot recognition performance. Among them, the models trained without
+noise on theirs inputs achieves the worst performance, which
+demonstrates the necessity of the DAE formulation.
+Impact of GNN architecture.
+By comparing the classi-
+ﬁcation performance of the wDAE-GNN models with the
+wDAE-MLP models in Tables 1 and 2, we observe that indeed, taking into account the inter-class dependencies with
+the proposed GNN architecture is beneﬁcial to the few-shot
+recognition performance. Speciﬁcally, the GNN architecture
+offers a small (e.g., around 0.40 percentage points in the
+1-shot case) but consistent improvement that according to
+the conﬁdences intervals of Tables 1 and 2 is in almost all
+cases statistically signiﬁcant.
+Prior work
+48.70 ± 1.84%
+63.10 ± 0.92%
+Prototypical Nets 
+49.42 ± 0.78%
+68.20 ± 0.66%
+56.20 ± 0.86%
+72.81 ± 0.62%
+RelationNet 
+50.40 ± 0.80%
+65.30 ± 0.70%
+48.70 ± 0.60%
+65.50 ± 0.60%
+Conv-4-512
+51.20 ± 0.60%
+68.20 ± 0.60%
+TADAM 
+58.50 ± 0.30%
+76.70 ± 0.30%
+Munkhdalai et al. 
+57.10 ± 0.70%
+70.04 ± 0.63%
+SNAIL 
+55.71 ± 0.99%
+68.88 ± 0.92%
+Qiao et al. †
+59.60 ± 0.41%
+73.74 ± 0.19%
+61.76 ± 0.08%
+77.59 ± 0.12%
+LwoF (our implementation)
+60.06 ± 0.14%
+76.39 ± 0.11%
+61.07 ± 0.15%
+76.75 ± 0.11%
+60.61 ± 0.15%
+76.56 ± 0.11%
+62.96 ± 0.15%
+78.85 ± 0.10%
+62.67 ± 0.15%
+78.70 ± 0.10%
+Ablation study on wDAE-GNN
+Initial estimate
+59.68 ± 0.14%
+76.48 ± 0.11%
+wDAE-GNN - No Noise
+60.29 ± 0.14%
+76.49 ± 0.11%
+wDAE-GNN - Noisy Targets as Input
+60.92 ± 0.15%
+76.69 ± 0.11%
+wDAE-GNN - No Cls. Loss
+60.96 ± 0.15%
+76.75 ± 0.11%
+wDAE-GNN - No Rec. Loss
+60.76 ± 0.15%
+76.64 ± 0.11%
+Ablation study on wDAE-MLP
+wDAE-MLP - No Noise
+60.16 ± 0.15%
+76.50 ± 0.11%
+wDAE-MLP - Noisy Targets as Input
+60.43 ± 0.15%
+76.49 ± 0.11%
+wDAE-MLP - No Cls. Loss
+60.55 ± 0.15%
+76.62 ± 0.11%
+wDAE-MLP - No Rec. Loss
+60.45 ± 0.15%
+76.50 ± 0.11%
+Table 2: Top-1 accuracies on the novel classes of MiniImageNet
+test set with 95% conﬁdence intervals. †: using also the validation
+classes for training.
+Novel classes
+All classes
+60.03 ± 0.14%
+76.35 ± 0.11%
+55.70 ± 0.08%
+66.27± 0.07%
+61.07 ± 0.15%
+76.75 ± 0.11%
+56.55 ± 0.08%
+67.00 ± 0.07%
+60.61 ± 0.14%
+76.56 ± 0.11%
+56.07 ± 0.08%
+67.05 ± 0.07%
+Table 3: Top-1 accuracies on the novel and on all classes of Mini-
+ImageNet test set with 95% conﬁdence intervals.
+MAML (from )
+51.67 ± 1.81%
+70.30 ± 0.08%
+Prototypical Nets 
+53.31 ± 0.89%
+72.69 ± 0.74 %
+RelationNet (from )
+54.48 ± 0.93%
+71.32 ± 0.78%
+Liu et al. 
+57.41 ± 0.94%
+71.55 ± 0.74
+66.33 ± 0.05%
+81.44 ± 0.09 %
+LwoF (our implementation)
+67.92 ± 0.16%
+83.10 ± 0.12%
+wDAE-GNN (Ours)
+68.18 ± 0.16%
+83.09 ± 0.12%
+Top-1 accuracies on the novel classes of tiered-
+MiniImageNet test set with 95% conﬁdence intervals.
+4. Conclusion
+We proposed a meta-model for few-shot learning that
+takes as input a set of novel classes (with few training examples for each of them) and then generates classiﬁcation
+weight vectors for them. Our model is based on the use
+of a Denoising Autoencoder (DAE) network. During training, the injected noise on the classiﬁcation weights given as
+input to the DAE network allows the regularization of the
+learning procedure and helps in boosting the performance
+of the meta-model. After training, the DAE model is used
+for reﬁning an initial set of classiﬁcation weights with the
+goal of making them more discriminative with respect to
+the classiﬁcation task at hand. We implemented the above
+DAE model by use of a Graph Neural Network architecture
+so as to allow our meta-model to properly learn (and take
+advantage of) the structure of the entire set of classiﬁcation
+weights that must be reconstructed on each instance (i.e.,
+episode) of the meta-learning task. Our detailed experiments
+on the ImageNet-FS and MiniImageNet datasets reveal (1) the signiﬁcance of our DAE formulation for training
+meta-models capable to generate classiﬁcation weights, and
+(2) that the GNN architecture manages to offer a consistent
+improvement on the few-shot classiﬁcation accuracy. Finally, our model surpassed prior methods on all the explored
+5. Acknowledgements
+We would like to thank Martin Simonovsky and Shell Xu
+for fruitful discussions and Thibault Groueix for helping to
+write the paper.

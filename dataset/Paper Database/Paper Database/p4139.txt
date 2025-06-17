@@ -1,0 +1,426 @@
+Human Pose Estimation with Iterative Error Feedback
+Jo˜ao Carreira∗
+ 
+UC Berkeley
+Pulkit Agrawal
+ 
+UC Berkeley
+Katerina Fragkiadaki†
+ 
+UC Berkeley
+Jitendra Malik
+ 
+UC Berkeley
+Hierarchical feature extractors such as Convolutional
+Networks (ConvNets) have achieved impressive performance on a variety of classiﬁcation tasks using purely feedforward processing. Feedforward architectures can learn
+rich representations of the input space but do not explicitly model dependencies in the output spaces, that are quite
+structured for tasks such as articulated human pose estimation or object segmentation. Here we propose a framework
+that expands the expressive power of hierarchical feature
+extractors to encompass both input and output spaces, by
+introducing top-down feedback. Instead of directly predicting the outputs in one go, we use a self-correcting model
+that progressively changes an initial solution by feeding
+back error predictions, in a process we call Iterative Error
+Feedback (IEF). IEF shows excellent performance on the
+task of articulated pose estimation in the challenging MPII
+and LSP benchmarks, matching the state-of-the-art without
+requiring ground truth scale annotation.
+1. Introduction
+Feature extractors such as Convolutional Networks
+(ConvNets) represent images using a multi-layered hierarchy of features and are inspired by the structure and
+functionality of the visual pathway of the human brain
+ . Feature computation in these models is purely feedforward, however, unlike in the human visual system where
+feedback connections abound . Feedback can be
+used to modulate and specialize feature extraction in early
+layers in order to model temporal and spatial context (e.g.
+priming ), to leverage prior knowledge about shape for
+segmentation and 3D perception, or simply for guiding visual attention to image regions relevant for the task under
+∗Now at Google DeepMind.
+†Now at Google.
+consideration.
+Here we are interested in using feedback to build predictors that can naturally handle complex, structured output
+spaces. We will use as running example the task of 2D human pose estimation , where the goal is to
+infer the 2D locations of a set of keypoints such as wrists,
+ankles, etc, from a single RGB image. The space of 2D
+human poses is highly structured because of body part proportions, left-right symmetries, interpenetration constraints,
+joint limits (e.g. elbows do not bend back) and physical connectivity (e.g. wrists are rigidly related to elbows), among
+others. Modeling this structure should make it easier to pinpoint the visible keypoints and make it possible to estimate
+the occluded ones.
+Our main contribution is in providing a generic framework for modeling rich structure in both input and output
+spaces by learning hierarchical feature extractors over their
+joint space.
+We achieve this by incorporating top-down
+feedback – instead of trying to directly predict the target
+outputs, as in feedforward processing, we predict what is
+wrong with their current estimate and correct it iteratively.
+We call our framework Iterative Error Feedback, or IEF.
+In IEF, a feedforward model f operates on the augmented input space created by concatenating (denoted by
+⊕) the RGB image I with a visual representation g of the
+estimated output yt to predict a “correction” (ϵt) that brings
+yt closer to the ground truth output y. The correction signal ϵt is applied to the current output yt to generate yt+1
+and this is converted into a visual representation by g, that
+is stacked with the image to produce new inputs xt+1 = I
+⊕g(yt) for f, and so on iteratively. This procedure is initialized with a guess of the output (y0) and is repeated until
+a predetermined termination criterion is met. The model
+is trained to produce bounded corrections at each iteration,
+e.g. ||ϵt||2 < L. The motivation for modifying yt by a
+bounded amount is that the space of xt is typically highly
+non-linear and hence local corrections should be easier to
+ 
+Figure 1: An implementation of Iterative Error Feedback (IEF) for 2D human pose estimation. The left panel shows the input
+image I and the initial guess of keypoints y0, represented as a set of 2D points. For the sake of illustration we show only 3 out
+of 17 keypoints, corresponding to the right wrist (green), left wrist (blue) and top of head (red). Consider iteration t: predictor
+f receives the input xt – image I stacked with a “rendering” of current keypoint positions yt – and outputs a correction ϵt.
+This correction is added to yt, resulting in new keypoint position estimates yt+1. The new keypoints are rendered by function
+g and stacked with image I, resulting in xt+1, and so on iteratively. Function f was modeled here as a ConvNet. Function
+g converts each 2D keypoint position into one Gaussian heatmap channel. For 3 keypoints there are 3 stacked heatmaps
+which are visualized as channels of a color image. In contrast to previous works, in our framework multi-layered hierarchical
+models such as ConvNets can learn rich models over the joint space of body conﬁgurations and images.
+learn. The working of our model can be mathematically
+described by the following equations:
+ϵt = f(xt)
+yt+1 = yt + ϵt
+xt+1 = I ⊕g(yt+1),
+where functions f and g have additional learned parameters Θf and Θg, respectively. Although we have used the
+predicted error to additively modify yt in equation 2, in general yt+1 can be a result of an arbitrary non-linear function
+that operates on yt, ϵt.
+In the running example of human pose estimation, yt is
+vector of retinotopic positions of all keypoints that are individually mapped by g into heatmaps (i.e. K heatmaps for K
+keypoints). The heatmaps are stacked together with the image and passed as input to f (see ﬁgure 1 for an overview).
+The “rendering” function g in this particular case is not
+learnt – it is instead modelled as a 2D Gaussian having a
+ﬁxed standard deviation and centered on the keypoint location. Intuitively, these heatmaps encode the current belief in
+keypoint locations in the image plane and thus form a natural representation for learning features over the joint space
+of body conﬁgurations and the RGB image.
+The dimensionality of inputs to f is H × W × (K + 3),
+where H, W represent the height and width of the image
+and (K + 3) correspond to K keypoints and the 3 color
+channels of the image. We model f with a ConvNet with
+parameters Θf (i.e. ConvNet weights). As the ConvNet
+takes I ⊕g(yt) as inputs, it has the ability to learn features
+over the joint input-output space.
+2. Learning
+In order to infer the ground truth output (y), our method
+iteratively reﬁnes the current output (yt). At each iteration,
+f predicts a correction (ϵt) that locally improves the current
+output. Note that we train the model to predict bounded
+corrections, but we do not enforce any such constraints at
+test time. The parameters (Θf, Θg) of functions f and g in
+our model, are learnt by optimizing equation 4,
+h(ϵt, e(y, yt))
+where, ϵt and e(y, yt) are predicted and target bounded
+corrections, respectively. The function h is a measure of
+distance, such as a quadratic loss. T is the number of correction steps taken by the model. T can either be chosen to
+be a constant or, more generally, be a function of ϵt (i.e. a
+termination condition).
+We optimize this cost function using stochastic gradient
+descent (SGD) with every correction step being an independent training example. We grow the training set progres-
+Algorithm 1 Learning Iterative Error Feedback with Fixed
+Path Consolidation
+1: procedure FPC-LEARN
+Initialize y0
+for t ←1 to (Tsteps) do
+for all training examples (I, y) do
+ϵt ←e(y, yt)
+for j ←1 to N do
+Update Θf and Θg with SGD, using loss h
+and target corrections E
+13: end procedure
+sively: we start by learning with the samples corresponding
+to the ﬁrst step for N epochs, then add the samples corresponding to the second step and train another N epochs, and
+so on, such that early steps get optimized longer – they get
+consolidated.
+As we only assume that the ground truth output (y) is
+provided at training time, it is unclear what the intermediate
+targets (yt) should be. The simplest strategy, which we employ, is to predeﬁne yt for every iteration using a set of ﬁxed
+corrections e(y, yt) starting from y0, obtaining (y0, y1, ..y).
+We call our overall learning procedure Fixed Path Consolidation (FPC) which is formally described by algorithm 1.
+The target bounded corrections for every iteration are
+computed using a function e(y, yt), which can take different forms for different problems. If for instance the output
+is 1D, then e(y, yt) = max(sign(y −yt) · α, y −yt) would
+imply that the target “bounded” error will correct yt by a
+maximum amount of α in the direction of y.
+2.1. Learning Human Pose Estimation
+Human pose was represented by a set of 2D keypoint locations y : {yk ∈ℜ2, k ∈[1, K]} where K is the number of
+keypoints and yk denotes the kth keypoint. The predicted
+location of keypoints at the tth iteration has been denoted by
+t , k ∈[1, K]}. The rendering of yt as heatmaps concatenated with the image was provided as inputs to a ConvNet (see section 1 for details). The ConvNet was trained to
+predict a sequence of “bounded” corrections for each keypoint (ϵk
+t ) . The corrections were used to iteratively reﬁne
+the keypoint locations.
+Let u = yk −yk
+t and the corresponding unit vector be
+||u||2 . Then, the target “bounded” correction for the
+tth iteration and kth keypoint was calculated as:
+t ) = min(L, ||u||) · ˆu
+where L denotes the maximum displacement for each keypoint location. An interesting property of this function is
+that it is constant while a keypoint is far from the ground
+truth and varies only in scale when it is closer than L to the
+ground truth. This simpliﬁes the learning problem: given an
+image and a ﬁxed initial pose, the model just needs to predict a constant direction in which to move keypoints, and
+to ”slow down” motion in this direction when the keypoint
+becomes close to the ground truth. See ﬁg. 2 for an illustration.
+The target corrections were calculated independently for
+each keypoint in each example and we used an L2 regression loss to model h in eq. 4. We set L to 20 pixels in
+our experiments. We initialized y0 as the median of ground
+truth 2D keypoint locations on training images and trained
+a model for T = 4 steps, using N = 3 epochs for each
+new step. We found the fourth step to have little effect on
+accuracy and used 3 steps in practice at test time.
+ConvNet architecture.
+We employed a standard ConvNet architecture pre-trained on Imagenet: the very deep
+googlenet 1. We modiﬁed the ﬁlters in the ﬁrst convolution layer (conv-1) to account for 17 additional channels
+due to 17 keypoints. In our model, the conv-1 ﬁlters operated on 20 channel inputs. The weights of the ﬁrst three
+conv-1 channels (i.e. the ones corresponding to the image)
+were initialized using the weights learnt by pre-training on
+Imagenet. The weights corresponding to the remaining 17
+channels were randomly initialized with Gaussian noise of
+variance 0.1. We discarded the last layer of 1000 units that
+predicted the Imagenet classes and replaced it with a layer
+containing 32 units, encoding the continuous 2D correction
+2 expressed in Cartesian coordinates (the 17th ”keypoint” is
+the location of one point anywhere inside a person, marking
+her, and which is provided as input both during training and
+testing, see section 3). We used a ﬁxed ConvNet input size
+of 224 × 224.
+3. Results
+We tested our method on the two most challenging
+benchmarks for 2D human pose estimation: the MPII Human Pose dataset , which features signiﬁcant scale variation, occlusion, and multiple people interacting, and Leeds
+Sports Pose dataset (LSP) which features complex
+poses of people in sports. For each person in every image,
+the goal is to predict the 2D locations of all its annotated
+keypoints.
+MPII – Experimental Details. Human pose is represented
+1The VGG-16 network produced similar results, but required signiﬁcantly more memory.
+2Again, we do not bound explicitly the correction at test time, instead
+the network is taught to predict bounded corrections.
+Figure 2: In our human pose estimation running example, the sequence of corrections ϵt moves keypoints along lines in the
+image, starting from an initial mean pose y0 (left), all the way to the ground truth pose y (right), here shown for two different
+images. This simpliﬁes prediction at test time, because the desired corrections to each keypoint are constant for each image,
+up to the last one which is a scaled version. Feedback allows the model to detect when the solution is close and to reduce
+”keypoint motion”, as in a control system. Linear trajectories are shown for only a subset of the keypoints, to limit clutter.
+as a set of 16 keypoints. An additional marking-point in
+each person is available both for training and testing, located somewhere inside each person’s boundary. We represent this point as an additional channel and stack it with
+the other 16 keypoint channels and the 3 RGB channels that
+we feed as input to a ConvNet. We used the same publicly
+available train/validation splits of . We evaluated the
+accuracy of our algorithm on the validation set using the
+standard PCKh metric , and also submitted results for
+evaluation on the test set once, to obtain the ﬁnal score.
+We cropped 9 square boxes centered on the markingpoint of each person, sampled uniformly over scale, from
+1.4× to 0.3× of the smallest side of the image and resized
+them to 256 × 256 pixels. Padding was added as necessary
+for obtaining these dimensions and the amount of training
+data was further doubled by also mirroring the images. We
+used the ground truth height of each person at training time,
+which is provided on MPII, and select as training examples
+the 3 boxes for each person having a side closest to 1.2× the
+person height in pixels. We then trained googlenet models
+on random crops of 224 × 224 patches, using 6 epochs of
+consolidation for each of 4 steps. At test time, we predict
+which one of the 9 boxes is closest to 1.2× the height of
+the person in pixels, using a shallower model, the VGG-S
+ConvNet , trained for that task using an L2 regression
+loss. We then align our model to the center 224×224 patch
+of the selected window. The MatConvnet library was
+employed for these experiments.
+We train our models using keypoint positions for both
+visible and occluded keypoints, which MPII provides in
+many cases whenever they project on to the image (the exception are people truncated by the image border). We zero
+out the backpropagated gradients for missing keypoint annotations. Note that often keypoints lie outside the cropped
+image passed to the ConvNet, but this poses no issues to our
+formulation – keypoints outside the image can be predicted
+and are still visible to the ConvNet as tails of rendered Gaussians.
+Comparison with State-of-the-Art. The standard evaluation procedure in the MPII benchmark assumes ground truth
+scale information is known and images are normalized using this scale information. The current state-of-the-art is
+the sliding-window approach of Tompson et al and IEF
+roughly matches this performance, as shown in table 1. In
+the more realistic setting of unknown scale information, the
+best previous result so far is from Tompson et al. which
+was the ﬁrst work to experiment with this setting and obtained 66.0 PCKh. IEF signiﬁcantly improves upon this
+number to 81.3. Note however that the emphasis in Tompson et al’s system was efﬁciency and they trained and tested
+their model using original image scales – searching over a
+multiscale image pyramid or using our automatic rescaling
+procedure should presumably improve their performance.
+See the MPII website for more detailed results.
+Yang & Ramanan 
+Pischulin et al 
+Tompson et al. 
+Tompson et al. 
+Table 1: MPII test set PCKh-0.5 results for Iterative Error Feedback (IEF) and previous approaches, when ground truth scale
+information at test time is provided (top) and in the more automatic setting when it is not available (bottom). UBody and
+FBody stand for upper body and full body, respectively.
+Step Number
+Figure 3: Evolution of PCKh at 0.5 overlap as function
+of correction step number on the MPII-human-pose validation set, using the ﬁnetuned googlenet network. The model
+aligns more accurately to parts like the head and shoulders,
+which is natural, because these parts are easier to discriminate from the background and have more consistent appearance than limbs.
+LSP – Experimental Details.
+In LSP, differently from
+MPII, images are usually tight around the person whose
+pose is being estimated, are resized so people have a ﬁxed
+size, and have lower resolution. There is also no marking
+point on the torsos so we initialized the 17th keypoints used
+in MPII to the center of the image. The same set of keypoints is evaluated as in MPII and we trained a model using the same hyper-parameters on the extended LSP training set. We use the standard LSP evaluation code supplied
+with the MPII dataset and report person-centric PCP scores
+in table 2. Our results are competitive with the current stateof-the-art of Chen and Yuille .
+4. Analyzing IEF
+In this section, we perform extensive ablation studies to
+validate four choices of the IEF model: 1) proceeding iteratively instead of in a single shot, 2) predicting bounded
+corrections instead of directly predicting the target outputs,
+3) curriculum learning of our bounded corrections, and 4)
+modeling the structure in the full output space (all body
+joints in this case) over carrying out independent predictions for each label.
+Iterative v/s Direct Prediction. For evaluating the importance of progressing towards solutions iteratively we trained
+models to directly predict corrections to the keypoint locations in a single shot (i.e. direct prediction). Table 3
+shows that IEF that additively regresses to keypoint locations achieves PCKh-0.5 of 81.0 as compared to PCKh of
+74.8 achieved by directly regressing to the keypoints.
+Iterative Error Feedback v/s Iterative Direct Prediction.
+Is iterative prediction of the error important or iterative prediction of the target label directly (as in e.g., ) performs comparably? In order to answer this question we
+trained a model from the pretrained googlenet to iteratively
+predict the ground truth keypoint locations (as opposed to
+predicting bounded corrections).
+For comparing performance, we used the same number of iterations for this baseline model and IEF. Table 3 shows that IEF achieves PCKh-
+0.5 of 81.0 as compared to PCKh of 73.4 by iterative direct prediction. This can be understood by the fact that the
+learning problem in IEF is much easier. In IEF, for a given
+image, the model is trained to predict constant corrections
+except for the last one which is a scaled version. In iterative
+direct prediction, because each new pose estimate ends up
+somewhere around the ground truth, the model must learn
+to adjust directions and magnitudes in all correction steps.
+Importance of Fixed Path Consolidation (FPC). The FPC
+method (see algorithm 1) for training a IEF model makes N
+corrections is a curriculum learning strategy where in the
+ith(i ≤N) training stage the model is optimized for performing only the ﬁrst i corrections. Is this curriculum learning strategy necessary or can all the corrections be simultaneously trained? For addressing this question we trained an
+alternative model that trains for all corrections in all epochs.
+We trained IEF with and without FPC for the same number
+of SGD iterations and the performance of both these models is illustrated in ﬁgure 4. The ﬁgure shows that without
+FPC, the performance drops by almost 10 PCKh points on
+the validation set and that there is signiﬁcant drift when performing several correction steps.
+Pishchulin et al. 
+Tompson et al. 
+Fan et al. 
+Chen and Yuille 
+Table 2: Person-centric PCP scores on the LSP dataset test set for IEF and previous approaches.
+Iterative Error Feedback (IEF)
+Direct Prediction
+Iterative Direct Prediction
+Table 3: PCKh-0.5 results on the MPII validation set for models ﬁnetuned from googlenet using Iterative Error Feedback
+(IEF), direct regression to the keypoint locations (direct prediction), and a model that was trained to iteratively predict human
+pose by regressing to the ground truth keypoint locations (instead of bounded corrections) in each iteration, starting from the
+pose in the previous iteration. The results show that our proposed approach results in signiﬁcantly better performance.
+Step Number
+Without FPC
+Validation PCKh-0.5 scores for different number of correction steps taken, when ﬁnetuning a IEF model
+from a googlenet base model using stochastic gradient descent with either Fixed Path Consolidation (With FPC), or
+directly over all training examples (Without FPC), for the
+same amount of time. FPC leads to signiﬁcantly more accurate results, leading to models that can perform more correction steps without drifting. It achieves this by consolidating
+the learning of earlier steps and progressively increasing the
+difﬁculty of the training set by adding additional correction
+Learning Structured Outputs. One of the major merits of
+IEF is supposedly that it can jointly learn the structure in input images and target outputs. For human pose estimation,
+IEF models the space of outputs by augmenting the image
+with additional input channels having gaussian renderings
+centered around estimated keypoint locations . If it is the
+case that IEF learns priors over the appropriate relative locations of the various keypoints, then depriving the model
+of keypoints other than the one being predicted should decrease performance.
+In order to evaluate this hypothesis we trained three different IEF models and tested how well each predicted the
+location of the “Left Knee” keypoint. The ﬁrst model had
+only one input channel corresponding to the left knee, the
+second model had two channels corresponding to left knee
+and the left hip. The third model was trained using all keypoints in the standard IEF way. The performance of these
+three models is reported in table 4. As a baseline, regression gets 64.6, whereas the IEF model with a single additional input channel for the left knee gets PCKh of 69.2
+This shows that feeding back the current estimate of the left
+knee keypoint allows for more accurate localization by itself. Furthermore, the IEF model over both left knee and
+left hip gets PCKh of 72.8. This suggests that the relationship between neighboring outputs has much of the information, but modeling all joints together with the image still
+wins, obtaining a PCKh of 73.8.
+5. Related Work
+There is a rich literature on structured output learning
+ (e.g. see references in ) but it is a relatively modern topic in conjunction with feature learning, for computer
+vision .
+Here we proposed a feedback-based framework for
+structured-output learning. Neuroscience models of the human brain suggest that feedforward connections act as information carriers while numerous feedback connections act as
+modulators or competitive inhibitors to aid feature grouping
+ , ﬁgure-ground segregation and object recognition
+ . In computer vision, feedback has been primarily used
+so far for learning selective attention ; in attention
+is implemented by estimating a bounding box in an image
+Direct Prediction of All Joints
+IEF Left Knee
+IEF Left Knee + Left Hip
+IEF All Joints
+Left Knee PCKh-0.5
+MPII validation PCKh-0.5 results for left knee localization when using IEF and both training and predicting
+different subsets of joints. We also show the result obtained using a direct prediction variant similar to plain regression on
+all joints (having the mean pose Gaussian maps in the input). Modeling global body structure jointly with the image leads to
+best results by ”IEF All Joints”. Interestingly, feedback seems to add value by itself and IEF on the left knee, in isolation,
+signiﬁcantly outperforms the direct prediction baseline.
+for the algorithm to process next, while in attention is
+formed by selecting some convolutional features over others
+(it does not have a spatial dimension).
+Stacked inference methods are another
+related family of methods. Differently, some of these methods consider each output in isolation , all use different weights or learning models in each stage of inference
+ or they do not optimize for correcting their current estimates but rather attempt to predict the answer from scratch
+at each stage . In concurrent work, Oberweger et
+al proposed a feedback loop for hand pose estimation
+from kinect data that is closely related to our approach. The
+autocontext work of is also related and iteratively computes label heatmaps by concatenating the image with the
+heatmaps previously predicted. IEF is inspired by this work
+and we show how this iterative computation can be carried
+out effectively with deep Convnet architectures, and with
+bounded error corrections, rather than aiming for the answer from scratch at each iteration.
+Another line of work aims to inject class-speciﬁc spatial
+priors using coarse-to-ﬁne processing, e.g. features arising
+from different layers of ConvNets were recently used for instance segmentation and keypoint prediction . For pose
+inference, combining multiple scales aids in capturing subtle long-range dependencies (e.g. distinguishing the
+left and right sides of the body which depend on whether a
+person is facing the camera). The system in our human pose
+estimation example can be seen as closest to approaches
+employing “pose-indexed features” , but leveraging hierarchical feature learning. Graphical models can also
+encode dependencies between outputs and are still popular
+in many applications, including human pose estimation .
+Classic spatial alignment and warping computer vision
+models, such as snakes, and Active Appearance Models (AAMs) have similar goals as the proposed IEF, but
+are not learned end-to-end – or learned at all – employ linear shape models and hand designed features and require
+slower gradient computation which often takes many iterations before convergence. They can get stuck in poor local
+minimas even for constrained variation (AAMs and small
+out-of-plane face rotations). IEF, on the other hand, is able
+to minimize over rich articulated human 3D pose variation,
+starting from a mean shape. Although extensions that use
+learning to drive the optimization have been proposed ,
+typically these methods still require manually deﬁned energy functions to measure goodness of ﬁt.
+6. Conclusions
+While standard ConvNets offer hierarchical representations that can capture the patterns of images at multiple levels of abstraction, the outputs are typically modeled as ﬂat
+image or pixel-level 1-of-K labels, or slightly more complicated hand-designed representations. We aimed in this
+paper to mitigate this asymmetry by introducing Iterative
+Error Feedback (IEF), which extends hierarchical representation learning to output spaces, while leveraging at heart
+the same machinery. IEF works by, in broad terms, moving
+the emphasis from the problem of predicting the state of the
+external world to one of correcting the expectations about
+it, which is achieved by introducing a simple feedback connection in standard models.
+In our pose estimation working example we opted for
+feeding pose information only into the ﬁrst layer of the ConvNet for the sake of simplicity. This information may also
+be helpful for mid-level layers, so as to modulate not only
+edge detection, but also processes such as junction detection or contour completion which advanced feature extractors may need to compute. We also have only experimented
+so far feeding back ”images” made up of Gaussian distributions. There may be more powerful ways to render topdown pose information using parametrized computational
+blocks (e.g. deconvolution) that can then be learned jointly
+with the rest of the model parameters using standard backpropagation. This is desirable in order to attack problems
+with higher-dimensional output spaces such as 3D human
+pose estimation or segmentation.
+Acknowledgement
+This work was supported in part by ONR MURI
+N00014-14-1-0671 and N00014-10-1-0933. Jo˜ao Carreira
+was partially supported by the Portuguese Science Foundation, FCT, under grant SFRH/BPD/84194/2012. Pulkit
+Agrawal was partially supported by a Fulbright Science
+and Technology Fellowship. We gratefully acknowledge
+NVIDIA corporation for the donation of Tesla GPUs for
+this research. We thank Georgia Gkioxari and Carl Doersch
+for helpful comments.
+Mean shape
+Ground Truth
+Figure 5: Example poses obtained using the proposed method IEF on the MPII validation set. From left to right we show the
+sequence of corrections the method makes – on the right is the ground truth pose, including annotated occluded keypoints,
+which are not evaluated. Note that IEF is robust to left-right ambiguities and is able to rotate the initial pose by up to 180 (ﬁrst
+and ﬁfth row), can align across occlusions (second and third rows) and can handle scale variation (second, fourth and ﬁfth
+rows) and truncation (ﬁfth row). The bottom two rows show failure cases. In the ﬁrst one, the predicted conﬁguration captures
+the gist of the pose but is misaligned and not scaled properly. The second case shows several people closely interacting and
+the model aligns to the wrong person. The black borders show padding. Best seen in color and with zoom.

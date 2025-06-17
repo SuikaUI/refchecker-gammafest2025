@@ -1,0 +1,489 @@
+HAL Id: hal-01410872
+ 
+Submitted on 6 Dec 2016
+HAL is a multi-disciplinary open access
+archive for the deposit and dissemination of scientific research documents, whether they are published or not.
+The documents may come from
+teaching and research institutions in France or
+abroad, or from public or private research centers.
+L’archive ouverte pluridisciplinaire HAL, est
+destinée au dépôt et à la diffusion de documents
+scientifiques de niveau recherche, publiés ou non,
+émanant des établissements d’enseignement et de
+recherche français ou étrangers, des laboratoires
+publics ou privés.
+Fast, Exact and Multi-Scale Inference for Semantic
+Image Segmentation with Deep Gaussian CRFs
+Siddhartha Chandra, Iasonas Kokkinos
+To cite this version:
+Siddhartha Chandra, Iasonas Kokkinos. Fast, Exact and Multi-Scale Inference for Semantic Image
+Segmentation with Deep Gaussian CRFs. European Conference on Computer Vision, Sep 2016, Amsterdam, Netherlands. ￿10.1007/978-3-319-46478-7_25￿. ￿hal-01410872￿
+Fast, Exact and Multi-Scale Inference for Semantic
+Image Segmentation with Deep Gaussian CRFs
+Siddhartha Chandra
+Iasonas Kokkinos
+ 
+ 
+INRIA GALEN & Centrale Sup´elec, Paris, France
+Abstract. In this work we propose a structured prediction technique that combines the virtues of Gaussian Conditional Random Fields (G-CRF) with Deep
+Learning: (a) our structured prediction task has a unique global optimum that
+is obtained exactly from the solution of a linear system (b) the gradients of our
+model parameters are analytically computed using closed form expressions, in
+contrast to the memory-demanding contemporary deep structured prediction approaches that rely on back-propagation-through-time, (c) our pairwise terms
+do not have to be simple hand-crafted expressions, as in the line of works building
+on the DenseCRF , but can rather be ‘discovered’ from data through deep
+architectures, and (d) out system can trained in an end-to-end manner. Building on standard tools from numerical analysis we develop very efﬁcient algorithms for inference and learning, as well as a customized technique adapted to
+the semantic segmentation task. This efﬁciency allows us to explore more sophisticated architectures for structured prediction in deep learning: we introduce
+multi-resolution architectures to couple information across scales in a joint optimization framework, yielding systematic improvements. We demonstrate the
+utility of our approach on the challenging VOC PASCAL 2012 image segmentation benchmark, showing substantial improvements over strong baselines. We
+make all of our code and experiments available at 
+siddharthachandra/gcrf.
+Introduction
+Over the last few years deep learning has resulted in dramatic progress in the task of
+semantic image segmentation. Early works on using CNNs as feature extractors 
+and combining them with standard superpixel-based front-ends gave substantial improvements over well-engineered approaches that used hand-crafted features. The currently mainstream approach is relying on ‘Fully’ Convolutional Networks (FCNs) ,
+where CNNs are trained to provide ﬁelds of outputs used for pixelwise labeling.
+A dominant research direction for improving semantic segmentation with deep learning is the combination of the powerful classiﬁcation capabilities of FCNs with structured prediction , which aims at improving classiﬁcation by capturing interactions between predicted labels. One of the ﬁrst works in the direction of combining
+deep networks with structured prediction was which advocated the use of denselyconnected conditional random ﬁelds (DenseCRF) to post-process an FCNN output
+so as to obtain a sharper segmentation the preserves image boundaries. This was then
+Siddhartha Chandra & Iasonas Kokkinos
+used by Zheng et al. who combined DenseCRF with a CNN into a single Recurrent
+Neural Network (RNN), accommodating the DenseCRF post processing in an end-toend training procedure.
+Most approaches for semantic segmentation perform structured prediction using
+approximate inference and learning . For instance the techniques of 
+perform mean-ﬁeld inference for a ﬁxed number of 10 iterations. Going for higher accuracy with more iterations could mean longer computation and eventually also memory bottlenecks: back-propagation-through-time operates on the intermediate ‘unrolled
+inference’ results that have to be stored in (limited) GPU memory. Furthermore, the
+non-convexity of the mean ﬁeld objective means more iterations would only guarantee convergence to a local minimum. The authors in use piecewise training with
+Input Image
+1(a) Schematic of a fully convolutional neural network with a G-CRF module
+1(b) Input Image
+1(c) Person unary
+1(d) QO Output
+1(e) Person Probability
+Fig. 1: (a) shows a detailed schematic representation of our fully convolutional neural network
+with a G-CRF module. The G-CRF module is shown as the box outlined by dotted lines. The
+factor graph inside the G-CRF module shows a 4−connected neighbourhood. The white blobs
+represent pixels, red blobs represent unary factors, the green and blue squares represent vertical
+and horizontal connectivity factors. The input image is shown in (b). The network populates
+the unary terms (c), and horizontal and vertical pairwise terms. The G-CRF module collects the
+unary and pairwise terms from the network and proposes an image hypothesis, i.e. scores (d)
+after inference. These scores are ﬁnally converted to probabilities using the Softmax function (e),
+which are then thresholded to obtain the segmentation. It can be seen that while the unary scores
+in (c) miss part of the torso because it is occluded behind the hand. The ﬂow of information from
+the neighbouring region in the image, via the pairwise terms, encourages pixels in the occluded
+region to take the same label as the rest of the torso (d). Further it can be seen that the person
+boundaries are more pronounced in the output (d) due to pairwise constraints between pixels
+corresponding to the person and background classes.
+Fast, Exact and Multi-Scale Inference for Semantic Image Segmentation
+CNN-based pairwise potentials and three iterations of inference, while those in 
+use highly-sophisticated modules, effectively learning to approximate mean-ﬁeld inference. In these two works a more pragmatic approach to inference is taken, considering
+it as a sequence of operations that need to be learned . These ‘inferning’-based approaches of combining learning and inference may be liberating, in the sense that one
+acknowledges and accommodates the approximations in the inference through end-toend training. We show however here that exact inference and learning is feasible, while
+not making compromises in the model’s expressive power.
+Motivated by , our starting point in this work is the observation that a particular type of graphical model, the Gaussian Conditional Random Field (G-CRF), allows us to perform exact and efﬁcient Maximum-A-Posteriori (MAP) inference. Even
+though Gaussian Random Fields are unimodal and as such less expressive, Gaussian
+Conditional Random Fields are unimodal conditioned on the data, effectively reﬂecting the fact that given the image one solution dominates the posterior distribution. The
+G-CRF model thus allows us to construct rich expressive structured prediction models that still lend themselves to efﬁcient inference. In particular, the log-likelihood of
+the G-CRF posterior has the form of a quadratic energy function which captures unary
+and pairwise interactions between random variables. There are two advantages to using a quadratic function: (a) unlike the energy of general graphical models, a quadratic
+function has a unique global minimum if the system matrix is positive deﬁnite, and (b)
+this unique minimum can be efﬁciently found by solving a system of linear equations.
+We can actually discard the probabilistic underpinning of the G-CRF and understand
+G-CRF inference as an energy-based model, casting structured prediction as quadratic
+optimization (QO).
+G-CRFs were exploited for instance in the regression tree ﬁelds model of Jancsary
+et al. where decision trees were used to construct G-CRF’s and address a host of
+vision tasks, including inpainting, segmentation and pose estimation. In independent
+work proposed a similar approach for the task of image segmentation with CNNs,
+where as in FCNs are augmented with discriminatively trained convolutional
+layers that model and enforce pairwise consistencies between neighbouring regions.
+One major difference to , as well as other prior works , is that we
+use exact inference and do not use back-propagation-through-time during training. In
+particular building on the insights of , we observe that the MAP solution, as well
+as the gradient of our objective with respect to the inputs of our structured prediction
+module can be obtained through the solution of linear systems. Casting the learning and
+inference tasks in terms of linear systems allows us to exploit the wealth of tools from
+numerical analysis. As we show in Sec. 3, for Gaussian CRFs sequential/parallel mean-
+ﬁeld inference amounts to solving a linear system using the classic Gauss-Seidel/Jacobi
+algorithms respectively. Instead of these under-performing methods we use conjugate
+gradients which allow us to perform exact inference and back-propagation in a small
+number (typically 10) iterations, with a negligible cost (0.02s for the general case in
+Sec. 2, and 0.003s for the simpliﬁed formulation in Sec. 2.5) when implemented on the
+Secondly, building further on the connection between MAP inference and linear
+system solutions, we propose memory- and time-efﬁcient algorithms for weight-sharing
+Siddhartha Chandra & Iasonas Kokkinos
+(Sec. 2.5) and multi-scale inference (Sec. 3.2). In particular, in Section 2.5 we show that
+one can further reduce the memory footprint and computation demands of our method
+by introducing a Potts-type structure in the pairwise term. This results in multifold accelerations, while delivering results that are competitive to the ones obtained with the
+unconstrained pairwise term. In Sec. 3.2 we show that our approach allows us to work
+with arbitrary neighbourhoods that go beyond the common 4−connected neighbourhoods. In particular we explore the merit of using multi-scale networks, where variables
+computed from different image scales interact with each other. This gives rise to a ﬂow
+of information across different-sized neighborhoods. We show experimentally that this
+yields substantially improved results over single-scale baselines.
+In Sec. 2 we describe our approach in detail, and derive the expressions for weight
+update rules for parameter learning that are used to train our networks in an end-to-end
+manner. In Sec. 3 we analyze the efﬁciency of the linear system solvers and present
+our multi-resolution structured prediction algorithm. In Sec. 4 we report consistent improvements over well-known baselines and state-of-the-art results on the VOC PAS-
+CAL test set.
+Quadratic Optimization Formulation
+We now describe our approach. Consider an image I containing P pixels. Each pixel
+p ∈{p1, . . . , pP } can take a label l ∈{1, . . . , L}. Although our objective is to assign
+discrete labels to the pixels, we phrase our problem as a continuous inference task.
+Rather than performing a discrete inference task that delivers one label per variable, we
+use a continuous function of the form x(p, l) which gives a score for each pairing of
+a pixel to a label. This score can be intuitively understood as being proportional to the
+log-odds for the pixel p taking the label l, if a ‘softmax’ unit is used to post-process x.
+We denote the pixel-level ground-truth labeling by a discrete valued vector y ∈YP
+where Y ∈{1, . . . , L}, and the inferred hypothesis by a real valued vector x ∈RN,
+where N = P × L. Our formulation is posed as an energy minimization problem. In
+the following subsections, we describe the form of the energy function, the inference
+procedure, and the parameter learning approach, followed by some technical details
+pertinent to using our framework in a fully convolutional neural network. Finally, we
+describe a simpler formulation with pairwise weight sharing which achieves competitive performance while being substantially faster. Even though our inspiration was from
+the probabilistic approach to structured prediction (G-CRF), from now on we treat our
+structured prediction technique as a Quadratic Optimization (QO) module, and will refer to it as QO henceforth.
+Energy of a hypothesis
+We deﬁne the energy of a hypothesis in terms of a function of the following form:
+2xT (A + λI)x −Bx
+where A denotes the symmetric N × N matrix of pairwise terms, and B denotes the
+N × 1 vector of unary terms. In our case, as shown in Fig. 1, the pairwise terms A and
+Fast, Exact and Multi-Scale Inference for Semantic Image Segmentation
+the unary terms B are learned from the data using a fully convolutional network. In
+particular and as illustrated in Fig. 1, A and B are the outputs of the pairwise and unary
+streams of our network, computed by a forward pass on the input image. These unary
+and pairwise terms are then combined by the QO module to give the ﬁnal per-class
+scores for each pixel in the image. As we show below, during training we can easily
+obtain the gradients of the output with respect to the A and B terms, allowing us to
+train the whole network end-to-end.
+Eq. 1 is a standard way of expressing the energy of a system with unary and pairwise interactions among the random variables in a vector labeling task. We chose
+this function primarily because it has a unique global minimum and allows for exact
+inference, alleviating the need for approximate inference. Note that in order to make
+the matrix A strictly positive deﬁnite, we add to it λ times the Identity Matrix I, where
+λ is a design parameter set empirically in the experiments.
+Given A and B, inference involves solving for the value of x that minimizes the energy
+function in Eq. 1. If (A + λI) is symmetric positive deﬁnite, then E(x) has a unique
+global minimum at:
+(A + λI)x = B.
+As such, inference is exact and efﬁcient, only involving a system of linear equations.
+Learning A and B
+Our model parameters A and B are learned in an end-to-end fashion via the backpropagation method. In the back-propagation training paradigm each module or layer
+in the network receives the derivative of the ﬁnal loss L with respect to its output x,
+denoted by ∂L
+∂x , from the layer above. ∂L
+∂x is also referred to as the gradient of x. The
+module then computes the gradients of its inputs and propagates them down through
+the network to the layer below.
+To learn the parameters A and B via back-propagation, we require the expressions
+of gradients of A and B, i.e. ∂L
+∂B respectively. We now derive these expressions.
+Derivative of Loss with respect to B To compute the derivative of the loss with respect
+to B, we use the chain rule of differentiation: ∂L
+∂x . Application of the chain
+rule yields the following closed form expression, which is a system of linear equations:
+(A + λI) ∂L
+When training a deep network, the right hand side ∂L
+∂B is delivered by the layer above,
+and the derivative on the left hand side is sent to the unary layer below.
+Siddhartha Chandra & Iasonas Kokkinos
+Derivative of Loss with respect to A The expression for the gradient of A is derived
+by using the chain rule of differentiation again: ∂L
+Using the expression ∂x
+∂A(A+λI)−1B, substituting
+∂A(A+λI)−1 = −(A+
+λI)−T ⊗(A + λI)−1, and simplifying the right hand side, we arrive at the following
+expression:
+where ⊗denotes the kronecker product. Thus, the gradient of A is given by the negative
+of the kronecker product of the output x and the gradient of B.
+Softmax Cross-Entropy Loss
+Please note that while in this work we use the QO module as the penultimate layer of
+the network, followed by the softmax cross-entropy loss, it can be used at any stage in a
+network and not only as the ﬁnal classiﬁer. We now give the expressions for the softmax
+cross-entropy loss and its derivative for sake of completeness.
+The image hypothesis is a scoring function of the form x(p, l). For brevity, we
+denote the hypothesis concerning a single pixel by x(l). The softmax probabilities for
+the labels are then given by pl =
+L ex(l) . These probabilities are penalized by the
+cross-entropy loss deﬁned as L = −P
+l yl log pl, where yl is the ground truth indicator
+function for the ground truth label l∗, i.e. yl = 0 if l ̸= l∗, and yl = 1 otherwise. Finally
+the derivative of the softmax-loss with respect to the input is given by:
+∂x(l) = pl −yl.
+Quadratic Optimization with Shared Pairwise Terms
+We now describe a simpliﬁed QO formulation with shared pairwise terms which is
+signiﬁcantly faster in practice than the one described above. We denote by Api,pj(li, lj)
+the pairwise energy term for pixel pi taking the label li, and pixel pj taking the label
+lj. In this section, we propose a Potts-type pairwise model, described by the following
+Api,pj(li, lj) =
+Api,pj li ̸= lj.
+In simpler terms, unlike in the general setting, the pairwise terms here depend on
+whether the pixels take the same label or not, and not on the particular labels they take.
+Thus, the pairwise terms are shared by different pairs of classes. While in the general
+setting we learn PL × PL pairwise terms, here we learn only P × P terms. To derive
+the inference and gradient equations after this simpliﬁcation, we rewrite our inference
+equation (A + λI) x = B as,
+λI ˆA · · · ˆA
+ˆA λI · · · ˆA
+ˆA ˆA · · · λI
+Fast, Exact and Multi-Scale Inference for Semantic Image Segmentation
+where xk, denotes the vector of scores for all the pixels for the class k ∈{1, · · · , L}.
+The per-class unaries are denoted by bk, and the pairwise terms ˆA are shared between
+each pair of classes. The equations that follow are derived by specializing the general
+inference (Eq. 2) and gradient equations (Eq. 3,4) to this particular setting. Following
+simple manipulations, the inference procedure becomes a two step process where we
+ﬁrst compute the sum of our scores P
+i xi, followed by xk, i.e. the scores for the class
+λI + (L −1) ˆA
+(λI −ˆA)xk = bk −ˆA
+Derivatives of the unary terms with respect to the loss are obtained by solving:
+λI + (L −1) ˆA
+(λI −ˆA) ∂L
+Finally, the gradients of ˆA are computed as
+Thus, rather than solving a system with A ∈RP L×P L, we solve L + 1 systems with
+ˆA ∈RP ×P . In our case, where L = 21 for 20 object classes and 1 background class,
+this simpliﬁcation empirically reduces the inference time by a factor of 6, and the overall training time by a factor of 3. We expect even larger acceleration for the MS-COCO
+dataset which has 80 semantic classes. Despite this simpliﬁcation, the results are competitive to the general setting as shown in Sec. 4.
+Linear Systems for Efﬁcient and Effective Structured Prediction
+Having identiﬁed that both the inference problem in Eq. 2 and computation of pairwise
+gradients in Eq. 3 require the solution of a linear system of equations, we now discuss
+methods for accelerated inference that rely on standard numerical analysis techniques
+for linear systems . Our main contributions consist in (a) using fast linear system
+solvers that exhibit fast convergence (Sec. 3.1) and (b) performing inference on multiscale graphs by constructing block-structured linear systems (Sec. 3.2).
+Our contributions in (a) indicate that standard conjugate gradient based linear system solvers can be up to 2.5 faster than the solutions one could get by a naive application
+of parallel mean-ﬁeld when implemented on the GPU. Our contribution in (b) aims at
+accuracy rather than efﬁciency, and is experimentally validated in Sec. 4
+Fast Linear System Solvers
+The computational cost of solving the linear system of equations in Eq. 2 and Eq. 3
+depends on the size of the matrix A, i.e. N × N, and its sparsity pattern. In our experiments, while N ∼105, the matrix A is quite sparse, since we deal with small
+Siddhartha Chandra & Iasonas Kokkinos
+Iterations
+Gauss Siedel
+Conjugate Gradient
+(a) Linear Solver Statistics
+Iterations
+Residual ||Ax − b||
+Gauss Seidel
+Conjugate Gradient
+(c) Iterative Solvers Convergence
+Fig. 2: The table in (a) shows the average number of iterations required by various
+algorithms, namely Jacobi, Gauss Seidel, Conjugate Gradient, and Generalized Minimal Residual (GMRES) iterative methods to converge to a residual of tolerance 10−6.
+Figure (b) shows a plot demonstrating the convergence of these iterative solvers. The
+conjugate gradient method outperforms the other competitors in terms of number of
+iterations taken to converge.
+4−connected, 8−connected and 12−connected neighbourhoods. While a number of
+direct linear system solver methods exist, the sheer size of the system matrix A renders
+them prohibitive, because of large memory requirements. For large problems, a number of iterative methods exist, which require less memory, come with convergence (to
+a certain tolerance) guarantees under certain conditions, and can be faster than direct
+methods. In this work, we considered the Jacobi, Gauss-Seidel, Conjugate Gradient,
+and Generalized Minimal Residual (GMRES) methods , as candidates for iterative
+solvers. The table in Fig. 2 (a) shows the average number of iterations required by the
+aforementioned methods for solving the inference problem in Eq. 2. We used 25 images
+in this analysis, and a tolerance of 10−6. Fig. 2 shows the convergence of these methods for one of these images. Conjugate gradients clearly stand out as being the fastest of
+these methods, so our following results use the conjugate gradient method. Our ﬁndings
+are consistent with those of Grady in .
+As we show below, mean-ﬁeld inference for the Gaussian CRF can be understood
+as solving the linear system of Eq. 2, namely parallel mean-ﬁeld amounts to using
+the Jacobi algorithm while sequential mean-ﬁeld amounts to using the Gauss-Seidel
+algorithm, which are the two weakest baselines in our comparisons. This indicates that
+by resorting to tools for solving linear systems we have introduced faster alternatives to
+those suggested by mean ﬁeld.
+In particular the Jacobi and Gauss-Seidel methods solve a system of linear equations
+Ax = B by generating a sequence of approximate solutions
+, where the current
+solution x(k) determines the next solution x(k+1).
+The update equation for the Jacobi method is given by
+Fast, Exact and Multi-Scale Inference for Semantic Image Segmentation
+The updates in Eq. 12 only use the previous solution x(k), ignoring the most recently available information. For instance, x(k)
+is used in the calculation of x(k+1)
+even though x(k+1)
+is known. This allows for parallel updates for x. In contrast, the
+Gauss-Seidel method always uses the most current estimate of xi as given by:
+As in , the Gaussian Markov Random Field (GMRF) in its canonical form is
+expressed as π(x) ∝exp
+2xT Θx + θT x
+, where θ and Θ are called the canonical parameters associated with the multivariate Gaussian distribution π(x). The update equation corresponding to mean-ﬁeld inference is given by ,
+The expression in Eq. 14 is exactly the expression for the Jacobi iteration (Eq. 12),
+or the Gauss-Seidel iteration in Eq. 13 for solving the linear system µ = −Θ−1θ,
+depending on whether we use sequential or parallel updates.
+One can thus understand sequential and parallel mean-ﬁeld inference and learning
+algorithms as relying on weaker system solvers than the conjugate gradient-based ones
+we propose here. The connection is accurate for Gaussian CRFs, as in our work and ,
+and only intuitive for Discrete CRFs used in .
+Multiresolution graph architecture
+We now turn to incorporating computation from multiple scales in a single system. Even
+though CNNs are designed to be largely scale-invariant, it has been repeatedly reported
+ that fusing information from a CNN operating at multiple scales can improve
+image labeling performance. These results have been obtained for feedforward CNNs we consider how these could be extended to CNNs with lateral connections, as in our
+case. A simple way of achieving this would be to use multiple image resolutions, construct one structured prediction module per resolution, train these as disjoint networks,
+and average the ﬁnal results. This amounts to solving three decoupled systems which
+by itself yields a certain improvement as reported in Sec. 4
+We advocate however a richer connectivity that couples the scale-speciﬁc systems,
+allowing information to ﬂow across scales. As illustrated in Fig. 3 the resulting linear
+system captures the following multi-resolution interactions simultaneously: (a) pairwise
+constraints between pixels at each resolution, and (b) pairwise constraints between the
+same image region at two different resolutions. These inter-resolution pairwise terms
+connect a pixel in the image at one resolution, to the pixel it would spatially correspond
+to at another resolution. The inter-resolution connections help enforce a different kind
+of pairwise consistency: rather than encouraging pixels in a neighbourhood to have the
+same/different label, these encourage image regions to have the same/different labels
+across resolutions. This is experimentally validated in Sec. 4 to outperform the simpler
+multi-resolution architecture outlined above.
+Siddhartha Chandra & Iasonas Kokkinos
+Fig. 3: Schematic diagram of matrix A for the multi-resolution formulation in Sec. 3.2.
+In this example, we have the input image at 2 resolutions. The pairwise matrix A contains two kinds of pairwise interactions: (a) neighbourhood interactions between pixels
+at the same resolution (these interactions are shown as the blue and green squares), and
+(b) interactions between the same image region at two resolutions (these interactions
+are shown as red rectangles). While interactions of type (a) encourage the pixels in a
+neighbourhood to take the same or different label, the interactions of type (b) encourage
+the same image region to take the same labels at different resolutions.
+Implementation Details and Computational Efﬁciency
+Our implementation is fully GPU based, and implemented using the Caffe library. Our
+network processes input images of size 865 × 673, and delivers results at a resolution
+that is 8 times smaller, as in . The input to our QO modules is thus a feature map
+of size 109 × 85. While the testing time per image for our methods is between 0.4 −
+0.7s per image, our inference procedure only takes ∼0.02s for the general setting
+in Sec. 2, and 0.003s for the simpliﬁed formulation (Sec. 2.5). This is signiﬁcantly
+faster than dense CRF postprocessing, which takes 2.4s for a 375 × 500 image on a
+CPU and the 0.24s on a GPU. Our implementation uses the highly optimized cuBlas
+and cuSparse libraries for linear algebra on large sparse matrices. The cuSparse library
+requires the matrices to be in the compressed-storage-row (CSR) format in order to fully
+optimize linear algebra for sparse matrices. Our implementation caches the indices of
+the CSR matrices, and as such their computation time is not taken into account in the
+calculations above, since their computation time is zero for streaming applications, or
+if the images get warped to a canonical size. In applications where images may be
+coming at different dimensions, considering that the indexes have been precomputed
+for the changing dimensions, an additional overhead of ∼0.1s per image is incurred to
+read the binary ﬁles containing the cached indexes from the hard disk (using an SSD
+drive could further reduce this). Our code and experiments are publicly available at
+ 
+Experiments
+In this section, we describe our experimental setup, network architecture and results.
+Fast, Exact and Multi-Scale Inference for Semantic Image Segmentation
+Dataset. We evaluate our methods on the VOC PASCAL 2012 image segmentation
+benchmark. This benchmark uses the VOC PASCAL 2012 dataset, which consists of
+1464 training and 1449 validation images with manually annotated pixel-level labels
+for 20 foreground object classes, and 1 background class. In addition, we exploit the
+additional pixel-level annotations provided by , obtaining 10582 training images in
+total. The test set has 1456 unannotated images. The evaluation criterion is the pixel
+intersection-over-union (IOU) metric, averaged across the 21 classes.
+Baseline network (basenet). Our basenet is based on the Deeplab-LargeFOV network from . As in , we extend it to get a multi-resolution network, which operates at three resolutions with tied weights. More precisely, our network downsamples
+the input image by factors of 2 and 3 and later fuses the downsampled activations with
+the original resolution via concatenation followed by convolution. The layers at three
+resolutions share weights. This acts like a strong baseline for a purely feedforward network. Our basenet has 49 convolutional layers, 20 pooling layers, and was pretrained
+on the MS-COCO 2014 trainval dataset . The initial learning rate was set to 0.01
+and decreased by a factor of 10 at 5K iterations. It was trained for 10K iterations.
+QO network. We extend our basenet to accommodate the binary stream of our network. Fig. 1 shows a rough schematic diagram of our network. The basenet forms the
+unary stream of our QO network, while the pairwise stream is composed by concatenating the 3rd pooling layers of the three resolutions followed by batch normalization and
+two convolutional layers. Thus, in Fig. 1, layers C1 −C3 are shared by the unary and
+pairwise streams in our experiments. Like our basenet, the QO networks were trained
+for 10K iterations; The initial learning rate was set to 0.01 which was decreased by a
+factor of 10 at 5K iterations. We consider three main types of QO networks: plain (QO),
+shared weights (QOs) and multi-resolution (QOmres).
+Experiments on train+aug - val data
+In this set of experiments we train our methods on the train+aug images, and evaluate them on the val images. All our images were upscaled to an input resolution of
+865 × 673. The hyper-parameter λ was set to 10 to ensure positive deﬁniteness. We
+ﬁrst study the effect of having larger neighbourhoods among image regions, thus allowing richer connectivity. More precisely, we study three kinds of connectivities: (a)
+4−connected (QO4), where each pixel is connected to its left, right, top, and bottom
+neighbours, (b) 8−connected (QO8), where each pixel is additionally connected to the
+4 diagonally adjacent neighbours, and (c) 12−connected (QO12), where each pixel is
+connected to 2 left, right, top, bottom neighbours besides the diagonally adjacent ones.
+Table 1 demonstrates that while there are improvements in performance upon increasing connectivities, these are not substantial. Given that we obtain diminishing returns,
+rather than trying even larger neighbourhoods to improve performance, we focus on
+increasing the richness of the representation by incorporating information from various
+scales. As described in Sec. 3.2, there are two ways to incorporate information from
+multiple scales; the simplest is to have one QO unit per resolution (QOres), thereby enforcing pairwise consistencies individually at each resolution before fusing them, while
+the more sophisticated one is to have information ﬂow both within and across scales,
+amounting to a joint multi-scale CRF inference task, illustrated in Fig. 3. In Table 2, we
+Siddhartha Chandra & Iasonas Kokkinos
+Method QO4 QO8 QO12
+76.36 76.40 76.42
+Table 1: Connectivity
+QO QOs QOres QOmres
+76.36 76.59 76.69
+Table 2: Comparison of 4 variants of our G-CRF network.
+IoU IoU after Dense CRF
+Basenet 72.72
+QOmres 73.86
+Table 3: Performance of our methods on the VOC PASCAL 2012 Image Segmentation Benchmark. Our baseline network (Basenet) is a variant of Deeplab-LargeFOV 
+network. In this table, we demonstrate systematic improvements in performance upon
+the introduction of our Quadratic Optimization (QO), and multi-resolution (QOmres)
+approaches. DenseCRF post-processing gives a consistent boost in performance.
+compare 4 variants of our QO network: (a) QO (Sec. 2), (b) QO with shared weights
+(Sec. 2.5), (c) three QO units, one per image resolution, and (d) multi-resolution QO
+(Sec. 3.2). It can be seen that our weight sharing simpliﬁcation, while being signiﬁcantly faster, also gives better results than QO. Finally, the multi-resolution framework
+outperforms the other variants, indicating that having information ﬂow both within and
+across scales is desirable, and a uniﬁed multi-resolution framework is better than merely
+averaging QO scores from different image resolutions.
+Experiments on train+aug+val - test data
+In this set of experiments, we train our methods on the train+aug+val images, and
+evaluate them on the test images. The image resolutions and λ values are the same as
+those in Sec. 4.1. In these experiments, we also use the Dense CRF post processing
+as in . Our results are tabulated in Tables 3 and 4. We ﬁrst compare our methods QO, QOs and QOmres with the basenet, where the relative improvements can be
+most clearly demonstrated. Our multi-resolution network outperforms the basenet and
+other QO networks. We achieve a further boost in performance upon using the Dense
+CRF post processing strategy, consistently for all methods. We observe that our method
+yields an improvement that is entirely complementary to the improvement obtained by
+combining with Dense-CRF.
+We also compare our results to previously published benchmarks in Table 4. When
+benchmarking against directly comparable techniques, we observe that even though we
+do not use end-to-end training for the CRF module stacked on top of our QO network,
+our method outperforms the previous state of the art CRF-RNN system of by a margin of 0.8%. We anticipate further improvements by integrating end-to-end CRF training with our QO. In Table 4, we compare our methods to previously published, directly
+comparable methods, namely those that use a variant of the VGG network, are
+Fast, Exact and Multi-Scale Inference for Semantic Image Segmentation
+trained in an end-to-end fashion, and use structured prediction in a fully-convolutional
+framework.
+mean IoU (%)
+Deeplab-Cross-Joint 
+CRFRNN 
+Table 4: Comparison of our method with directly comparable previously published approaches on the VOC PASCAL 2012 image segmentation benchmark.
+Experiments with Deeplab-V2 Resnet-101
+In this section we use our Potts-type model alongside the deeplab-v2 Resnet-101
+network. This network is a 3 branch multi-resolution version of the Resnet-101 network from . It processes the input image at 3 resolutions, with scaling factors of
+0.5, 0.75, and 1.0, and then combines the network responses at the different resolutions
+by upsampling the responses at the lower scales to the original scale, and taking an
+element-wise maximum of the responses corresponding to each pixel. We learn Potts
+type shared pairwise terms, and these pairwise terms are drawn from a parallel Resnet-
+101 network which has layers through conv-1 to res5c, and processes the input
+image at the original scale. Table 5 reports quantitative results on the PASCAL VOC
+2012 test set. We show some qualitative results in Fig. 4. It can be seen that our method
+reﬁnes the object boundaries, leading to a better segmentation performance.
+mean IoU (%)
+Deeplab-v2 + CRF 
+Table 5: Performance of our Potts type pairwise terms on the VOC PASCAL 2012 test
+set with the deeplab-v2 Resnet-101 network.
+Conclusions and Future Work
+In this work we propose a quadratic optimization method for deep networks which can
+be used for predicting continuous vector-valued variables. The inference is efﬁcient and
+Siddhartha Chandra & Iasonas Kokkinos
+(c) output
+(d) probability
+Fig. 4: Qualitative results when our Potts type pairwise terms are used in combination
+with the deeplab-V2 Resnet-101 network. Column (a) shows the input image, (b) shows
+the heatmap of the unary scores, (c) shows the heatmap of the scores after inference,
+and (d) shows the softmax probabilities. We notice that the object boundaries are signiﬁcantly ﬁner after incorporating cues from the pairwise terms.
+exact and can be solved in 0.02 seconds on the GPU for each image in the general setting, and 0.003 seconds for the Potts-type pairwise case using the conjugate gradient
+method. We propose a deep-learning framework which learns features and model parameters simultaneously in an end-to-end FCN training algorithm. Our implementation
+is fully GPU based, and implemented using the Caffe library. Our experimental results
+indicate that using pairwise terms boosts performance of the network on the task of
+image segmentation, and our results are competitive with the state of the art methods
+on the VOC 2012 benchmark, while being substantially simpler. While in this work we
+focused on simple 4−12 connected neighbourhoods, we would like to experiment with
+fully connected graphical models. Secondly, while we empirically veriﬁed that setting
+a constant λ parameter brought about positive-deﬁniteness, we are now exploring approaches to ensure this constraint in a general case. We intend to exploit our approach
+for solving other regression and classiﬁcation tasks as in .
+Acknowledgements This work has been funded by the EU Projects MOBOT FP7-ICT-
+2011-600796 and I-SUPPORT 643666 #2020.
+Fast, Exact and Multi-Scale Inference for Semantic Image Segmentation
+(b) Basenet
+(c) Basenet + DCRF
+(d) QOmres (e) QOmres + DCRF
+Fig. 5: Visual results on the VOC PASCAL 2012 test set. The ﬁrst column shows the
+colour image, the second column shows the basenet predicted segmentation, the third
+column shows the basenet output after Dense CRF post processing. The fourth column
+shows the QOmres predicted segmentation, and the ﬁnal column shows the QOmres
+output after Dense CRF post processing. It can be seen that our multi-resolution network
+captures the ﬁner details better than the basenet: the tail of the airplane in the ﬁrst
+image, the person’s body in the second image, the aircraft fan in the third image, the
+road between the car’s tail in the fourth image, and the wings of the aircraft in the
+ﬁnal image, all indicate this. While Dense CRF post-processing quantitatively improves
+performance, it tends to miss very ﬁne details.
+Siddhartha Chandra & Iasonas Kokkinos

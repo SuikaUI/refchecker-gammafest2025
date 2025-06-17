@@ -1,0 +1,803 @@
+Probabilistic Hierarchical Forecasting with Deep Poisson Mixtures
+Kin G. Olivaresa, O. Nganba Meetei*b, Ruijun Mab, Rohan Reddyb,
+Mengfei Caob, Lee Dickerb
+aAuton Lab, School of Computer Science, Carnegie Mellon University, Pittsburgh, PA
+bForecasting Science, Amazon, New York, NY
+Hierarchical forecasting problems arise when time series have a natural group structure, and predictions at multiple levels of aggregation and disaggregation across the groups are needed. In such
+problems, it is often desired to satisfy the aggregation constraints in a given hierarchy, referred to as
+hierarchical coherence in the literature. Maintaining coherence while producing accurate forecasts
+can be a challenging problem, especially in the case of probabilistic forecasting. We present a novel
+method capable of accurate and coherent probabilistic forecasts for time series when reliable hierarchical information is present. We call it Deep Poisson Mixture Network (DPMN). It relies on the
+combination of neural networks and a statistical model for the joint distribution of the hierarchical
+multivariate time series structure. By construction, the model guarantees hierarchical coherence
+and provides simple rules for aggregation and disaggregation of the predictive distributions. We
+perform an extensive empirical evaluation comparing the DPMN to other state-of-the-art methods
+which produce hierarchically coherent probabilistic forecasts on multiple public datasets. Comparing to existing coherent probabilistic models, we obtain a relative improvement in the overall
+Continuous Ranked Probability Score (CRPS) of 11.8% on Australian domestic tourism data, and
+8.1% on the Favorita grocery sales dataset, where time series are grouped with geographical hierarchies or travel intent hierarchies. For San Francisco Bay Area highway traﬃc, where the series’
+hierarchical structure is randomly assigned, and their correlations are less informative, our method
+does not show signiﬁcant performance diﬀerences over statistical baselines.
+Hierarchical Forecasting, Probabilistic Coherence, Neural Networks, Poisson Mixtures
+1. Introduction and Motivation
+We study the task of probabilistic coherent time series forecasting where users need predictive
+distributions for all related time series organized into a hierarchy or group structure . As forecasts for diﬀerent aggregation levels drive diﬀerent decisions, forecast coherence
+is desired to ensure aligned decision-making across the hierarchies .
+Notable examples of hierarchical forecasting tasks include the necessity from energy planners to
+synchronize the electricity load at each level of the grid with total production (Souhaib & Bonsoo,
+∗Corresponding author
+Email address: (O. Nganba Meetei*)
+ 
+April 12, 2023
+ 
+2019; Jeon et al., 2019), the short-term load category in the Global Energy Forecasting Competition
+2012 , and the eﬀorts from the forecasting community manifested
+at the ﬁfth Makridakis Competition .
+Coherent forecasts are deﬁned as those that satisfy the aggregation constraints of the hierarchy.
+That is, dis-aggregated forecasts “add up” to the forecasts of aggregate levels. This deﬁnition is
+accessible for mean forecasts, which are additive by linearity of the expectation. For probabilistic
+forecasts, coherence is achieved when the forecast distribution of the aggregate series is identical
+to the distribution of the sum of its children’s forecast series under an implicit or explicit joint
+distribution .
+Hierarchical reconciliation strategies provide an interesting approach for bringing back mean and
+probabilistic hierarchical coherence into neural forecasting methods. Early work focused on reconciling independently generated mean base forecasts . The reconciliation strategies improved accuracy, and recently a better understanding of
+the reconciliation process was provided through the language of forecast combinations . Similar two-step forecast reconciliation methods were later extended to probabilistic
+forecasts as well , ﬁrst estimating the marginal distributions independently and then reconciling them. Finally Han et al. and Rangapuram et al.
+ proposed combining these two steps into a single neural network. Eﬃciently leveraging the
+cross-learning approach to improve accuracy
+while maintaining probabilistic coherence remains a challenge.
+In this work, we present a novel method for producing probabilistic coherent forecasts. It combines the strength of modern neural networks and an intuitive statistical model for the disaggregatedforecast joint distribution. In contrast to earlier eﬀorts ,
+our method is an extension to the Mixture Density Networks . It is coherent by
+construction and does not require an explicit re-conciliation step, either as part of a single end-toend network or as a separate step. We call it the Deep Poisson Mixture Network (DPMN). The DPMN
+models the joint probability mass function of the multivariate time series as a ﬁnite mixture of
+Poisson distributions and combines it with the well-established MQ-Forecaster neural architecture
+ . This is possible because we formulate the problem as an
+MDN, and we can choose a relevant class of probabilistic distributions for the statistical model and
+the neural architecture independently. The key advantages of our method are:
+1. Flexible Forecast Distribution: We model the forecast distribution as a ﬁnite mixture
+of Poisson random variables, which is analogous to a Poisson kernel density. The resulting
+distribution is ﬂexible, capable of accurately modeling a wide range of joint probability distributions, and compatible as an output layer with state-of-the-art neural architectures. We
+will demonstrate this empirically on three diﬀerent forecasting tasks in Section 6.
+2. Computational Eﬃciency: Learning coherent forecast distributions in a high dimensional
+hierarchical space can be computationally intractable. To alleviate this, we anchor the DPMN
+on a multivariate distribution of the bottom level time series and employ composite likelihood
+optimization strategies, which enables it to extend to large-scale applications.
+The rest of the work is structured as follows. In Section 2 we introduce mathematical notations
+and review the statistical and neural-network hierarchical forecast literature.
+We describe our
+method’s probabilistic model in Section 3 and the learning and inference methods in Section 4.
+In Section 5 we discuss the neural network architecture and in Section 6 we perform an empirical
+evaluation. Finally, in Section 7 we discuss future work and conclude.
+yβ1,t + yβ2,t
+yβ3,t + yβ4,t
+Figure 1: A simple three level time series hierarchical structure, with four bottom level variables. The disaggregated
+bottom variables are marked with gray background. In this description each node represents non overlapping series
+for a single point in time.
+2. Literature Review
+2.1. Hierarchical Forecasting Notation
+Mathematically a hierarchical multivariate time series can be denoted by the vector y[a,b],t =
+[a],t | y⊤
+[b],t ]⊤∈R(Na+Nb) for each time point t; where [a], [b] stand for the set of all aggregate
+and bottom indices of the time series respectively. The total number of series in the hierarchy
+is | [a, b] | = (Na + Nb), where | [a] | = Na is the number of aggregated series and | [b] | = Nb
+the number of bottom series that are at the most disaggregated level possible. Time indices for
+past information until t are given by the set [t] with length | [t] | = Nt. With this notation the
+hierarchical aggregation constraints at each time point t have the following matrix representation:
+y[a,b],t = S[a,b][b]y[b],t
+The matrix S[a,b][b] ∈R(Na+Nb)×Nb aggregates the bottom level to the series above. It is composed by stacking the aggregation matrix A[a][b] ∈RNa×Nb and an Nb × Nb identity matrix I[b][b].
+For example, Figure 1 represents a simple hierarchy where each parent node is the sum of its
+children. Here the dimensions are Na = 3, Nb = 4, and the hierarchical, aggregated and base series
+are respectively:
+yTotal,t = yβ1,t + yβ2,t + yβ3,t + yβ4,t
+y[a],t = [yTotal,t, yβ1,t + yβ2,t, yβ3,t + yβ4,t]⊺
+y[b],t = [yβ1,t, yβ2,t, yβ3,t, yβ4,t]⊺
+The constraint matrix of the Figure 1 example and the corresponding aggregations from Equa-
+tion (2) is the following:
+S[a,b][b] =
+2.2. Mean Forecast Reconciliation Strategies
+Given a forecast creation date t and horizon h, the forecast indexes are denoted by τ ∈[t + 1 :
+t + h]. Most of the prior statistical solutions to the hierarchical forecasting challenge implement
+a two-stage process, ﬁrst generating base forecasts ˆy[a,b],τ ∈RNa+Nb, and then revising them into
+coherent forecasts ˜y[a,b],τ through reconciliation. The reconciliation is compactly expressed by:
+˜y[a,b],τ = S[a,b][b]P[b][a,b]ˆy[a,b],τ
+where S[a,b] ∈R(Na+Nb)×Nb is the hierarchical aggregation matrix and P[b][a,b] ∈RNb×(Na+Nb) is a
+matrix determined by the reconciliation strategies. The most common reconciliation methods can
+be classiﬁed into top-down, bottom-up and alternative approaches.
+• Bottom-Up: The simple bottom-up strategy, abbreviated as NaiveBU ,
+ﬁrst generates bottom level forecasts and then aggregates them to produce forecasts for all
+the series in the multivariate structure.
+• Top-Down: The top-down strategy, abbreviated as TD ,
+distributes the total forecast, and then disaggregates it down the hierarchy using proportions
+that can be historical actuals or forecasted separately.
+• Alternative: The more recent middle-out strategies, denoted as MO ), treat the second stage reconciliation as an optimization
+problem for the matrix P[b][a,b]. These reconciliation techniques include among others Game-
+Theoretically OPtimal ), learning a projection for reducing
+quadratic loss, a generalized least squares model for minimizing trace of the squared error
+matrix, namely the minimum trace reconciliation ) and
+the empirical risk minimization approach ).
+Despite the advancements in alternative reconciliation strategies with statistical solutions, as
+mentioned in Section 1, there are still fundamental limitations. First, most post-process reconciliation methods produce mean forecasts but not probabilistic forecasts, with some exceptions that
+have relied on univariate statistical methods with strong probability assumptions for the base series
+that may be restrictive . Second, the mentioned
+methods independently learn the model parameters of the base level forecasts, limiting the base
+model’s optimization inputs to single series. This approach induces an over-ﬁtting prone setting
+for complex nonlinear methods, which, as noted by the forecasting community, is one of their
+biggest challenges . The implied data scarcity translates into a missed
+opportunity to leverage the ﬂexibility of nonlinear methods.
+2.3. Probabilistic Coherent Forecasting
+There is a large body of related work on Bayesian hierarchical1 modeling of Spatio-temporal
+data; with joint coherent predictive distributions . These models,
+however, come with strong assumptions, as they typically assume a stationary Gaussian process to
+induce correlations and rely on Markov Chain Monte Carlo to estimate the posterior distribution
+ . For modeling count data, variants of Bayesian Hierarchical
+Poisson Regression Models were introduced , but
+they usually operate with linear model assumptions. There are few specialized methods on coherent
+probabilistic forecasting as most research on hierarchical forecasting has been limited to point predictions. Exceptions are the work by Shang & Hyndman and Jeon et al. that provide
+an early exploration of forecast quantile reconciliation; Ben Taieb et al. and Ben Taieb et al.
+ that propose the combination of bottom-level forecast marginal distributions with empirical
+copula functions describing their dependencies to create aggregate predictive distributions. To the
+best of our knowledge, a formal deﬁnition of probabilistic coherence has only been explored by
+ .
+Ben Taieb et al. provides a convolution-based deﬁnition while Panagiotelis et al. 
+provides a generalized and intuitive framework2 that we follow in our work and introduce below:
+Deﬁnition 2.1. (Probabilistic Coherence). Let (Ω[b], F[b], ˆP[b]) be a probabilistic forecast space,
+with sample space Ω[b], F[b] its σ-algebra, and ˆP[b] a forecast probability. Let S[a,b][b](·) : Ω[b] 7→Ω[a,b]
+be the linear transformation implied by the constraints matrix. A coherent probabilistic forecast
+space (Ω[a,b], F[a,b], ˆP[a,b]) satisﬁes:
+ S[a,b][b](B)
+= ˆP[b] (B)
+for any set B ∈F[b] and set’s image S[a,b][b](B) ∈F[a,b]
+i.e., it assigns a zero probability to sets in RNa+Nb not containing any coherent forecasts.
+For a simple deﬁnition-satisfying example, consider three random variables (Yα, Yβ1, Yβ2) with
+Yα:=Yβ1+Yβ2. A coherent forecast assigns zero probability to the variable realizations (yα, yβ1, yβ2)
+if they do not satisfy the aggregation constraint yα = yβ1 + yβ2. An equivalent deﬁnition of coherence is to require that the marginal distributions are derivable from the joint distribution of the
+bottom level random variables. In this case, the probability function of interest is ˆP(Yβ1, Yβ2), and
+the marginal probabilities can be derived from it using indicator functions as follows:
+ˆP(Yβ1 = yβ1) =
+ˆP(Yβ1 = yβ1, Yβ2 = yβ2)
+ˆP(Yβ2 = yβ2) =
+ˆP(Yβ1 = yβ1, Yβ2 = yβ2)
+ˆP(Yα = yα) =
+ˆP(Yβ1 = yβ1, Yβ2 = yβ2) 1(yα = yβ1 + yβ2),
+where 1(yα = yβ1 +yβ2) equals 1 when yα = yβ1 +yβ2, and 0 otherwise. The marginal probability
+for Yα, has the aggregation constraint built into its deﬁnition and is by construction a hierarchically
+coherent probability with respect to ˆP(Yβ1) and ˆP(Yβ2). Note that knowledge of the joint distribution is not required to generate hierarchically coherent forecast. However, if we had access to the
+joint distribution, constructing hierarchically coherent marginal distributions is straight forward.
+1Note that the term hierarchy in Bayesian hierarchy is diﬀerent from its use in hierarchical forecasting. The former
+refers to the conditional dependence of a posterior distribution’s parameters, and the latter refers to the aggregation
+constraints across multiple time series.
+2HierE2E by Rangapuram et al. informally introduced a similar probabilistic coherence notion.
+2.4. Hierarchical Neural Forecasting
+In the last decade, neural network-based forecasting methods have become ubiquitous in largescale forecasting applications , transcending industry boundaries into academia, as it has redeﬁned the state-ofthe-art in many practical tasks and
+forecasting competitions .
+The latest neural network-based solutions to the hierarchical forecasting challenge include methods like the Simultaneous Hierarchically Reconciled Quantile Regression )
+and Hierarchically Regularized Deep Forecasting ) and the Probabilistic
+Robust Hierarchical Network ) that augment the training loss
+function with approximations to the hierarchical constraints. And Hierarchical End-to-End learning ) that integrates an alternative reconciliation strategy in
+its forecasts through linear projections. With the exception of HierE2E, the rest of these methods
+encourage probabilistic coherence through regularization but do not guarantee it. Additionally,
+if a user requires updating the hierarchical structure of interest, a whole new optimization of the
+networks would be needed for the existing methods to forecast the structure correctly.
+Our proposed method, DPMN, can address these deﬁciencies by specifying any network’s output
+as our proposed Poisson Mixture predictive distribution. With this predictive distribution, a model
+needs only to forecast the bottom-most level in the hierarchy, after which any desired hierarchical
+structure of interest can be predicted with guaranteed probabilistic hierarchical coherence.
+Probability Mass
+Poisson Parameters
+Figure 2: The Poisson Mixture distribution has desirable properties that make it well-suited for probabilistic hierarchical forecasting for count data. Under minimal conditions, its aggregation rule implies probabilistic coherence of
+the random variables it models.
+3. Probabilistic Model
+3.1. Joint Poisson Mixture Distribution
+In this work, we focus our attention on hierarchical forecasting of discrete events with nonnegative variables.
+Many forecasting problems fall in this category as shown by the data sets
+described in Section 6.
+However, the general framework presented here works for continuous
+distributions as well with a suitably chosen base class for the mixture distribution, e.g., Gaussian
+distribution. For discrete events, we start by postulating that the forecast joint probability of the
+bottom level future multivariate time series’ realization y[b][t+1:t+h] ∈NNb×h is:
+ y[b][t+1:t+h]| λ[b][k][t+1:t+h]
+(β,τ)∈[b][t+1:t+h]
+Poisson (yβ,τ|λβ,κ,τ)
+(β,τ)∈[b][t+1:t+h]
+yβ,τ! e−λβ,κ,τ
+The mixture model describes individual bottom level time series and their correlations through
+the distribution of the mixture’s latent variables deﬁned by the Poisson rates λ[b][k][t+1:t+h] ∈
+RNb×Nk×h and the associated weights w[k] ∈ Nk, with w[k] ≥0 and PNk
+κ=1 wκ = 1. The number
+of Poisson components | [k] |= Nk is a hyperparameter of the model that controls the ﬂexibility
+of the mixture distribution. The mixture distribution can also be interpreted as a multivariate
+kernel density approximation, with Poisson kernels, to the actual joint probability distribution
+ y[b][t+1:t+h]
+. We show an example of the Poisson mixture distribution in Figure 2.
+The joint distribution in Equation (5), assumes that the modeled observations y[b][t+1:t+h] are
+conditionally independent given the latent Poisson rates λ[b][k][t+1:t+h]. That is for all bottom level
+series and horizons (β, τ) ̸= (β′, τ ′), (β, τ), (β′, τ ′) ∈[b][t + 1 : t + h] and κ ∈[k]:
+ˆP(Yβ,τ, Yβ′,τ ′|λβ,κ,τ, λβ′,κ,τ ′) = ˆP(Yβ,τ|λβ,κ,τ)ˆP(Yβ′,τ ′, |λβ′,κ,τ ′)
+3.2. Marginal Distributions for Bottom Series
+Equation (5) describes the joint distribution of all bottom level time series. We can derive
+the marginal distribution for one of the bottom level series β ∈[b] and for a single future time
+period τ ∈[t + 1 : t + h] by integrating out the remaining series and time indices. The marginal
+distribution is:
+ˆP(Yβ,τ = yβ,τ) =
+y[b][t+1:t+h]\(β,τ)
+(β′,τ ′)∈[b][t+1:t+h]
+Poisson(yβ′,τ ′|λβ′,κ,τ ′)
+wκ Poisson(yβ,τ|λβ,κ,τ) ×
+(β′,τ ′)∈[b][t+1:t+h]\(β,τ)
+Poisson(yβ′,τ ′|λβ′,κ,τ ′)
+wκ Poisson(yβ,τ|λβ,κ,τ)
+We get a clean ﬁnal expression for the marginal distribution, which is equivalent to simply
+dropping all other time series and time periods from the product in Equation (5).
+3.3. Marginal Distributions for Aggregate Series
+An important consequence of the conditional independence in Equation (6) is that the marginal
+distributions at aggregate levels y[a],τ can be computed via simple component-wise addition of the
+lower level Poisson rates. For example consider an aggregate level variable Yα,τ:=Yβ1,τ +Yβ2,τ. The
+marginal distribution for Yα,τ can be derived from the joint distribution in Equation (5) as follows.
+First marginalize all other series and time indices (as done in Section 3.2 above), which gives us
+the joint distribution for Yβ1,τ and Yβ2,τ
+ˆP(Yβ1,τ = yβ1,τ, Yβ2,τ = yβ2,τ) =
+wκ Poisson(yβ1,τ|λβ1,κ,τ) × Poisson(yβ2,τ|λβ2,κ,τ)
+Now, the aggregate marginal distribution is
+ˆP(Yα,τ = yα,τ)
+yβ1,τ,yβ2,τ
+ˆP(Yβ1,τ = yβ1,τ, Yβ2,τ = yβ2,τ) 1(ya,τ = yβ1,τ + yβ2,τ)
+For each mixture component with index κ, the distributions of yβ1,τ and yβ2,τ conditioned on
+respective Poisson rates λβ1,κ,τ and λβ2,κ,τ are independent Poisson distributions, and therefore, the
+distribution of the aggregate is another Poisson Mixture with parameters λα,κ,τ = λβ1,κ,τ + λβ2,κ,τ.
+ˆP(Yα,τ =yα,τ) =
+wκPoisson(yα,τ|λα,κ,τ = λβ1,κ,τ + λβ2,κ,τ)
+The aggregation rule can be concisely described as:
+λ[a][k],τ = A[a][b]λ[b][k],τ
+with A[a][b] the hierarchical aggregation matrix deﬁned in Section 2.1. The joint predictive distribution is hierarchically coherent by construction. We oﬀer a formal proof of DPMN’s satisfaction of
+the probabilistic coherence property from Deﬁnition 2.1 in Appendix A.
+3.4. Covariance Matrix
+Using the law of total covariance and the conditional independence from Equation (6), we show
+in Appendix B that the covariance of any two bottom level series naturally follows:
+Cov(Yβ,τ, Yβ′,τ ′) = λβ,τ1(β = β′)1(τ = τ ′) +
+ λβ,κ,τ −λβ,τ
+  λβ′,κ,τ ′ −λβ′,τ ′
+where λβ,τ = PNk
+κ=1 wκλβ,κ,τ . Appendix C shows the non-diagonal covariance matrix expressivity,
+as determined by its rank, depends on the number of mixture components from Equation (5).
+4. Parameter Estimation and Inference
+4.1. Maximum Joint Likelihood
+To estimate model parameters, we can maximize the joint likelihood implied by the joint distribution from Equation (5). Let θ represent the neural network parameters as described in Section 5,
+we parameterize the probabilistic model with Poisson rates λ[b][k][t+1:t+h] as follows:
+λ[b][k][t+1:t+h] := ˆλ[b][k][t+1:t+h](θ)
+w[k] := ˆw[k](θ)
+The Poisson rates and the mixture weights are conditioned through the network’s parameters
+on forecasting features discussed in Section 5.1. The negative log-likelihood can then be written3:
+L(θ) = −log
+(β,τ)∈[b][t+1:t+h]
+(ˆλβ,κ,τ(θ))
+yβ,τ exp {−ˆλβ,κ,τ(θ)}
+This is the same expression as the multivariate probability mass function in Equation (5) but
+parametrized as a function of the neural network parameters θ. The maximum likelihood estimation
+method (MLE) has desirable properties like statistical eﬃciency and consistency. However, the
+mixture components cannot be estimated separately, and for this reason, MLE is only feasible for
+hierarchical time series with a small number of series. Additional exploration is needed to make
+the estimation scalable.
+4.2. Maximum Composite Likelihood
+A computationally eﬃcient alternative to MLE for estimating the model parameters is to maximize the composite likelihood. This method involves breaking up the high-dimensional space into
+smaller sub-spaces, and the composite likelihood consists of the weighted product of the marginal
+likelihoods of the subspaces . For simplicity, we used uniform weights.
+In addition to the computational eﬃciency, maximizing the composite likelihood provides a
+robust and unbiased estimate of marginal model parameters with the drawback that the model
+inference may suﬀer from properties similar to a misspeciﬁed model . We will
+discuss variants of the composite likelihood below.
+3We kept notations simple and omitted the explicit conditioning on input features.
+4.2.1. Naive Bottom Up
+A simple option of using composite likelihood is to deﬁne each bottom-level time series as its
+likelihood sub-space and treat them as independent during model training .
+We refer to this estimation method for the DPMN as Naive Bottom Up (DPMN-NaiveBU). The negative
+logarithm of the DPMN-NaiveBU composite likelihood is:
+LNaiveBU(θ) = −
+τ∈[t+1:t+h]
+(ˆλβ,κ,τ(θ))
+yβ,τ exp {−ˆλβ,κ,τ(θ)}
+Even though the sub-space consists of single bottom level time series, DPMN-NaiveBU is still a
+multi-variate model with the composite likelihood deﬁned over multiple time points [t + 1 : t + h].
+Maximizing the DPMN-NaiveBU composite likelihood will still learn correlations across the time
+points and will generate coherent forecast distributions for aggregations in the time dimension. It
+does not attempt, however, to discover correlations across diﬀerent time series.
+4.2.2. Group Bottom Up
+If prior information helps us identify groups of time series with interesting correlation structures,
+we may estimate them by including the groups in the composite likelihood.
+We refer to this
+estimation method for the DPMN as Group Bottom Up (DPMN-GroupBU). Let G = {[gi]} be timeseries groups, then the negative log composite likelihood for the DPMN-GroupBU is
+LGroupBU(θ) = −
+(β,τ)∈[gi][t+1:t+h]
+(ˆλβ,κ,τ(θ))
+yβ,τ exp {−ˆλβ,κ,τ(θ)}
+The main advantage over DPMN-NaiveBU is that the model now learns cross-series relationships.
+In this paper we only rely on intuitive grouping like geographic proximity, but one could in principle
+employ more sophisticated methods like clustering to deﬁne the groups. To optimize the learning
+objective we use stochastic gradient descent, and sample train series batches at the group level.
+4.3. Forecast Inference
+As mentioned earlier, model inference from composite likelihood estimation suﬀers from problems similar to model misspeciﬁcation. This is because of the independence assumed across subspaces. In our model, the maximum composite likelihood estimates do not understand how mixture
+components learnt for one sub-space relate to mixture components learnt for a diﬀerent subspace.
+However, we need to identify mixture components across sub-spaces in order to deﬁne the joint
+distribution in Equation (5) across all bottom level time series. Knowing this joint distribution
+is at the crux of forecast inference from our model. Fortunately, there is a natural way for us to
+resolve this issue. Both in the DPMN-NaiveBU composite likelihood in Equation (13) and in the
+DPMN-GroupBU composite likelihood in Equation (14), the weights ˆw[k](θ) ∈RNk are shared across
+all sub-spaces. We identify components with the same weight as belonging to the same multivariate
+sample, and hence providing the full joint distribution. We call this method weight matching.
+For the DPMN-NaiveBU estimation, the weight matching method is a strong statistical assumption, extrapolating from independent marginal distributions of each series to the full joint distribution.
+The DPMN-GroupBU approach signiﬁcantly alleviates this problem because the model
+parameters are well deﬁned within each group [gi] ∈G and if most of the interesting correlations
+̂λ[b][k],t+1
+̂λ[b][k],t+2
+̂λ[b][k],t+3
+Temporal Convolutions
+Figure 3: The Deep Poisson Mixture Network (DPMN) is a Sequence-to-Sequence with Context network that uses
+dilated temporal convolutions as the primary encoder and multilayer perceptron based decoders for a direct multistep forecast. The forked decoders share their parameters and create the multivariate forecast distribution for each
+time point in the encoder, making the architecture eﬃcient in its optimization and predictions.
+are already captured within each group, then much less burden is placed on the weight matching
+method. We show in the evaluation of Section 6 that both DPMN-NaiveBU and DPMN-GroupBU models
+perform favorably when compared to other mean and probabilistic hierarchical forecasting methods, and between the two, DPMN-GroupBU is generally more accurate when the time series grouping
+given is informative.
+5. Deep Poisson Mixture Network
+Our primary goal is to create a probabilistic coherent forecasting model that is accurate and
+eﬃcient. For this purpose, we opt to extend the MQ-Forecaster family , proven by its history of industry service, with the Poisson mixture distribution. We
+refer to this model as the Deep Poisson Mixture Network (DPMN). Our MQ-Forecaster architecture selection is driven by its high computational eﬃciency, consequence of the forking-sequences
+technique and multi-step forecasting strategy, in addition to its ability to incorporate static and
+known future temporal features.
+5.1. Model Features
+As part of the innovations within our work, we propose to separate the bottom-level and
+aggregate-level features that we use in the forecasts. Sharing aggregate-level features across their
+respective bottom series simpliﬁes the model’s inputs and reduces redundant information, while
+greatly improving the model’s memory usage eﬃciency.
+We follow the hierarchical forecasting literature practice for the static features and use group
+identiﬁers implied by the hierarchy structure. We denote the static features, composed of features
+shared across the bottom series ˜x(s) and bottom level-speciﬁc features x(s)
+x(s) = {x(s)
+[b] , ˜x(s)}.
+Regarding temporal features, for the bottom level, we use the bottom series’ past; for the
+aggregate level we use the parent node series’ past. The future temporal information available can
+be task speciﬁc inputs like prices or promotions in the context of product demand forecasting, or
+other simpler model forecasts as inputs, such as Naive1 or SeasonalNaive that help the model
+predict series levels and seasonalities.
+Similarly to the static features, we also distinguish the
+temporal shared features ˜x(h)
+[:t] , ˜x(f)
+[:t+h] and the temporal bottom level-speciﬁc features x(h)
+[b][t], x(f)
+[b][:t+h].
+With this consideration, we denote the historical and future temporal features by:
+[:t] = {x(h)
+[b][:t], ˜x(h)
+[:t+h] = {x(f)
+[b][:t+h], ˜x(f)
+5.2. Model Architecture
+In summary, the DPMN builds on the MQ-Forecaster architecture that is based on Sequenceto-Sequence with Context network ). The DPMN uses dilated temporal
+convolutions ) to encode the available history into hidden
+states and uses forked decoders based on Multi-Layer Perceptron ) in a
+direct multi-horizon forecast strategy . We describe below in further detail
+the components of the model. Other hyperparameter details are available in Table A5.
+5.2.1. Encoder
+As explained earlier the DPMN main encoder is a stack of dilated temporal convolutions. Additionally, we use a global dense layer to encode the static features and a local dense layer, shared
+across time, to encode the available future information.
+The encoder for each time t and its
+components are described in Equation (17).
+1,t , h(h)
+2,t } = {TempConv(x(h)
+[b][:t]) , TempConv(˜x(h)
+h(s) = {h(s)
+2 } = {MLP(x(s)
+[b] ) , MLP(˜x(s))}
+= MLPL(x(f)
+[b][:t+h])
+The encoder’s output in Equation (18) is a set of shared and bottom level encoded features h1,t
+and h2,t. The ﬁrst concatenates all the encoded past h(h)
+1,t , h(h)
+2,t ∈RNcf , static h(s)
+and available future h(f)
+∈RNf information4. The second one concatenates the encoded past
+2,t ∈RNcf and static h(s)
+∈RNs shared features.
+ht = {h1,t, h2,t} = {[h(h)
+4The local horizon-speciﬁc MLPL aligns future seasonalities and events and improves the forecast’s sharpness.
+5.2.2. Forked Decoders
+The DPMN uses a two-branch MLP decoder. The ﬁrst decoder branch, summarizes the encoder
+output and future available information into two contexts: The horizon-agnostic context set c(ag) ∈
+RNag and the horizon-speciﬁc context c(sp)
+[t+1:t+h] ∈RNsp×h that provides structural awareness of the
+forecast horizon and plays a crucial role in expressing recurring patterns in the time series if any.
+Equation (19) describes the ﬁrst decoder branch:
+c(ag) = {c(ag)
+} = {MLP(h1,t), MLP(h2,t)}
+[t+1:t+h] = MLPL(h1,t)
+The second decoder branch adapts the horizon-speciﬁc and horizon-agnostic contexts into the
+parameters of the Poisson mixture distribution. For the horizon-speciﬁc Poisson rates, we use the
+forking-sequence technique with a series of decoders with shared parameters for each time point in
+[t + 1 : t + h] and for the mixture weights, we apply an MLP followed by a softmax on the aggregate
+horizon agnostic context. Equation (20) describes the second decoder branch:
+ˆλ[b][k][t+1:t+h] = MLPL(c(ag)
+[t+1:t+h], x(f)
+[b][t+1:t+h])
+ˆw[k] = SoftMax(MLP(c(ag)
+6. Empirical Evaluation
+6.1. Hierarchical Forecasting Datasets
+To evaluate our method, we consider three forecasting tasks where the objective is to provide
+quantile forecasts for each time series in the group or hierarchy structure. All the three datasets that
+we use in the empirical evaluation 5 are publicly available and have been used in the hierarchical
+forecasting literature . Table 1 summarizes the datasets’ characteristics.6
+Table 1: Summary, hierarchical structure and forecast horizon of datasets used in our empirical study.
+Aggregated
+Observations
+Horizon (h)
+The Tourism-L is an Australian Tourism dataset that
+contains 555 monthly visit series from 1998 to 2016, grouped by geographical regions and travel
+Favorita is a Kaggle competition dataset of grocery
+item sales daily history with additional information on promotions, items, stores, and holidays,
+containing 371,312 series from January 2013 to August 2017, with a geographic hierarchy of states,
+5Traffic is available at the UCI ML repository. Tourism-L is available at MinT reconciliation web page. Favorita
+is available in its Kaggle Competition url.
+6We include more details for the Traffic, Tourism-L, and Favorita datasets in Appendix D.
+(b) Tourism
+(c) Favorita
+Figure 4: Visualization of the hierarchical constraints of the empirical evaluation datasets. (a) Traffic groups 200
+highways’ occupancy series into quarters, halves and total. (b) Tourism-L groups its 555 regional visit series, into a
+combination of travel purpose, zones, states and country geographical aggregations. (c) Favorita groups its grocery
+sales geographically, by store, city, state, and country levels.
+cities, and stores. We show their hierarchical constraints matrix in Figure 4. Traffic measures the occupancy of 200 car lanes in the San Francisco Bay
+Area, randomly grouped into a year of daily observations with 207 series hierarchical structure.
+The datasets provide an opportunity to showcase the broad applicability of the DPMN, as each
+has unique characteristics. Tourism-L allows us to test the DPMN to model group structures with
+multiple hierarchies. Favorita allows us to test the DPMN on a large-scale dataset. Traffic is
+composed of randomly assigned hierarchical groupings that may not have any informative structures
+for the DPMN to learn with GroupBU. Finally, Favorita contains some non-count demand values
+(grocery produce sold by weight) and Traffic aggregated occupancy rates are non-count data, so
+modeling these datasets with a Poisson mixture limits the maximum accuracy we can achieve.
+6.2. Time Series Covariance Modeling
+We present in this subsection an illustrative example demonstrating how DPMN leverages the
+ﬂexibility and expressiveness of the multivariate Poisson mixture distribution to capture interesting
+correlations present in hierarchical time series datasets to improve forecast sharpness. Figure 5
+shows a comparison of forecasts generated by the DPMN-NaiveBU and the DPMN-GroupBU methods
+at various aggregation levels of the Tourism-L dataset.
+The DPMN-GroupBU method accurately
+estimates correlations in bottom-level series, improving the forecast distribution concentration of
+the upper-level series. In contrast, the DPMN-NaiveBU method performs well on disaggregated series
+and mean forecasts, but suﬀers from signiﬁcant model misspeciﬁcation which reduces the sharpness
+of forecasts at the aggregated levels. We ﬁnd that the DPMN-GroupBU generally does better when
+informative group series structure is present in the data, like in Tourism-L and Favorita datasets.
+DPMN-NaiveBU produces comparable results at disaggregated levels of all datasets and outperforms
+hierarchical forecasting baselines when hierarchical structure is noisy or not informative, as in the
+Traffic dataset. Our intuitions are validated by the empirical results presented in Section 6.6.
+AAAHol Hierarchically Linked Series
+Forecast Distribution [Millions of Tourist Visits]
+(a) DPMN-NaiveBU
+AAAHol Hierarchically Linked Series
+Forecast Distribution [Millions of Tourist Visits]
+(b) DPMN-GroupBU
+Figure 5: DPMN-NaiveBU and DPMN-GroupBU forecast distributions on a Tourism-L hierarchically linked time series.
+The top row shows total tourist visits in Australia, the second row shows the visits to Australia for the North South
+Wales state (A), the third row shows the holiday visits in the metropolitan Area of New South Wales (AA), the fourth
+row shows the Sidney total visits (AAA), the ﬁnal row shows the holiday visits to Sidney. Forecast distributions,
+99% and 75% prediction intervals in light and dark blue.
+6.3. Datasets Partition and Preprocessing
+For the main experiments we separate the train, validation and test datasets’ partition as
+follows: we hold out the ﬁnal horizon-length observations as the test set.
+In a sliding-window
+fashion, we use the horizon-length that precedes the test set as the validation set and treat the
+rest of the past information as the training set. A partition example is depicted in Figure 6.
+For comparability purposes with the most recent hierarchical forecasting literature, we keep
+ourselves as close as possible to the preprocessing and wrangling of the datasets to that of Rangapuram et al. 7. In general, the static variables that we consider on all the datasets correspond
+to the hierarchical and group designators as categorical variables implied by the hierarchical constraint matrix. The temporal covariates that we consider are the time series for the upper levels
+of the hierarchy, as well as calendar covariates associated with the time series frequency of each
+dataset. As future data, we include calendar covariates to help the DPMN capture seasonalities.
+7The pre-processed datasets are available in the hierarchical forecasting extension to the GluonTS library.
+Validation Set
+Figure 6: Example of a Favorita geographically linked time series. The top level shows the sales for a grocery item
+in the country of Ecuador. The second level shows the sold units within Pichincha state, the third level shows the
+sales for Quito city, the ﬁnal level shows Store 40 item sales. For this dataset, the training set comprises all the
+observations preceding the validation and test sets. The validation set (between the ﬁrst and second dotted lines) is
+the 34 days before the test set. The held-out test set (marked by the last dotted line) is the last 34 observations.
+Table 2: Considered hyperparameters for the Deep Poisson Mixture Network (DPMN). The learning rate, random seed,
+and SGD epochs that performed best on the validation set were selected automatically in each HYPEROPT run. The
+remaining model parameters were conﬁgured once per dataset, as explained in Appendix F.
+* The Parametrized Exponential Linear Unit (PeLU) modiﬁes the ReLU activation improving the network’s training speed Clevert et al. .
+Hyperparameter
+Considered Values
+Initial learning rate for SGD optimization.
+lr ∈{0.00001, . . . , 0.01}
+SGD full passes to dataset (epochs).
+n epochs ∈{10, . . . , 3000}
+Random seed that controls initialization of weights.
+seed train ∈{1, . . . , 10}
+SGD Batch Size.
+batch size ∈{4, . . . , 100}
+Activation Function.
+Temporal Convolution Kernel Size.
+Nck ∈{2, 7}
+Temporal Convolution Layers.
+Ncl ∈{3, 5}
+Temporal Convolution Filters.
+Ncf ∈{10, 30}
+Future Encoder Dimension.
+Static Encoder Dimension.
+Horizon Agnostic Decoder Dimensions.
+Horizon Speciﬁc Decoder Dimensions.
+Poisson Mixture Weights Decoder Layers.
+Nwdl ∈{3, 4}
+Poisson Mixture Rate Decoder Layers.
+Nrdl ∈{2, 3, 4}
+Local Decoder Dimensions.
+Nk ∈{25, 50, 100}
+6.4. Evaluation Metrics
+The primary evaluation metric of the model’s forecasts is based on the quantile loss / pinball
+loss (QL) . For a given a forecast creation date t and horizon indexes
+τ ∈[t + 1 : t + h] consider the estimated cumulative distribution function ˆFi,τ of the variable Yi,τ
+and its observation yi,τ, the loss is deﬁned as:
+QL( ˆFi,τ, yi,τ)q =
+1{yi,τ ≤ˆF −1
+i,τ ( q )} −q
+i,τ ( q ) −yi,τ
+We summarize the evaluation, for convenience of exposition and to ensure the comparability of our
+results with the existing literature, using the continuous ranked probability score, abbreviated as
+CRPS 8. We use the following mean scaled CRPS version:
+CRPS( ˆF[i ],τ, y[i ],τ) =
+QL( ˆFi,τ, yi,τ)qdq
+sCRPS( ˆF[i ],τ, y[i ],τ) = CRPS( ˆF[i ],τ, y[i ],τ)
+The CRPS measures the forecast distributions’ accuracy and has desirable properties . For instance it is a proper scoring rule, since for any forecast
+distribution ˆFi,τ and true distribution Fi,τ, the expected score satisﬁes:
+EYi,τ [CRPS(Fi,τ, Yi,τ)] ≤EYi,τ
+CRPS( ˆFi,τ, Yi,τ)
+which implies that it will prefer an ideal probabilistic forecasting system over any other.
+The main focus of the paper is probabilistic coherent forecasting, and the main results comparing sCRPS of DPMN to other hierarchical forecasting methods are presented in Section 6.6.
+We complement the main results with a comparison of mean hierarchical forecasts accuracy in
+Section 6.7. It demonstrates the robustness of our method in point forecasting tasks as well.
+8In practice the evaluation of the CRPS uses numerical integration technique, that discretizes the quantiles and
+treats the integral with a left Riemann approximation, averaging over uniformly distanced quantiles.
+Table 3: Empirical evaluation of probabilistic coherent forecasts. Mean scaled continuous ranked probability score
+(sCRPS) averaged over 8 runs, at each aggregation level, the best result is highlighted (lower measurements are
+preferred). Methods without standard deviation have deterministic solutions.
+* The HierE2E results diﬀer from Rangapuram et al. , sCRPS quantile interval space has granularity of 1 percent over its original 5 percent.
+** PERMBU-MinT on Tourism-L is unavailable because the original implementation, currently can’t be applied to structures beyond single hierarchies.
+DPMN-GroupBU
+(coherent)
+DPMN-NaiveBU
+(coherent)
+(coherent)
+PERMBU-MinT**
+(coherent)
+(not coherent)
+GLM-Poisson
+(not coherent)
+0.0907 ± 0.0024
+0.0704 ± 0.0014
+0.0375 ± 0.0058
+0.0677 ± 0.0061
+0.0397 ± 0.0044
+0.0134 ± 0.0022
+0.0183 ± 0.0091
+0.0331 ± 0.0085
+0.0537 ± 0.0024
+0.0289 ± 0.0017
+0.0183 ± 0.0081
+0.0341 ± 0.0081
+0.0538 ± 0.0022
+0.0290 ± 0.0011
+0.0209 ± 0.0071
+0.0417 ± 0.0061
+0.2155 ± 0.0022
+0.2101 ± 0.0008
+0.0974 ± 0.0021
+0.1621 ± 0.0027
+0.1249 ± 0.0020
+0.1274 ± 0.0028
+0.1472 ± 0.0029
+0.0431 ± 0.0042
+0.0514 ± 0.0030
+0.0842 ± 0.0051
+0.0637 ± 0.0032
+0.0705 ± 0.0026
+0.1012 ± 0.0029
+0.1084 ± 0.0033
+0.1068 ± 0.0019
+0.1317 ± 0.0022
+0.1554 ± 0.0025
+0.1507 ± 0.0014
+0.1705 ± 0.0023
+0.0700 ± 0.0038
+0.0907 ± 0.0061
+0.0995 ± 0.0061
+0.1070 ± 0.0023
+0.1175 ± 0.0047
+0.1336 ± 0.0042
+0.1887 ± 0.0032
+0.1836 ± 0.0038
+0.1955 ± 0.0025
+0.2629 ± 0.0034
+0.2481 ± 0.0026
+0.2615 ± 0.0016
+0.4020 ± 0.0182
+0.5301 ± 0.0120
+0.5298 ± 0.0091
+0.4670 ± 0.0096
+0.2760 ± 0.0149
+0.4166 ± 0.0195
+0.4714 ± 0.0103
+0.2692 ± 0.0076
+0.3865 ± 0.0207
+0.5128 ± 0.0108
+0.5182 ± 0.0107
+0.3824 ± 0.0092
+0.4068 ± 0.0206
+0.5317 ± 0.0115
+0.5291 ± 0.0129
+0.6838 ± 0.0108
+0.5387 ± 0.0253
+0.6594 ± 0.0150
+0.6012 ± 0.0131
+0.5532 ± 0.0116
+6.5. Training Methodology and Hyperparameter Optimization
+For the overall hyperparameter selection, we used a standard two-stage approach where we ﬁrst
+ﬁxed the architecture, and the estimated probability distribution, and a second stage where we
+optimized the architecture’s training procedure. Keeping a second stage explored hyperparameter
+space small serves two purposes: It keeps space exploration computationally tractable and showcases DPMN’s robustness, broad applicability, and accuracy with minor modiﬁcations. We defer
+some hyperparameter selection details to Appendix F.
+In the ﬁrst stage we select the number of DPMN’s mixture components that are responsible for
+single-series forecasting and modeling bottom-level correlations, as stated in Section 4 and shown
+in Appendix
+C. For each dataset, we selected the components optimally using temporal crossvalidation in Appendix
+E ablation study, where we found that complex correlation structures
+favored a higher number of components. To observe the eﬀects of modeling the series covariance,
+we compared DPMN-GroupBU and DPMN-NaiveBU variants.
+In the second stage, as shown in Table 2, the hyperparameter space that we consider for optimization is minimal. We only tune the learning rate, random seed to escape underperforming local
+minima, and the number of SGD epochs as a form of regularization . During the
+hyperparameter optimization phase, we measure the model sCRPS performance on the validation
+set described in Section 6.3, and use HYPEROPT , a Bayesian optimization
+library, to eﬃciently explore the hyperparameters based on the validation measurements.
+After the optimal hyperparameters are determined, we estimate the model parameters again by
+shifting the training window forward, noted as the retrain phase, and predict for the ﬁnal test set.
+We refer to the combination of the hyperparameter optimization and retrain phases as a run. The
+DPMN is implemented using MXNet . To train the network, we minimize
+the negative log-composite likelihood variant from Section 4, using stochastic gradient descent with
+Adaptive Moments .
+6.6. Probabilistic Forecasting Results
+We compare against the forecasts of the following probabilistic methods across the hierarchical
+levels: (1) HierE2E that combines DeepVAR with hierarchical constraints on a multivariate normal9, (2) PERMBU-MinT 10 that synthesizes
+hierarchy levels’ information with a probabilistic hierarchical aggregation of ARIMA forecasts, (3)
+automatic ARIMA that performs a step-wise exploration of ARIMA
+models using AIC, and (4) GLM-Poisson a special case of generalized linear models regression
+suited for count data .
+For our proposed methods, we report the DPMN-NaiveBU and the DPMN-GroupBU. As described
+in Section 4, the DPMN-NaiveBU treats the bottom level series as independent observations, and
+the DPMN-GroupBU considers groups of time series during its composite likelihood estimation. Both
+methods obtain probabilistic coherent forecasts using the bottom-up reconciliation. The comparison of the DPMN variants serves as an ablation experiment to better analyze the source of the
+accuracy improvements. It also showcases the ability of the Poisson Mixture model to give good
+results for unseen hierarchical structures, and in the case of the Traffic dataset, of uninformative
+or noisy time-series group structure, to explore the limits of the GroupBU estimation method.
+Table 3 contains the sCRPS measurements for the predictive distributions at each aggregate
+level through the whole dataset hierarchy. The top row reports the overall sCRPS score (averaged
+across all the hierarchy levels). We highlight the best result in bolds. The DPMN signiﬁcantly and
+consistently improves the overall sCRPS for Tourism-L and Favorita. In particular, the DPMN-
+GroupBU variant shows improvements of 11.8% against the second-best alternative in the Tourism-L
+dataset and 8.1% against the second-best choice in the Favorita dataset. In the Traffic dataset,
+the DPMN-GroupBU variant does not beneﬁt from modeling the uninformative correlations between
+highways, and subsequently does not improve upon the other compared methods. We hypothesize holiday features explain the Traffic New Year’s day performance gap between HierE2E’s
+and alternative approaches. As neither DPMN nor other baselines use these features. The DPMN-
+NaiveBU variant performs well on Traffic relative to statistical baselines, and gives an acceptable
+performance on Tourism-L and Favorita compared to all alternatives.
+Our results conﬁrm observations from the community that a shared model, capable of learning
+from all the time series jointly, improves the forecasts over those from univariate time series methods. Additionally, the qualitative comparison11 between the NaiveBU and GroupBU methods shows
+that an expressive joint distribution framework capable of leveraging the hierarchical structure of
+the data, when informative, beneﬁts the forecasts’ accuracy.
+9The HierE2E and PERMBU-MinT baseline models are available in a GluonTS library extension.
+10The original PERMBU-MinT is implemented in supplementary material of the work of Ben Taieb et al. 
+11Figure 5(a) and 5(b) show a qualitative exploration of DPMN-NaiveBU and DPMN-GroupBU versions.
+Table 4: Empirical evaluation of mean hierarchical forecasts. Mean squared scaled error (MSSE) averaged over 8
+runs, at each aggregation level, the best result is highlighted (lower measurements are preferred). Methods without
+standard deviation have deterministic solutions.
+* The ARIMA-ERM results for Tourism-L diﬀer from Rangapuram et al. , as we improved the numerical stability of their implementation.
+DPMN-GroupBU
+DPMN-NaiveBU
+ARIMA-ERM*
+ARIMA-MinT-ols
+ARIMA-NaiveBU
+(not hier.)
+GLM-Poisson
+(not hier.)
+SeasonalNaive
+(not hier.)
+0.1750 ± 0.0099
+0.0168 ± 0.0026
+0.1619 ± 0.0099
+0.0033 ± 0.0026
+0.1835 ± 0.0101
+0.0240 ± 0.0027
+0.1819 ± 0.0100
+0.0239 ± 0.0027
+0.9964 ± 0.043
+0.9561 ± 0.0022
+0.1113 ± 0.0158
+0.2680 ± 0.0748
+0.0597 ± 0.0212
+0.3371 ± 0.1506
+0.1121 ± 0.0152
+0.3186 ± 0.1130
+0.2250 ± 0.0196
+0.3909 ± 0.0822
+0.2980 ± 0.0197
+0.4198 ± 0.0668
+0.0798 ± 0.0195
+0.1459 ± 0.0177
+0.1403 ± 0.0150
+0.1576 ± 0.0113
+0.2654 ± 0.0212
+0.2537 ± 0.0100
+0.3302 ± 0.0235
+0.3030 ± 0.0083
+0.7563 ± 0.0713
+0.9533 ± 0.0201
+0.7944 ± 0.0568
+0.9188 ± 0.0187
+0.7355 ± 0.1057
+1.0451 ± 0.0310
+0.7303 ± 0.1035
+1.0317 ± 0.0333
+0.6770 ± 0.0351
+0.8090 ± 0.0180
+6.7. Complementary Mean Forecasting Results
+As shown in Section 3, the DPMN’s multivariate Poisson mixture deﬁnes a probabilistic coherent
+system for its forecast distributions; the mean hierarchical coherence is naturally implied. In this
+experiment, we compare DPMN mean hierarchical forecasts (weighted average of Poisson rates) with
+the following point forecasting methods’ forecasts: (1) ARIMA-ERM that
+performs an optimization-based reconciliation free of the unbiasedness assumption of the base
+forecasts, (2) ARIMA-MinT meant to reconcile unbiased independent
+forecasts and minimize the variance of the forecast errors, (3) ARIMA-NaiveBU 
+that produces univariate bottom-level time-series forecasts independently and then sums them
+according to the hierarchical constraints, (4) automatic ARIMA , (5)
+GLM-Poisson (6) and the SeasonalNaive model.
+To evaluate we take recommendations from Hyndman & Koehler and deﬁne the Mean
+Square Scaled Error (MSSE) based on the following Equation:
+MSSE(y[i],τ, ˆy[i],τ, ˜y[i],τ) = MSE(y[i],τ, ˆy[i],τ)
+MSE(y[i],τ, ˜y[i],τ)
+where y[i],τ, ˆy[i],τ, ˜y[i],τ ∈RN×h represent the time series observations, the mean forecasts and
+the Naive1 baseline forecasts respectively.
+Table 4 contains the MSSE measurements for the predicted means at each aggregation level.
+The top row reports the overall MSSE (averaged across all the hierarchy levels). We highlight the
+best result in bolds. DPMN shows overall improvements or comparable results with the baselines’.
+With respect to mean hierarchical baselines DPMN shows 4% Traffic improvements, 5% Tourism-L
+improvements , and Favorita improvements of 7%.
+7. Conclusions and Future Work
+In this work, we have introduced a novel method for coherent probabilistic forecasting, the
+Deep Poisson Mixture Network (DPMN), which focuses on learning the joint distribution of bottom
+level time series and naturally guarantees hierarchical probabilistic coherence. We have also shown
+through empirical evaluations that our model is accurate for count data.
+We observed overall
+signiﬁcant improvements in sCRPS when compared with previous state-of-the-art probabilistically
+coherent models on two diﬀerent hierarchical datasets, Australian domestic tourism (11.8%) and
+Ecuadorian grocery sales (8.1%). However, the model does not show improvement in sCRPS over
+alternative approaches when evaluated on San Francisco Bay Area traﬃc data.
+The framework presented here is also extensible. We chose to focus on forecasting count data
+and used Poisson kernels, but one could also use Gaussian kernels to model joint distributions of
+real valued hierarchical data. In fact, any kernel which admits closed form expression for aggregated
+distributions under conditional independence akin to Equation (6) will work well, and it includes
+kernels like the Gamma and the Negative Binomial distributions in addition to the Poisson and
+the Gaussian distributions already mentioned.
+With respect to the deﬁnition of the groups considered in DPMN-GroupBU, we followed the natural
+structure of the data and deﬁned them based on geographic proximity in this work. A promising
+line of research is an informed creation of such groups based on the series characteristics, for
+example via clustering.
+By formulating the model as a Mixture Density Network, we have separated the probabilistic
+model of the predictive distribution from the underlying network, making it compatible with any
+other archiecture.
+In the current paper we relied on the convolutional encoder version of the
+MQ-Forecaster architecture, but signiﬁcant progress has been made in the last few years on neural
+network based forecasting models; for example, Transformer-based deep learning architectures
+ that can improve performance. We plan to explore both directions, new
+kernels and new neural network architectures in future work.
+DPMN has its drawbacks as well. As is the case with any ﬁnite mixture model, the ﬁdelity of the
+estimated distribution depends on the number of mixture components. A few hundred samples may
+be suﬃcient to describe a single marginal distribution but can be too sparse to describe the joint
+distribution in a high dimensional space. The sparsity will be particularly obvious if customers of
+hierarchical forecasting are interested in forecast distributions conditioned on partially observed
+data. The small number of samples will lead to overly conﬁdent posterior distributions. Another
+issue is the model misspeciﬁcation during inference. The weight matching method performs quite
+well in empirical evaluations but is somewhat unsatisfactory as a statistical model. To mitigate both
+issues we are exploring generative factor models where the mixture components are truly samples
+from an underlying distribution and correlations between marginal distributions will be captured
+by common factors. It will bring DPMN closer to standard Hierarchical Bayesian formulation but
+with fewer and less strict assumptions.

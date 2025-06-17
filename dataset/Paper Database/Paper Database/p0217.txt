@@ -1,0 +1,951 @@
+Machine Learning, 39, 135–168, 2000.
+c⃝2000 Kluwer Academic Publishers. Printed in The Netherlands.
+BoosTexter: A Boosting-based System
+for Text Categorization
+ROBERT E. SCHAPIRE
+ 
+AT&T Labs, Shannon Laboratory, 180 Park Avenue, Room A279, Florham Park, NJ 07932-0971, USA
+YORAM SINGER
+ 
+School of Computer Science & Engineering, The Hebrew University, Jerusalem 91904, Israel
+Editors: Jaime Carbonell and Yiming Yang
+This work focuses on algorithms which learn from examples to perform multiclass text and speech
+categorization tasks. Our approach is based on a new and improved family of boosting algorithms. We describe
+in detail an implementation, called BoosTexter, of the new boosting algorithms for text categorization tasks. We
+present results comparing the performance of BoosTexter and a number of other text-categorization algorithms on
+a variety of tasks. We conclude by describing the application of our system to automatic call-type identiﬁcation
+from unconstrained spoken customer responses.
+text and speech categorization, multiclass classiﬁcation problems, boosting algorithms
+Introduction
+Text categorization is the problem of classifying text documents into categories or classes.
+For instance, a typical problem is that of classifying news articles by topic based on their
+textual content. Another problem is to automatically identify the type of call requested by
+a customer; for instance, if the customer says, “Yes, I would like to charge this call to
+my Visa,” we want the system to recognize that this is a calling-card call and to process
+the call accordingly. (Although this is actually a speech-categorization problem, we can
+nevertheless apply a text-based system by passing the spoken responses through a speech
+recognizer.)
+In this paper, we introduce the use of a machine-learning technique called boosting to
+the problem of text categorization. The main idea of boosting is to combine many simple
+and moderately inaccurate categorization rules into a single, highly accurate categorization
+rule. The simple rules are trained sequentially; conceptually, each rule is trained on the
+examples which were most difﬁcult to classify by the preceding rules.
+Our approach is based on a new and improved family of boosting algorithms which we
+have described and analyzed in detail in a companion paper . This
+new family extends and generalizes Freund and Schapire’s AdaBoost algorithm , which has been studied extensively and which has been shown to perform
+well on standard machine-learning tasks . The purpose of the current work is to describe
+some ways in which boosting can be applied to the problem of text categorization, and to
+test its performance relative to a number of other text-categorization algorithms.
+Text-categorization problems are usually multiclass in the sense that there are usually
+more than two possible categories. Although in some applications there may be a very large
+number of categories, in this work, we focus on the case in which there are a small to
+moderate number of categories. It is also common for text-categorization tasks to be multilabel, meaning that the categories are not mutually exclusive so that the same document
+may be relevant to more than one category. For instance, bibliographic medical articles are
+routinely given multiple Medical Subject Index (MeSH) categories when entered into Medline, the national bibliographic searchable archive which contains more than twenty million
+documents. While most machine-learning systems are designed to handle multiclass data,
+much less common are systems that can handle multi-label data. While numerous categorization algorithms, such as k-nearest neighbor, can be adapted to multi-label categorization
+problems, when machine-learning and other approaches are applied to text-categorization
+problems, a common technique has been to decompose the multi-class, multi-label problem
+into multiple, independent binary classiﬁcation problems (one per category).
+In this paper, we adopt a different approach in which we use two extensions of AdaBoost
+that were speciﬁcally intended for multiclass, multi-label data. In the ﬁrst extension, the
+goal of the learning algorithm is to predict all and only all of the correct labels. Thus, the
+learned classiﬁer is evaluated in terms of its ability to predict a good approximation of
+the set of labels associated with a given document. In the second extension, the goal is to
+design a classiﬁer that ranks the labels so that the correct labels will receive the highest
+ranks. We next describe BoosTexter, a system which embodies four versions of boosting
+based on these extensions, and we discuss the implementation issues that arise in multi-label
+text categorization.
+There has been voluminous work done on text categorization, including techniques based
+on decision trees, neural networks, nearest neighbor methods, Rocchio’s method, supportvector machines, linear least squares, naive Bayes, rule-based methods and more. , Biebricher et al. , Cohen & Singer
+ , Field , Fuhr & Pfeifer , Koller & Sahami , Lewis & Ringuette
+ , Moulinier, Raˇskinis, & Ganascia , Ng, Goh, & Low and Yang ).
+It would be impossible for us to compare our algorithms to all of the previous methods.
+Instead, we compare to four very different methods which we believe are representative
+of some of the most effective techniques available, and report results on several different
+tasks. Our experiments show that, using a number of evaluation measures, our system’s
+performance is generally better than the other algorithms, sometimes by a wide margin.
+To further compare our algorithm to other methods, we tested the performance of
+BoosTexter on a standard benchmark problem so that performance could be compared
+directly with a large body of results reported in the literature. We speciﬁcally focus on a
+recent study by Yang (to appear) who conducted several experiments on this benchmark
+and who also surveyed many results reported by other authors. BoosTexter’s performance
+places it at the very top of all the methods included in Yang’s study.
+A BOOSTING-BASED SYSTEM FOR TEXT CATEGORIZATION
+Finally, we discuss the application of BoosTexter to an automatic speech-categorization
+task and compare the performance of our system to a previous algorithm which was specifically designed for this task.
+Preliminaries
+In this section, we describe the formal setting we use to study multi-label text categorization.
+Let X denote the domain of possible text documents and let Y be a ﬁnite set of labels or
+classes. We denote the size of Y by k = |Y|.
+In the traditional machine-learning setting, each document x ∈X is assigned a single
+class y ∈Y. The goal then, typically, is to ﬁnd a classiﬁer H : X →Y which minimizes
+the probability that y ̸= H(x) on a newly observed example (x, y). In the multi-label case,
+each document x ∈X may be assigned multiple labels in Y. For example, in a multiclass
+news-ﬁltering problem in which the possible classes are News, Finance and Sports, a
+document may belong to both News and Finance. Thus, a labeled example is a pair (x, Y)
+where Y ⊆Y is the set of labels assigned to x. The single-label case is a special case in
+which |Y| = 1 for all observations.
+For Y ⊆Y, let us deﬁne Y[ℓ] for ℓ∈Y to be
+In this paper, we will be primarily interested in classiﬁers which produce a ranking of the
+possible labels for a given document with the hope that the appropriate labels will appear
+at the top of the ranking. To be more formal, the goal of learning is to produce a function
+of the form f : X × Y →R with the interpretation that, for a given instance x, the labels
+in Y should be ordered according to f (x, ·). That is, a label ℓ1 is considered to be ranked
+higher than ℓ2 if f (x, ℓ1) > f (x, ℓ2). If Y is the associated label set for x, then a successful
+learning algorithm will tend to rank labels in Y higher than those not in Y. Precise evaluation
+measures are discussed in Section 5.
+Finally, to simplify the notation, for any predicate π, let [[π]] be 1 if π holds and 0
+otherwise.
+Boosting algorithms for multi-label multiclass problems
+In a companion paper , we introduced and analyzed two new
+boosting algorithms for multiclass, multi-label classiﬁcation problems. Here, we review
+the two algorithms, discuss four versions of these algorithms, and describe an efﬁcient
+implementation of the algorithms for the problem of text categorization.
+The purpose of boosting is to ﬁnd a highly accurate classiﬁcation rule by combining many
+weak or base hypotheses, each of which may be only moderately accurate. We assume access
+to a separate procedure called the weak learner or weak learning algorithm for computing
+the weak hypotheses. The boosting algorithm ﬁnds a set of weak hypotheses by calling the
+R.E. SCHAPIRE AND Y. SINGER
+weak learner repeatedly in a series of rounds. These weak hypotheses are then combined
+into a single rule called the ﬁnal or combined hypothesis.
+In the simplest version of AdaBoost for single-label classiﬁcation, the boosting algorithm
+maintains a set of importance weights over training examples. These weights are used by
+the weak learning algorithm whose goal is to ﬁnd a weak hypothesis with moderately low
+error with respect to these weights. Thus, the boosting algorithm can use these weights to
+force the weak learner to concentrate on the examples which are hardest to classify.
+As we will see, for multiclass, multi-label problems, it is appropriate to maintain instead a
+set of weights over training examples and labels. As boosting progresses, training examples
+and their corresponding labels that are hard to predict correctly get incrementally higher
+weights while examples and labels that are easy to classify get lower weights. For instance,
+for the news classiﬁcation problem, it might be easy to classify a document as a news item
+but hard to determine whether or not it belongs to the ﬁnance section. Then, as boosting
+progresses the weight of the label News for that document decreases while the weight
+of Finance increases. The intended effect is to force the weak learning algorithm to
+concentrate on examples and labels that will be most beneﬁcial to the overall goal of
+ﬁnding a highly accurate classiﬁcation rule.
+AdaBoost.MH
+Our ﬁrst boosting algorithm for multiclass multi-label classiﬁcation problems, called
+AdaBoost.MH, is shown in ﬁgure 1. Let S be a sequence of training examples
+⟨(x1, Y1), . . . , (xm, Ym)⟩where each instance xi ∈X and each Yi ⊆Y. As described above,
+Given: (x1, Y1), . . . , (xm, Ym) where xi ∈X, Yi ⊆Y
+Initialize D1(i, ℓ) = 1/(mk).
+For t = 1, . . . , T :
+• Pass distribution Dt to weak learner.
+• Get weak hypothesis ht : X × Y →R.
+• Choose αt ∈R.
+Dt+1(i, ℓ) = Dt(i, ℓ) exp(−αt Yi[ℓ] ht(xi, ℓ))
+where Zt is a normalization factor (chosen so that Dt+1 will be a distribution).
+Output the ﬁnal hypothesis:
+f (x, ℓ) =
+αtht(x, ℓ).
+The algorithm AdaBoost.MH.
+A BOOSTING-BASED SYSTEM FOR TEXT CATEGORIZATION
+AdaBoost.MH maintains a set of weights as a distribution Dt over examples and labels.
+Initially, this distribution is uniform. On each round t, the distribution Dt (together with
+the training sequence S) is passed to the weak learner who computes a weak hypothesis ht.
+The output of the weak learner is a hypothesis h : X × Y →R. We interpret the sign of
+h(x, ℓ) as a prediction as to whether the label ℓis or is not assigned to x (i.e., a prediction
+of the value of Y[ℓ]). The magnitude of the prediction |h(x, ℓ)| is interpreted as a measure
+of “conﬁdence” in the prediction. The precise goal of the weak learner is described below,
+as are the weak learners used in our experiments.
+A parameter αt is then chosen and the distribution Dt is updated. We discuss the choice
+of αt below. In the typical case that αt is positive, the distribution Dt is updated in a manner
+that increases the weight of example-label pairs which are misclassiﬁed by ht (i.e., for which
+Yi[ℓ] and ht(xi, ℓ) differ in sign). The ﬁnal hypothesis ranks documents using a weighted
+vote of the weak hypotheses.
+This algorithm is derived using a natural reduction of the multiclass, multi-label data
+to binary data. Under this reduction, each example (x, Y) is mapped to k binary-labeled
+examples of the form ((x, ℓ), Y[ℓ]) for all ℓ∈Y; that is, the instance or “document” part
+of each derived example is formally a pair (x, ℓ), and the binary label associated with this
+instance is Y[ℓ]. In other words, we can think of each observed label set Y as specifying k
+binary labels (depending on whether a label ℓis or is not included in Y), and we can then
+apply binary AdaBoost to the derived binary data. The algorithm that results from such a
+reduction is equivalent to AdaBoost.MH.
+This view of AdaBoost.MH also leads to a simple analysis. Speciﬁcally, we have proved
+ a bound on the empirical Hamming loss of this algorithm, i.e.,
+the fraction of examples i and labels ℓfor which the sign of f (xi, ℓ) differs from Yi[ℓ].
+We showed that the Hamming loss of this algorithm is at most QT
+t=1 Zt, where Zt is the
+normalization factor computed on round t. This upper bound can be used in guiding both
+our choice of αt and the design of our weak learning algorithm. Together, these choices
+should be geared on each round t toward the minimization of
+Dt(i, ℓ) exp(−αt Yi[ℓ] ht(xi, ℓ)).
+In Section 4, we describe the methods used for choosing αt and the implementation of the
+weak learning algorithm for text categorization.
+Note that the space and time-per-round requirements of AdaBoost.MH are O(mk), not
+including the call to the weak learner.
+AdaBoost.MR
+We next describe our second boosting algorithm called AdaBoost.MR. Whereas Ada-
+Boost.MH is designed to minimize Hamming loss, AdaBoost.MR is designed speciﬁcally
+to ﬁnd a hypothesis which ranks the labels in a manner that hopefully places the correct
+labels at the top of the ranking.
+R.E. SCHAPIRE AND Y. SINGER
+Given: (x1, Y1), . . . , (xm, Ym) where xi ∈X, Yi ⊆Y
+Initialize D1(i, ℓ0, ℓ1) =
+½1/(m · |Yi| · |Y −Yi|)
+if ℓ0 ̸∈Yi and ℓ1 ∈Yi
+For t = 1, . . . , T :
+• Train weak learner using distribution Dt.
+• Get weak hypothesis ht : X × Y →R.
+• Choose αt ∈R.
+Dt+1(i, ℓ0, ℓ1) = Dt(i, ℓ0, ℓ1) exp
+2αt(ht(xi, ℓ0) −ht(xi, ℓ1))
+where Zt is a normalization factor (chosen so that Dt+1 will be a distribution).
+Output the ﬁnal hypothesis:
+f (x, ℓ) =
+αtht(x, ℓ).
+The algorithm AdaBoost.MR.
+With respect to a labeled observation (x, Y), we focus now only on the relative ordering
+of the crucial pairs ℓ0, ℓ1 for which ℓ0 ̸∈Y and ℓ1 ∈Y. A classiﬁcation rule f misorders
+a crucial pair ℓ0, ℓ1 if f (x, ℓ1) ≤f (x, ℓ0) so that f fails to rank ℓ1 above ℓ0. Our goal
+now is to ﬁnd a function f with a small number of misorderings so that the labels in Y
+are ranked above the labels not in Y. Put another way, our goal is to minimize the average
+fraction of crucial pairs which are misordered, a quantity that we call the empirical ranking
+|Yi| |Y −Yi| |{(ℓ0, ℓ1) ∈(Y −Yi) × Yi : f (x, ℓ1) ≤f (x, ℓ0)}|.
+(We assume that Yi is never empty nor equal to all of Y for any instance. If there are such
+instances in the training set we can simply discard them since there is no ranking problem
+to be solved in this case and they do not carry any information.)
+AdaBoost.MR is shown in ﬁgure 2. We now maintain a distribution Dt over {1, . . . , m}×
+Y × Y and denote the weight for instance xi and the pair ℓ0, ℓ1 by Dt(i, ℓ0, ℓ1). This
+distribution is zero, however, except on the relevant triples (i, ℓ0, ℓ1) for which ℓ0, ℓ1 is a
+crucial pair relative to (xi, Yi).
+As before, weak hypotheses have the form ht : X × Y →R; we think of these as
+providing a ranking of labels as described above. The update rule is a bit new. Let ℓ0, ℓ1
+be a crucial pair relative to (xi, Yi) (recall that Dt is zero in all other cases). Assuming
+momentarily that αt > 0, this rule decreases the weight Dt(i, ℓ0, ℓ1) if ht gives a correct
+ranking (ht(xi, ℓ1) > ht(xi, ℓ0)), and increases this weight otherwise.
+A BOOSTING-BASED SYSTEM FOR TEXT CATEGORIZATION
+As for the Hamming loss, it can be shown that the empirical
+ranking loss of this algorithm is at most QT
+t=1 Zt. Thus, as before, our goal in choosing αt
+and ht should be minimization of
+Dt(i, ℓ0, ℓ1) exp
+2α(ht(xi, ℓ0) −ht(xi, ℓ1))
+We again defer the description of the technique used for this purpose to Section 4.
+This algorithm is somewhat inefﬁcient when there are many labels since, naively, we
+need to maintain |Yi| · |Y −Yi| weights for each training example (xi, Yi), and each weight
+must be updated on each round. Thus, the space complexity and time-per-round complexity
+can be as bad as θ(mk2). In fact, the same algorithm can be implemented using only O(mk)
+space and time per round. By the nature of the updates, we can show that we only need to maintain weights vt over {1, . . . , m}×Y. To do this, we maintain
+the condition that if ℓ0, ℓ1 is a crucial pair relative to (xi, Yi), then
+Dt(i, ℓ0, ℓ1) = vt(i, ℓ0) · vt(i, ℓ1)
+at all times. (Recall that Dt is zero for all other triples (i, ℓ0, ℓ1).) The pseudocode for this
+implementation is shown in ﬁgure 3. Note that all space requirements and all per-round
+computations are O(mk), with the possible exception of the call to the weak learner which
+is discussed in the next section.
+Weak hypotheses for text categorization
+So far, we left unspeciﬁed the actual form and implementation of the weak learner, as well
+as the choice of the parameter αt. In this section, we describe four implementations of weak
+learners, three for AdaBoost.MH and one for AdaBoost.MR. Our system for multi-label
+text categorization, called BoosTexter, can be used with any of the four methods described
+Boostingismeanttobeageneralpurposemethodthatcanbecombinedwithanyclassiﬁer,
+and in practice it has been used, for instance, with decision trees and neural nets. In this
+paper, however, we focus on the use of boosting with very simple classiﬁers. Speciﬁcally,
+for all of the methods we use, the weak hypotheses have the same basic form as a onelevel decision tree. The test at the root of this tree is a simple check for the presence or
+absence of a term in the given document. All words and pairs of adjacent words are potential
+terms.1 Based only on the outcome of this test, the weak hypothesis outputs predictions and
+conﬁdences that each label is associated with the document. For example, going back to the
+news categorization example, a possible term can be Bill Clinton, and the corresponding
+predictor is: “If the term Bill Clinton appears in the document then predict that the document
+belongs to News with high conﬁdence, to Finance with low conﬁdence, and that it does not
+belong to Sports with high conﬁdence. If, on the other hand, the term does not appear in
+the document, then predict that it does not belong to any of the classes with low conﬁdence.”
+R.E. SCHAPIRE AND Y. SINGER
+Given: (x1, Y1), . . . , (xm, Ym) where xi ∈X, Yi ⊆Y
+Initialize v1(i, ℓ) = (m · |Yi| · |Y −Yi|)−1/2
+For t = 1, . . . , T :
+• Train weak learner using distribution Dt (as deﬁned by Eq. (3))
+• Get weak hypothesis ht : X × Y →R.
+• Choose αt ∈R.
+vt+1(i, ℓ) = vt(i, ℓ) exp
+2 αt Yi[ℓ] ht(xi, ℓ)
+vt(i, ℓ) exp
+2αtht(xi, ℓ)
+vt(i, ℓ) exp
+2 αtht(xi, ℓ)
+Output the ﬁnal hypothesis:
+f (x, ℓ) =
+αtht(x, ℓ).
+A more efﬁcient version of AdaBoost.MR: on each round of boosting and for each example, the running
+time is linear in the number of labels (O(k)).
+Figure 4 shows the ﬁrst several weak hypotheses actually found by a version of AdaBoost
+on one of the datasets tested later in the paper.
+Formally, denote a possible term by w, and let us deﬁne (abusively) w ∈x to mean that
+w occurs in document x. Based on the term, we will be interested in weak hypotheses h
+which make predictions of the form:
+where the c jℓ’s are real numbers. The three weak learners we describe for AdaBoost.MH
+differ only with respect to possible restrictions which we place on the values of these
+Our weak learners search all possible terms. For each term, values c jℓare chosen as
+described below, and a score is deﬁned for the resulting weak hypothesis. Once all terms
+have been searched, the weak hypothesis with the lowest score is selected and returned by
+the weak learner. For AdaBoost.MH, this score will always be an exact calculation of Zt as
+deﬁned in Eq. (1) since, as noted in Section 3.1, minimization of Zt is a reasonable guiding
+principle in the design of the weak learning algorithm. For AdaBoost.MR, we know of no
+A BOOSTING-BASED SYSTEM FOR TEXT CATEGORIZATION
+The ﬁrst ten weak hypotheses found when real AdaBoost.MH (Section 4.1) is run on the entire Reuters-
+21450 dataset as described in Section 6.5. Each weak hypothesis has the following form and interpretation: if
+the term associated with the weak hypothesis occurs in the given document, then output the ﬁrst row of values;
+otherwise, output the second row of values. Here, each value, represented graphically as a bar, gives the output of
+the weak hypothesis for one of the classes. For instance, the weak hypothesis found on the ﬁrst round of boosting
+tests on the term vs. If present, a positive value is output for EARN and negative values are output for all of the
+other classes. If not present, weakly negative values are output for all classes.
+analytical solution for the problem of minimizing Zt. Instead, an approximation of Zt is
+used as described below.
+AdaBoost.MH with real-valued predictions
+For our ﬁrst weak learner, we permit unrestricted real-valued predictions c jℓ. In our experiments, we call this version real AdaBoost.MH.
+With minimization of Zt in mind, the values c jℓshould be calculated as follows for a given
+term w: Let X0 = {x : w ̸∈x} and X1 = {x : w ∈x}. Given the current distribution Dt, we
+R.E. SCHAPIRE AND Y. SINGER
+calculate the following for each possible label ℓ, for j ∈{0, 1}, and for b ∈{−1, +1}:
+Dt(i, ℓ)[[xi ∈X j ∧Yi[ℓ] = b]].
+For readability of notation, we abbreviate the subscripts +1 and −1 in W jℓ
++1 and W jℓ
+−1, writing
+instead W jℓ
++ and W jℓ
+−. In words, W jℓ
+−) is the weight (with respect to the distribution
+Dt) of the documents in partition X j which are (are not) labeled by ℓ.
+It can be shown that Zt is minimized for a particular term by
+and by setting αt = 1. These settings imply that
+Thus, we choose the term w for which this value of Zt is smallest.
+In fact, it may well happen that W jℓ
++ is very small or even zero, in which case
+c jℓas deﬁned in Eq. (5) will be very large or inﬁnite in magnitude. In practice, such
+large predictions may cause numerical problems, and there may be theoretical reasons to
+suspect that large, overly conﬁdent predictions will increase the tendency to overﬁt. To limit
+the magnitudes of the predictions, in our implementation, we use instead the “smoothed”
+In our experiments, we set ε = 1/mk. Since both W jℓ
++ are bounded between 0 and
+1, this has the effect of bounding |c jℓ| by roughly 1
+2 ln(1/ε).
+AdaBoost.MH with real-valued predictions and abstaining
+The method described above assigns conﬁdence values both when a term appears in a
+document and when it does not. Thus, it employs a tacit assumption that the absence of a
+term carries information about the possible classes a document may belong to. However,
+given our intuitive knowledge about the problem, we may wish to reject this assumption and
+force the weak hypothesis to abstain whenever the given term does not appear in a document.
+This can be accomplished simply by forcing each weak hypothesis to output a conﬁdence
+value of zero for documents which do not contain the given term. In our experiments, we
+call this version real abstaining AdaBoost.MH.
+A BOOSTING-BASED SYSTEM FOR TEXT CATEGORIZATION
+For a given term w, this weak learner chooses predictions c1ℓfor documents which contain
+w exactly as before. (In our implementation, we also smooth these values as before.) For
+the rest of the documents, the prediction values c0ℓare all set to zero. Hence, the term w
+has no inﬂuence on the classiﬁcation if it does not appear in the document. As before, αt is
+be the weight of all the document that do not contain w. Then it can be shown that
+Zt = W0 + 2
+and, as before, on each round we choose a term w for which the value Zt is smallest.
+One advantage of this weak learner over the ﬁrst one is an improvement in the running
+time as we need to consider only the documents that include a given term w when computing
+Zt. Since, typically, the number of documents that include a non-trivial term is only a small
+fraction of the training data, this version is in practice 15% faster than the previous one.
+Furthermore, in most of the experiments described in Section 6, the performance of the two
+versions is comparable.
+AdaBoost.MH with discrete predictions
+The next weak learner forces the predictions c jℓof the weak hypotheses to be either +1
+or −1. This is the more standard setting in which predictions do not carry conﬁdences. We
+call this version discrete AdaBoost.MH.
+With this restriction on the range of the weak hypotheses, we can still minimize Zt for a
+given term w using the following method. With the same notation deﬁned in Section 4.1,
+c jℓ= sign
+which can be viewed as a (weighted) majority vote over examples in block X j for each
+label ℓ. Let
+Then it can be shown that, for the purposes of minimizing Zt,
+we should choose
+R.E. SCHAPIRE AND Y. SINGER
+AdaBoost.MR with discrete predictions
+We next describe a weak learner for AdaBoost.MR. As noted in Section 3.2, we would like
+to minimize Zt as deﬁned in Eq. (2). Unfortunately, the exact minimization of this quantity
+is not as straightforward as it was for AdaBoost.MH. We therefore only consider discrete
+predictions in {−1, +1}, and we also use an approximation for Zt as a score, rather than an
+exact computation. We call this discrete AdaBoost.MR.
+For a given hypothesis ht, let
+Dt(i, ℓ0, ℓ1)(h(xi, ℓ1) −h(xi, ℓ0)).
+Then, similar to the analysis for discrete AdaBoost.MH, it can be shown that Zt ≤
+if we choose
+Since we do not know how to efﬁciently minimize Zt exactly, we instead ﬁnd a weak
+hypothesis which minimizes the upper bound
+t . We use this upper bound as our
+score in choosing the best weak hypothesis.
+For efﬁciency, it is important to note that the quantity rt can be computed efﬁciently in
+terms of the weights vt (deﬁned in Eq. (3)). Let
+dt(i, ℓ) = 1
+ℓ′: Yi[ℓ′]̸=Yi[ℓ]
+vt(i, ℓ′).
+Then it can be shown that
+dt(i, ℓ) Yi[ℓ] h(xi, ℓ).
+Thus, for a particular term w, we should choose
+c jℓ= sign
+dt(i, ℓ) Yi[ℓ]
+which gives
+A BOOSTING-BASED SYSTEM FOR TEXT CATEGORIZATION
+Summary of the properties of the four weak learners for multiclass multi-label text categorization.
+Prediction
+( j ∈{0, 1})
+Real & abstaining MH
+c0ℓ= 0 c1ℓ= 1
+Discrete MH
+c jℓ= sign
+(rt deﬁned in Eq. (9))
+Discrete MR
+c jℓ= sign
+i:xi ∈X j dt(i, ℓ) Yi[ℓ]
+(rt deﬁned in Eq. (11))
+dt(i, ℓ) Yi[ℓ]
+We thus choose the term w which maximizes this quantity, and we assign predictions
+correspondingly. The parameter αt is set as in Eq. (10).
+The search for a good weak hypothesis can be very time consuming when the training
+corpus is large. We therefore use an inverted list that stores for each term (word, bigram,
+sparse n-gram, etc.) the list of documents in which it appears. On each round, when searching for a good weak hypothesis, we scan the inverted list and for each term we evaluate its
+prediction conﬁdences c jℓaccording to the version of AdaBoost that we use. A straightforward implementation would require scanning the entire collection for each term. However,
+precomputing certain values can save a signiﬁcant amount of time. For AdaBoost.MH for
+instance, we ﬁrst compute on each round once for all j the following values.
+We now ﬁnd for each term the values W jℓ
++ by summing over the documents in which each
+term appears using the inverted list. We then set W jℓ
+−= W jℓ−W jℓ
++ , and proceed to ﬁnd
+c jℓand the corresponding values for Zt. Hence, the amount of time spent on each round
+searching for a weak hypothesis is proportional to the total number of occurrences of all
+the terms in the training collection. After a weak hypothesis is found, it takes O(mk) time
+to update the distribution Dt(i, ℓ).
+Our system for multi-label text categorization, called BoosTexter, can be used with any
+of the four implementations of weak learners described above. A brief summary of the
+different implementations is given in Table 1.
+Evaluation measures
+For evaluating the performance of our boosting algorithms we used three evaluation measures. The ﬁrst one, one-error, is a simple generalization of classiﬁcation error for multiclass
+R.E. SCHAPIRE AND Y. SINGER
+multi-label problems. The one-error is also directly related to the training error . The other two evaluation measures are based on measures used in information retrieval and used to evaluate the performance of the various classiﬁcation algorithms
+in terms of their label rankings.
+As noted earlier, we assume that a multi-label system induces an ordering of the possible
+labels for a given instance. That is, the output of the learning system is a function f : X ×
+Y →R which ranks labels according to f (x, ·) so that label ℓ1 is considered to be ranked
+higher than ℓ2 if f (x, ℓ1) > f (x, ℓ2). With the exception of RIPPER, all the classiﬁcation
+systems we tested in this paper can indeed be viewed in this way, where the ordering is
+deﬁned by assigning a real number for each possible instance-label pair x, ℓ.
+We will ﬁnd it convenient to refer to the rank of a given label ℓfor instance x under
+f which we denote by rank f (x, ℓ). That is, formally, rank f (x, ·) is a one-to-one mapping
+onto {1, . . . , k} such that if f (x, ℓ1) > f (x, ℓ2) then rank f (x, ℓ1) < rank f (x, ℓ2).
+One-error.
+This measure evaluates how many times the top-ranked label was not in the
+set of possible labels. Thus, if the goal of a multiclass system is to assign a single label
+to a document, the one-error measures how many times the predicted label was not in
+Y. We call this measure the one-error of hypothesis H since it measures the probability
+of not getting even one of the labels correct. We denote the one-error of a hypothesis f
+by one-err( f ). We can deﬁne a classiﬁer H : X →Y that assigns a single label for a
+document x by setting H(x) = arg maxℓ∈Y f (x, y). Then, for a set of labeled documents
+S = ⟨(x1, Y1), . . . , (xm, Ym)⟩, the one-error is
+one-errS(H) = 1
+[[H(xi) ̸∈Yi]].
+Note that, for single-label classiﬁcation problems, the one-error is identical to ordinary
+While the one-error evaluates the performance of a system for the top-ranked
+label, the goal of the coverage measure is to assess the performance of a system for all the
+possible labels of documents. That is, coverage measures how far we need, on the average,
+to go down the list of labels in order to cover all the possible labels assigned to a document.
+Coverage is loosely related to precision at the level of perfect recall. Formally, we deﬁne
+the coverage of f with respect to S = ⟨(x1, Y1), . . . , (xm, Ym)⟩to be
+coverageS(H) = 1
+ℓ∈Yi rank f (xi, ℓ) −1.
+For single-label classiﬁcation problems, coverage is the average rank of the correct label,
+and is zero if the system does not make any classiﬁcation errors.
+Average precision.
+The above measures are not complete for multi-label classiﬁcation
+problems: We can achieve good (low) coverage but suffer high one-error rates, and vice
+A BOOSTING-BASED SYSTEM FOR TEXT CATEGORIZATION
+versa. In order to assess the label ranking of a multiclass system as a whole we used the
+non-interpolated average precision, a performance measure frequently used for evaluation
+of information retrieval (IR) systems . Note, however, that non-interpolated
+average precision is typically used in IR systems to evaluate the document ranking performance for query retrieval. In contrast, in our experiments we use average precision for
+evaluating the effectiveness of the label rankings. Formally, we deﬁne average-precision
+for a ranking H with respect to a training set S, denoted avgprec ( ) for short, to be
+avgprecS(H) = 1
+|{ℓ′ ∈Yi | rank f (xi, ℓ′) ≤rank f (xi, ℓ)}|
+rank f (x, ℓ)
+In words, this measure evaluates the average fraction of labels ranked above a particular
+label ℓ∈Yi which actually are in Yi. Note that avgprecS( f ) = 1 for a system f which
+ranks perfectly the labels for all documents so that there is no document xi for which a label
+not in Yi is ranked higher than a label in Yi.
+Text categorization experiments
+In this section, we describe and analyze the experiments we performed using the four
+boosting algorithms for text categorization that were described in previous sections. The
+experimentswereperformedonanSGIChallengewith20MIPSR10000processorsrunning
+at 195 MHz. The timing information we give in this section is with respect to a single cpu.
+Test corpora
+Reuters-21450.
+The documents in this collection were collected from Reuters newswire
+in 1987. We used the modiﬁed Apte (“ModApte”) split which contains 12,902 documents.
+A cleaned-up version of this dataset, called Reuters-21578, is publicly available from the
+web page by David Lewis, who originally
+compiled the collection. We performed the following pre-processing prior to the experiments: All words were converted to lower case, punctuation marks were removed, and
+“function words” from a standard stop-list were removed.2 The average length of a document after pre-processing is 82 words. This corpus is divided into categories which in turn
+are sub-divided into sub-categories. The Reuters corpus has served as the benchmark for
+many text-categorization studies using various partitions of the corpus. See Yang’s work (to
+appear) for an overview of the more common partitions and versions of this corpus as well
+as a summary of the text categorization algorithms that tested on this corpus. In this work,
+we considered several partitions of the Reuters corpus based on the broad topics at the top
+hierarchy (for further details see Tables A.1, A.7, and A.9). We used 3-fold cross validation
+in our experiments with these partitions. To compare our algorithm to previously published
+work, we also performed experiments with a partition that includes all topics in Reuters
+that have at least two relevant documents for training. This collection includes 93 topics
+and was studied extensively by Yang (to appear) and others. Yang referred to this partition
+R.E. SCHAPIRE AND Y. SINGER
+as version-3 and compared the results to previously studied text-categorization algorithms.
+We devote a separate section, Section 6.5, to the description of our experiment with this
+widely tested partition of Reuters.
+AP Titles.
+This is a corpus of AP newswire headlines .AsfortheReuterscorpus,previousworkconcentratedonbinaryclassiﬁcation
+by tagging documents as being relevant or irrelevant to topics like “federal budget” and
+“Nielsens ratings.” The total number of documents in this corpus is 319,463. The headlines
+are an average of nine words long, with a total vocabulary of 67,331 words. No preprocessing
+of the text was done, other than to convert all words to lower case and remove punctuation
+marks. We performed two sets of experiments with this corpus based on two different
+labeling schemes available for this corpus.
+UseNet data.
+This dataset consists of Usenet articles collected by Lang from 20
+different newsgroups. One thousand articles were collected for each newsgroup so there are
+20,000 articles in the entire collection. This data was originally treated as single-labeled
+ ). However, since people tend to post articles to multiple
+newsgroups, we found after examining the headers of the articles that about 4.5% of the
+articles are actually multi-labeled. Furthermore, we found 544 identical articles which were
+posted to more than one group. The total number of articles after relabeling the data based
+on the headers is 19,466 with 20,347 labels. Further description of this dataset is given
+in Table A.11. We used 3-fold cross validation in our experiments with the newsgroup
+Other algorithms
+As mentioned in the introduction, there has been immense work on text categorization using
+many different algorithms. Since it is impossible to implement and evaluate all previously
+published algorithms, we chose the following algorithms for comparison with the boosting
+algorithms:
+This is Cohen’s rule-learning system as adapted to text categorization
+problems by Cohen and Singer . RIPPER classiﬁes a document by applying a set
+of boolean tests that check the absence (or presence) of words in the documents. RIPPER
+is not capable of dealing with multiple labels. RIPPER learns a classiﬁer in the form of a
+boolean combination of simple terms. It does not provide a ranking of the possible labels
+for a given document. Therefore, the only performance measure we can use for comparison
+is the error rate.
+We implemented a version of Rocchio’s algorithm , as adapted
+to text categorization by Ittner, Lewis, & Ahn and modiﬁed to multiclass problems.
+In Rocchio, we represent the data (both training and test documents) as vectors of numeric
+weights. The weight vector for the ith document is vi = (vi
+2, . . . , vi
+l ), where l is the
+A BOOSTING-BASED SYSTEM FOR TEXT CATEGORIZATION
+number of indexing terms used. We use single words as terms. We followed the TF-IDF
+weighting and deﬁned the weight vi
+k log(ND/nk)
+j log(ND/n j)
+Here, ND is the number of documents, nk is the number of documents in which the indexing
+term k appears. The weight f i
+k is log(m) + 1, where m is the number of occurrences of
+the indexing term k in document i. We set f i
+k = 0 if m = 0. For each class ℓwe build
+a “prototype” vector which is the average weight vector over all documents xi for which
+ℓ∈Yi. Formally, let X(ℓ) = {i | ℓ∈Yi}. Then the prototype vector for class ℓis
+Test documents are classiﬁed by calculating the dot-products between the weight vector
+representing the document and each of the prototype vectors. These dot-products induce
+a ranking of the possible labels. We use this ranking to evaluate the performance of the
+classiﬁer for each of the measures discussed in Section 5.
+Sleeping-experts.
+This is an algorithm originally proposed by Blum , studied further by Freund et al. , and ﬁrst applied to text categorization by Cohen and Singer
+ . Brieﬂy, this algorithm classiﬁes a document by thresholding a score which is a
+weighted combination of “experts” which are based on the word-grams appearing in the
+text. This score can be used to rank the labels. The algorithm can be easily adapted to multiclass (and multi-label) settings by assigning mini-experts for each possible pair of class and
+sparse word-gram. We used words and word pairs as the set of experts in the experiments.
+Naive-Bayes and probabilistic TF-IDF.
+These are probabilistic classiﬁers that assign,
+for each document, a probability vector of belonging to each of the possible labels. Like
+the algorithms above, these probability vectors can be viewed as rankings and thus used for
+evaluating the performance with respect to the measures discussed in Section 5. These algorithms are available as part of the publicly available Rainbow text-categorization system3
+which we used in our experiments. This system includes other classiﬁcation methods but,
+in all of the experiments we performed, Naive-Bayes and probabilistic TF-IDF performed
+better than the other methods available in Rainbow. Further description of Naive-Bayes and
+probabilistic TF-IDF for text categorization is given in .
+To handle multi-label data, we mapped to the single-label case by simply repeating each
+document once for each of its assigned labels.
+Experiments using single-label corpora
+In the ﬁrst set of experiments, we partitioned the Reuters corpus into six disjoint classes.
+These classes roughly constitute the top categorization hierarchy. We discarded articles
+R.E. SCHAPIRE AND Y. SINGER
+that do not belong to any of the classes and articles that belong to more than one class.
+A detailed description of this subset is given in Table A.1. The total number of articles
+in this experiment is 10,187. We used three-fold cross-validation in the experiments. The
+results we report are averaged over the three folds. For all subsets of this dataset, we ran
+the real AdaBoost.MH and real-abstaining AdaBoost.MH for 5,000 rounds and the discrete
+AdaBoost.MH and AdaBoost.MR for 20,000.
+We performed experiments with varying numbers of classes. We selected subsets of the
+data by taking the top k classes, in decreasing number of documents, from k = 3 to 6.
+For instance, for k = 3 we took 7,761 documents from the classes EARN, ACQ, and COM.
+We then created three different splits into training and test data and ran the various text
+categorization algorithms on each of the splits.
+A summary of the results of the experiments with this dataset is given in Table A.2
+and graphically in ﬁgure 5. The performance of the different multiclass versions of
+AdaBoost is comparable on this data set, with a small advantage to the real-valued versions
+of AdaBoost.MH (with and without abstaining). All the four versions of AdaBoost for multilabel problems clearly outperform all of the other classiﬁcation algorithms. The error of
+AdaBoost.MH is almost 50% smaller than the error-rate of the best competing algorithm on
+this dataset (Naive-Bayes). Similar behavior is observed for coverage and average-precision.
+The next set of experiments with single-label datasets is with the AP Titles corpus. In
+the ﬁrst subset of AP titles, each headline is (possibly) labeled by a single topic from 20
+possible classes. We extracted 29,841 documents which belong to exactly one of the 20
+classes. A description of this subset of AP titles is given in Table A.3. For the subsets in
+this dataset, we ran the real-valued version of AdaBoost.MH (with and without abstaining)
+for 10,000 rounds and the discrete AdaBoost.MH and AdaBoost.MR for 40,000 rounds.
+As before, we tested the performance of the algorithms by extracting subsets with growing
+numbers of classes, where we ordered the classes by decreasing number of documents in
+each class. The results are summarized in Table A.4 and graphically in ﬁgure 6. Among
+the different boosting algorithms, real AdaBoost.MH exhibits the best performance: it is
+slightly better than real abstaining AdaBoost.MH and signiﬁcantly better than the discrete
+AdaBoost.MH and discrete AdaBoost.MR where the latter is the worst performer among
+the four boosting algorithms. The main reason for this is that 40,000 rounds were simply
+not enough for the discrete versions. For discrete AdaBoost.MR and AdaBoost.MH, the
+training error was still monotonically decreasing when we reached the maximal number
+of rounds. This improved performance in decreasing the training error of the real-valued
+versions of AdaBoost is even more vivid for large datasets, as we show subsequently.
+The best competitor algorithm for this dataset is Sleeping-experts. In fact, Sleepingexperts slightly outperforms AdaBoost.MH when the number of classes is three. However,
+for subsets of at least eight classes, AdaBoost.MH signiﬁcantly outperform Sleeping-experts
+with respect to all three performance measures. Note also the interesting fact that, in contrast
+to the results for the previous dataset, probabilistic TF-IDF outperforms Naive-Bayes, yet
+both algorithms are clearly inferior to AdaBoost.MH.
+The last set of experiments with single-labeled multiclass problems is with the entire AP
+titles collection. In addition to the partial partition into twenty speciﬁc topics above, this
+corpus is also divided into six general categories4 such that each article falls into exactly
+A BOOSTING-BASED SYSTEM FOR TEXT CATEGORIZATION
+Left: Comparison of the various boosting algorithms for text categorization on the ﬁrst single-label
+subset of Reuters-21450. Right: Comparison of real AdaBoost.MH with Naive-Bayes, probabilistic TF-IDF,
+Sleeping-experts, and Rocchio on the same subset.
+one category. We removed all articles not belonging to any of the categories. The number of
+articles that remained is 209,700. Since this labeling scheme results in a very large corpus,
+we did not use cross-validation in the experiments. Instead, we used Lewis’s chronological
+split into training and test sets. The training set for this split contains 142,727 headlines
+and the test set 66,973. A description of the classes is given in Table A.5 and a summary of
+the results is given in Table A.6.
+Since Rainbow allocates a different ﬁle for each article, this dataset was too large to be
+converted into the format required for Rainbow. We therefore compared real AdaBoost.MH,
+R.E. SCHAPIRE AND Y. SINGER
+Left: Comparison of the various boosting algorithms for text categorization on the ﬁrst single-label
+subset of AP titles. Right: Comparison of real AdaBoost.MH with Naive-Bayes probabilistic TF-IDF Sleepingexperts and Rocchio on the same dataset.
+discrete AdaBoost.MH, and discrete AdaBoost.MR only with Sleeping-experts, Rocchio,
+and RIPPER.
+Our main focus in the experiment with this dataset was the performance of the different
+boosting algorithms as a function of number of rounds. In ﬁgure 7, we show the training and
+test error of the algorithms as a function of the number of rounds. We see that the version of
+AdaBoost.MH which uses real-valued predictions dramatically outperforms the methods
+with predictions in {−1, +1}. After 180,000 rounds, discrete AdaBoost.MH reaches a
+training error of 32.2% while it took real AdaBoost.MH only 642 rounds to reach this
+training error—more than a two-hundred fold speed-up!
+A BOOSTING-BASED SYSTEM FOR TEXT CATEGORIZATION
+Comparison of the training (left) and test (right) error using three boosting methods on the second
+single-label subset of AP titles.
+As with the previous experiments, discrete AdaBoost.MH seems to consistently outperform discrete AdaBoost.MR. This might be partially due to the approximation that is made
+of Zt in lieu of its direct minimization. We fortunately do not observe overﬁtting with the
+AdaBoost algorithms so that the better performance in decreasing the training error results
+in lower error rates on the test data.
+The best competitor algorithm for this dataset is Sleeping-experts. It takes about a thousand rounds for AdaBoost.MH to reach the test error rate of Sleeping-experts and after
+30,000 rounds its test error is signiﬁcantly lower. However, Sleeping-experts is much faster
+on this dataset, ﬁnishing in about a minute, roughly as long as it takes to run boosting for
+25 rounds.
+Experiments using multi-label corpora
+For the ﬁrst set of experiments with multi-labeled corpora, we used the Reuters dataset
+again. This time, we partitioned it into classes based on the nine topics constituting the top
+hierarchy. We discarded documents not belonging to any topic; however, articles belonging
+to more than one topic were assigned multiple labels. The total number of articles for this
+partition is 10,792 and the number of different labels is 11,588; about 7% of the articles
+are labeled with more than one label. We performed experiments by selecting a subset of
+the classes and the corresponding articles. The subsets were again selected by choosing
+the k classes with the largest number of articles for k = 3, . . . , 9. Thus, once again, the
+difﬁculty of the classiﬁcation problem increases with k. A description of the dataset is given
+in Table A.7. In all of the experiments with this data, we used three-fold cross validation.
+We ran the versions with real-valued prediction for 10,000 rounds and the discrete versions
+40,000 rounds.
+A summary of the results, averaged over the three folds, is given in Table A.7 and ﬁgure 8.
+The results for this multi-label dataset are similar to the previous single-label datasets.
+The different boosting methods are comparable in performance. AdaBoost.MR is slightly
+worse than the other three for one-error and average-precision. Real AdaBoost.MH again
+outperforms all the competitor algorithms with respect to the three performance evaluation
+R.E. SCHAPIRE AND Y. SINGER
+Left: Comparison of the various boosting algorithms for text categorization on the ﬁrst multi-label
+subset of Reuters-21450. Right: Comparison of real AdaBoost.MH with Naive-Bayes, probabilistic TF-IDF,
+Sleeping-experts, and Rocchio (right) on the same dataset.
+measures.Furthermore,thereisnoclearwinneramongtheotheralgorithms:whileSleepingexperts is best for the subsets with a small number of classes (k < 6), Naive-Bayes is the
+best one for the large classiﬁcation problems (k > 6). Nonetheless, AdaBoost.MH clearly
+outperforms both methods on all subsets.
+In the second set of multi-label experiments with Reuters, we partitioned the dataset into
+the classes constituting the leaves of the hierarchy of topics. We chose all classes which
+include at least 100 articles. This subset includes 19 different classes which sum to 3,631
+documents labeled by 5,173 different labels. In the full subset with 19 classes about 40% of
+A BOOSTING-BASED SYSTEM FOR TEXT CATEGORIZATION
+Left: Comparison of the various boosting algorithms for text categorization on the second multilabel subset of Reuters-21450. Right: Comparison of real AdaBoost.MH with Naive-Bayes probabilistic TF-IDF
+Sleeping-experts and Rocchio on the same dataset.
+the articles have more than one label. As before, we performed experiments with subsets of
+growing size and classes, for k = 3, . . . , 19. A detailed description of the dataset is given in
+Table A.9. As before we used 3-fold cross-validation to estimate the performance. Again,
+we ran the real-valued version for 10,000 rounds and the discrete for 40,000.
+A summary of the results is given in Table A.10 and ﬁgure 9. Here again we see comparable performance of the different boosting algorithms. Also, real AdaBoost.MH is better
+than all competitor algorithms, especially with respect to one-error and average-precision.
+For this dataset, Rocchio seems to be the best alternative. In fact, it achieves coverage values
+which are comparable to real AdaBoost.MH on most, if not all, of the subsets.
+R.E. SCHAPIRE AND Y. SINGER
+The last experiment with multi-labeled text data was performed with newsgroup articles.
+Here we followed the experimental methodology used in previous studies with this dataset.
+We used 3-fold cross validation. For each fold we held the test set ﬁxed and varied the
+size of the training set by sub-sampling the full training set for each fold. We ran the
+different algorithms for training sets of size 200, 500, 1000, 2000, 5000, 10000, and 12,977
+(two thirds of the total number of articles available for this dataset). We compared real
+AdaBoost.MH with the two methods which in previous studies achieved the best results on
+this dataset, namely, Naive-Bayes and probabilistic TF-IDF. We allowed weak hypotheses
+(and features for Naive-Bayes and probabilistic TF-IDF) of single words and word pairs. We
+set the number of rounds for AdaBoost.MH to be twice the number of training documents.
+Hence, we ran AdaBoost.MH as little as 400 rounds and at most 26,000 rounds.
+The results comparing real AdaBoost.MH, probabilistic TF-IDF and Naive-Bayes for
+the three evaluation measures as a function of the training set size are shown in ﬁgure 10.
+Figure 10.
+Comparison of real AdaBoost.MH Naive-Bayes and probabilistic TF-IDF as a function of the number
+of training examples on the UseNet data.
+A BOOSTING-BASED SYSTEM FOR TEXT CATEGORIZATION
+For training sets of size smaller than 10,000, real AdaBoost.MH is clearly inferior to probabilistic TF-IDF and Naive-Bayes. The performance of AdaBoost.MH is especially poor
+for training sets of size smaller than a thousand. When the training set is large enough,
+we again see that AdaBoost.MH outperforms both probabilistic TF-IDF and Naive-Bayes
+with respect to all three measures. However, the difference in performance is not as signiﬁcant as in the previous datasets. One possible explanation for these results is that, in
+contrast to probabilistic TF-IDF and Naive-Bayes, AdaBoost.MH incorporates very little
+prior knowledge. Thus, although AdaBoost.MH is minimizing the Hamming loss on the
+training set, the generalization error is rather poor, as indeed implied by theoretical studies.
+Once there are enough examples, the prior knowledge, incorporated via the term weights in
+probabilistic TF-IDF and Naive-Bayes, is much less crucial and AdaBoost.MH does a better
+job in driving the training error down, and therefore also the generalization error decreases.
+These results suggest that the new boosting algorithms for text categorization would be best
+utilized in complex multiclass problems with a large number of training examples.
+An experiment with a large number of classes
+Weconcludethissectionontextcategorizationexperimentswithamulti-labelcategorization
+experiment using a dataset that contains a large number of classes. In this experiment
+we used the partition of Reuters-21450 that was prepared by Apt´e, Damerau, and Weiss
+ for their experiments with the SWAP-1 rule learner. The Reuters-21450 corpus was
+partitioned into a training set of 7,789 documents and a test set containing 3,309 document.
+This partition includes all classes with at least two documents in the training set and at
+least one document in the test set. There are 93 such classes. Yang (to appear), who refers
+to this partition of Reuters as version-3, performed extensive comparisons with various
+algorithms that were evaluated on this partition. Here we compare AdaBoost.MH with
+the two classiﬁcation algorithms that achieved the best performance results according to
+Yang; these are a k-nearest-neighbor (KNN) classiﬁer and a linear classiﬁer based on a least
+squares ﬁt of term weights to the class labels (LLSF).
+We processed the text as described in Section 6.1. Each document was labeled with a
+subset of the 93 possible classes. The average number of labels per document is 1.24. This
+problem requires a vast amount of memory; to maintain the distribution Dt(i, j), we need
+a table of size mk = 7789 × 93 which amounts to over 700,000 numbers. As in previous
+experiments, we ran AdaBoost.MH for 10,000 rounds which took about 3 days of cpu time
+to complete. The smoothing value ε was set using 3-fold cross validation on the training
+set. We would like to note however that using the default value yielded only slightly worse
+results. (For instance, the 11-point average precision is 0.932 when using the default value
+for ε compared to 0.934 when using cross-validation to determine ε.) On the left hand-side
+of ﬁgure 11 we plot the one-error on the training and test data as a function of the number of
+rounds. Note that the one-error on the training set reaches its minimal value, which is very
+close to zero, after about 1000 rounds of boosting while the test error continues to decrease
+even after 10,000 rounds, apparently without overﬁtting. This behavior was also observed
+in other experiments with boosting algorithms and is partially motivated by theoretical
+analysis .
+R.E. SCHAPIRE AND Y. SINGER
+Figure 11.
+Left: The one-error on the training and test data for the Reuters partition with 93 classes. Right:
+Precision-Recall curve for AdaBoost.MH on the test collection of the same dataset.
+Summary of results obtained for Reuters-21450 with 93 classes.
+(Threshold adjusted
+11-pt Avg. precision
+on data) F1
+(Threshold = 0) F1
+Mircro-avg. BEP
+AdaBoost.MH
+To make our results on this dataset comparable with previously published results, we used
+the three evaluation measures that were used by Yang (to appear) and others, namely, 11point interpolated average precision , F1 ,
+and micro-averaged break-even point. The ﬁrst and the third performance measures asses
+the general quality of the label ranking while the second measure evaluates the classiﬁcation
+quality. For further details on these evaluation measures see Yang (to appear). To use the F1
+measure we need to set a threshold for the label-rankings and decide which labels should
+be associated with a document. We evaluated the performance using two thresholds: the
+zero threshold and a threshold that was adjusted so as to maximize F1 on the training data
+after AdaBoost.MH completed 10,000 rounds. In Table 2 we summarize the results and
+compare them to the best results obtained by Yang. report a break-even point of 87% using the Reuters-
+21578 dataset.) We also give on the right hand side of ﬁgure 2 a precision-recall graph for
+AdaBoost.MH together with the break-even points of three other classiﬁcation algorithms
+evaluated on this dataset. The performance of AdaBoost.MH is state-of-the-art: it achieves
+the highest 11-point interpolated average precision and break-even point and comes very
+close to the best F1 value obtained on this partition of Reuters. However, it is difﬁcult to
+asses the statistical signiﬁcance of these results since the performance measures used are
+highly nonlinear and non-additive. Nonetheless, the good performance of AdaBoost.MH
+on this well-studied dataset provides further empirical evidence that boosting algorithms
+can serve as a viable alternative to existing algorithms for text categorization.
+A BOOSTING-BASED SYSTEM FOR TEXT CATEGORIZATION
+Figure 12.
+Results on a call-type identiﬁcation task.
+Speech categorization experiments
+In the ﬁnal set of experiments, we tested our system on a call-classiﬁcation task. The purpose
+of this task is to automatically identify the type of call requested in response to the greeting,
+“How may I help you?” For instance, if the response is, “Yes, I would like to charge this call
+to my Visa card,” then the call should be classiﬁed as a calling-card call. There are fourteen
+call types, plus an ‘other’ category. Some calls can be of more than one type (for instance,
+a call can be both collect and person-to-person).
+This task was previously studied by Gorin and others , and we used
+the same data, namely, a collection of 8,000 training utterances and 1,000 test utterances. Both the training and test utterances were all transcribed by humans from actual
+spoken responses. The test utterances are also available in a form produced by an automatic speech recognizer; this, of course, is the only form that would be available in a real
+Following others who have worked on this dataset, we present our results in the form of
+an ROC curve. For this, each algorithm needs to produce a conﬁdence in its own predictions.
+The curve is then produced by varying a reject threshold which speciﬁes that examples with
+conﬁdence below the given threshold should be rejected (for this task, this would mean that
+the call would have to be handled by a human operator). We then plot the accuracy of the
+classiﬁer on non-rejected examples as a function of the false rejection rate, which is the
+fraction of examples incorrectly rejected. A classiﬁcation by the system of ‘other’ is also
+considered equivalent to rejection.
+To get a conﬁdence level for the predictions of AdaBoost.MH, we used the difference
+between the ﬁnal scores of the ﬁrst and second ranked labels. That is, if f is the ﬁnal
+classiﬁer produced by AdaBoost.MH, then the conﬁdence assigned to the prediction of f
+on a test example x is f (x, ℓ1) −f (x, ℓ2) where ℓ1 and ℓ2 are the ﬁrst and second ranked
+labels according to f (x, ·).
+R.E. SCHAPIRE AND Y. SINGER
+We trained real AdaBoost.MH on this data using 300 rounds of boosting, and allowing
+sparse word trigrams for the terms used in forming the weak hypotheses. We compared our
+system to the best previous published work on this dataset, namely, that of Wright, Gorin,
+and Riccardi . The results are shown in ﬁgure 12 as a set of ROC curves. For the top
+set of curves, the algorithms were tested using human-transcribed test data. For the bottom
+set of curves, the test data were generated using an automatic speech recognizer (based on
+the same spoken utterances). The solid curves are for AdaBoost.MH, and the dashed curves
+are those of Wright, Gorin, and Riccardi .
+The performance of the two algorithms is strikingly similar for most reject levels. However, AdaBoost.MH does signiﬁcantly better on the transcribed data for moderately large
+reject levels of 40% or more. These results indicate that for slightly less than half of the
+examples, AdaBoost.MH can produce predictions that are almost certainly correct.
+Note that the training set is the same, whether we test on manually transcribed or automatically recognized data. AdaBoost.MH, like other learning algorithms, attempts to minimize
+the classiﬁcation error on the training data and thus employs the tacit assumption that the
+test data are generated by the same source as the training data. This is clearly not true when
+we use the automatically transcribed data for testing. We believe that we can improve the
+performance of our system using training data that is automatically generated by a speech
+recognizer.
+Appendix A:
+Description of text datasets and summary of results
+Table A.1.
+Description of the classes constituting the single-label subset of Reuters-21450.
+Cum. #docs
+Earnings and Earnings Forecasts (EARN)
+Mergers/Acquisitions (ACQ)
+Commodity Codes (COM)
+Economic Indicator Codes (ECON)
+General Articles (GNRL)
+Energy Codes (ENRG)
+Table A.2.
+Results for the single-label subset of Reuters-21450 (Table A.1).
+Real AdaBoost.MH
+Naive-Bayes
+Sleeping-experts
+A BOOSTING-BASED SYSTEM FOR TEXT CATEGORIZATION
+Table A.3.
+Description of the classes constituting the ﬁrst single-label subset of AP titles.
+Cum. #docs
+Cum. #docs
+yugoslavia
+dollargold
+tickertalk
+Table A.4.
+Results for the ﬁrst single-label subset of AP titles (Table A.3).
+Real AdaBoost.MH
+Naive-Bayes
+Sleeping-experts
+5.87 0.0789
+11.53 0.1397 0.9383 24.79 0.4144 0.8483
+5.20 0.0661 0.9716
+9.34 0.1517
+16.90 0.2503 0.9035 33.15 0.6365 0.7886
+9.48 0.1501 0.9446
+5 11.39 0.2075
+21.04 0.3528 0.8757 30.98 0.7888 0.7867 11.92 0.2161 0.9281
+6 13.19 0.2782
+23.86 0.4525 0.8545 31.28 0.9386 0.7789 13.90 0.2972 0.9123
+7 12.43 0.2671
+21.89 0.4204 0.8664 29.23 0.9002 0.7935 13.36 0.2861 0.9162
+8 12.04 0.2606
+21.29 0.4084 0.8701 27.77 0.8480 0.8047 13.25 0.2954 0.9161
+9 12.57 0.2887
+21.71 0.4383 0.8661 28.00 0.9541 0.8004 13.99 0.3230 0.9109
+10 13.27 0.3098
+22.77 0.4788 0.8587 28.38 1.0103 0.7977 14.89 0.3600 0.9049
+11 14.24 0.3461
+23.80 0.5301 0.8504 30.02 1.1412 0.7861 15.75 0.4163 0.8974
+12 13.97 0.3500
+24.82 0.5636 0.8441 29.76 1.1892 0.7873 16.08 0.4356 0.8953
+13 14.71 0.3949
+25.03 0.5940 0.8415 30.24 1.2752 0.7838 16.49 0.4675 0.8921
+14 15.01 0.4050
+26.25 0.6570 0.8322 30.32 1.3229 0.7828 16.97 0.5019 0.8884
+15 15.53 0.4372
+26.65 0.6888 0.8289 30.44 1.3933 0.7811 17.08 0.5248 0.8869
+16 15.58 0.4647
+26.87 0.7191 0.8268 30.63 1.4676 0.7786 17.33 0.5510 0.8849
+17 16.00 0.4915
+27.09 0.7483 0.8245 31.04 1.4875 0.7760 17.59 0.5697 0.8829
+18 15.93 0.5008
+27.02 0.7722 0.8239 30.98 1.4955 0.7768 17.93 0.5940 0.8806
+19 15.91 0.5041
+27.07 0.7948 0.8229 31.04 1.5212 0.7759 17.58 0.6035 0.8824
+20 16.29 0.5483
+27.04 0.8365 0.8218 32.11 1.6277 0.7674 18.01 0.6430 0.8788
+R.E. SCHAPIRE AND Y. SINGER
+Table A.5.
+Description of the classes constituting the second single-label subset of AP titles.
+#Docs train
+#Docs test
+International
+Washington
+Entertainment
+Table A.6.
+Error rates for the different algorithms on the second single-label subset of AP titles (Table A.5).
+(30,000 Rounds)
+(180,000 Rounds)
+real AdaBoost.MH
+discrete AdaBoost.MH
+Sleeping-experts
+Table A.7.
+Description of the classes constituting the ﬁrst multi-label subset of Reuters-21450.
+Cum. #docs
+Avg. no. labels/docs
+Acquisitions
+Table A.8.
+Results for the ﬁrst multi-labeled subset of Reuters-21450 (Table A.7).
+Real AdaBoost.MH
+Naive-Bayes
+Sleeping-experts
+A BOOSTING-BASED SYSTEM FOR TEXT CATEGORIZATION
+Table A.9.
+Description of the classes constituting the second multi-label subset of Reuters-21450.
+Cum. #docs
+labels/docs
+Cum. #docs
+labels/docs
+Table A.10.
+Results for the second multi-labeled subset of Reuters-21450 (Table A.9).
+Real AdaBoost.MH
+Naive-Bayes
+Sleeping-experts
+R.E. SCHAPIRE AND Y. SINGER
+Table A.11.
+List of the newsgroups and the number of articles posted to the newsgroups. (An article may be
+posted to multiple groups.).
+alt.atheism
+rec.sport.hockey
+comp.graphics
+comp.os.ms-windows.misc
+sci.electronics
+comp.sys.ibm.pc.hardware
+comp.sys.mac.hardware
+comp.windows.x
+soc.religion.christian
+misc.forsale
+talk.politics.guns
+talk.politics.mideast
+rec.motorcycles
+talk.politics.misc
+rec.sport.baseball
+talk.religion.misc
+Acknowledgments
+We would like to thank Allen Gorin, David Lewis, Andrew McCallum, Fernando Pereira,
+Amit Singhal and Jerry Wright for useful discussions and for help with our experiments.
+1. Arbitrary long (sparse) n-grams but we restrict ourselves to words and word bigrams for comparison purposes.
+2. “Function words” include high frequency but contentless words like ‘of’ and ‘the’. We used the stop-list given
+by Lewis .
+3. 
+4. There are actually 15 categories but only 6 of them contain more than 40 articles. We discarded the 9 categories
+(and the corresponding articles) with only a few articles.

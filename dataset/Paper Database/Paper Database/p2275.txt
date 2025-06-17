@@ -1,0 +1,798 @@
+International Journal on Document Analysis and Recognition (IJDAR) 23:89–102
+ 
+ORIGINAL PAPER
+Fast multi-language LSTM-based online handwriting recognition
+Victor Carbune1 · Pedro Gonnet1 · Thomas Deselaers1 · Henry A. Rowley2 · Alexander Daryin1 · Marcos Calvo1 ·
+Li-Lun Wang2 · Daniel Keysers1 · Sandro Feuz1 · Philippe Gervais1
+Received: 8 August 2019 / Revised: 20 December 2019 / Accepted: 24 January 2020 / Published online: 8 February 2020
+© The Author(s) 2020
+We describe an online handwriting system that is able to support 102 languages using a deep neural network architecture. This
+new system has completely replaced our previous segment-and-decode-based system and reduced the error rate by 20–40%
+relative for most languages. Further, we report new state-of-the-art results on IAM-OnDB for both the open and closed dataset
+setting. The system combines methods from sequence recognition with a new input encoding using Bézier curves. This leads
+to up to 10× faster recognition times compared to our previous system. Through a series of experiments, we determine the
+optimal conﬁguration of our models and report the results of our setup on a number of additional public datasets.
+1 Introduction
+In this paper, we discuss online handwriting recognition:
+Given a user input in the form of an ink, i.e., a list of touch
+or pen strokes, output the textual interpretation of this input.
+A stroke is a sequence of points (x, y, t) with position (x, y)
+and timestamp t.
+B Victor Carbune
+ 
+Pedro Gonnet
+ 
+Thomas Deselaers
+ 
+Henry A. Rowley
+ 
+Alexander Daryin
+ 
+Marcos Calvo
+ 
+Li-Lun Wang
+ 
+Daniel Keysers
+ 
+Sandro Feuz
+ 
+Philippe Gervais
+ 
+Google, Zurich, Switzerland
+Mountain View, CA, USA
+Figure 1 illustrates example inputs to our online handwriting recognition system in different languages and scripts. The
+left column shows examples in English with different writing
+styles, with different types of content, and that may be written
+on one or multiple lines. The center column shows examples
+from ﬁve different alphabetic languages similar in structure
+to English: German, Russian, Vietnamese, Greek, and Georgian. The right column shows scripts that are signiﬁcantly
+different from English: Chinese has a much larger set of more
+complex characters, and users often overlap characters with
+one another. Korean, while an alphabetic language, groups
+letters in syllables leading to a large “alphabet” of syllables.
+Hindi writing often contains a connecting “Shirorekha” line,
+and characters can form larger structures (grapheme clusters) which inﬂuence the written shape of the components.
+Arabic is written right-to-left (with embedded left-to-right
+sequences used for numbers or English names), and characters change shape depending on their position within a
+word. Emoji are non-text Unicode symbols that we also
+recognize.
+Online handwriting recognition has recently been gaining
+importance for multiple reasons: (a) An increasing number
+of people in emerging markets are obtaining access to computing devices, many exclusively using mobile devices with
+touchscreens. Many of these users have native languages and
+scripts that are not as easily typed as English, e.g., due to the
+size of the alphabet or the use of grapheme clusters which
+makes it difﬁcult to design an intuitive keyboard layout .
+(b) More and more large mobile devices with styluses are
+V. Carbune et al.
+Fig. 1 Example inputs for online handwriting recognition in different
+languages. See text for details
+becoming available, such as the iPad Pro,1 Microsoft Surface devices,2 and Chromebooks with styluses.3
+Early work in online handwriting recognition looked at
+segment-and-decode classiﬁers, such as the Newton .
+Another line of work focused on solving online handwriting recognition by making use of hidden Markov models (HMMs) or hybrid approaches combining HMMs
+and Feed-forward Neural Networks . The ﬁrst HMMfree models were based on time delay neural networks
+(TDNNs) , and more recent work focuses on recurrent neural network (RNN) variants such as long short-term
+memory networks (LSTMs) .
+How to represent online handwriting data has been a
+research topic for a long time. Early approaches were
+feature-based, where each point is represented using a set
+of features , or using global features to represent
+entire characters . More recently, the deep learning revolution has swept away most feature engineering efforts and
+replaced them with learned representations in many domains,
+e.g., speech , computer vision , and natural language
+processing .
+Together with architecture changes, training methodologies also changed, moving from relying on explicit
+segmentation to implicit segmentation using the
+connectionist temporal classiﬁcation (CTC) loss , or
+encoder–decoder approaches trained with Maximum Likelihood Estimation . Further recent work is also described
+The transition to more complex network architectures and
+end-to-end training can be associated with breakthroughs
+in related ﬁelds focused on sequence understanding where
+deep learning methods have outperformed “traditional” pattern recognition methods, e.g., in speech recognition ,
+1 
+2 
+3 
+OCR , ofﬂine handwriting recognition , and computer vision .
+In this paper, we describe our new online handwriting recognition system based on deep learning methods.
+It replaces our previous segment-and-decode system ,
+which ﬁrst over-segments the ink, then groups the segments
+into character hypotheses, and computes features for each
+character hypothesis which are then classiﬁed as characters
+using a rather shallow neural network. The recognition result
+is then obtained using a best path search decoding algorithm on the lattice of hypotheses incorporating additional
+knowledge sources such as language models. This system
+relies on numerous preprocessing, segmentation, and feature extraction heuristics which are no longer present in
+our new system. The new system reduces the amount of
+customization required, and consists of a simple stack of
+bidirectional LSTMs (BLSTMs), a single Logits layer, and
+the CTC loss (Sect. 2). We train a separate model for
+each script (Sect. 3). To support potentially many languages
+per script (see Table 1), language-speciﬁc language models
+and feature functions are used during decoding (Sect. 2.5).
+For example, we have a single recognition model for Arabic script which is combined with speciﬁc language models
+and feature functions for our Arabic, Persian, and Urdu language recognizers. Table 1 shows the full list of scripts and
+languages that we currently support.
+The new models are more accurate (Sect. 4), smaller, and
+faster (Table 2) than our previous segment-and-decode models and eliminate the need for a large number of engineered
+features and heuristics.
+We present an extensive comparison of the differences
+in recognition accuracy for eight languages (Sect. 5) and
+compare the accuracy of models trained on publicly available
+datasets where available (Sect. 4). In addition, we propose a
+new standard experimental protocol for the IBM-UB-1 dataset to enable easier comparison between approaches in
+the future (Sect. 4.2).
+The main contributions of our paper are as follows:
+– We describe in detail our recurrent neural networkbased recognition stack and provide a description of
+how we tuned the model. We also provide a detailed
+experimental comparison with the previous segmentand-decode-based stack on the supported languages.
+– We describe a novel input representation based on
+Bézier curve interpolation, which produces shorter input
+sequences, which results in faster recognitions.
+– Our system achieves a new state of the art on the IAM-
+OnDB dataset, both for open and closed training sets.
+– We introduce an evaluation protocol for the less commonly used English IBM-UB-1 query dataset. We provide experimental results that quantify the structural
+Fast multi-language LSTM-based online handwriting recognition
+Table 1 List of languages supported in our system grouped by script
+Afrikaans, Azerbaijani, Bosnian, Catalan, Cebuano, Corsican, Czech, Welsh, Danish, German, English,
+Esperanto, Spanish, Estonian, Basque, Finnish, Filipino, French, Western Frisian, Irish, Scottish Gaelic,
+Galician, Hawaiian, Hmong, Croatian, Haitian Creole, Hungarian, Indonesian, Icelandic, Italian,
+Javanese, Kurdish, Latin, Luxembourgish, Lao, Lithuanian, Latvian, Malagasy, Maori, Malay, Maltese,
+Norwegian, Dutch, Nyanja, Polish, Portuguese, Romanian, Slovak, Slovenian, Samoan, Shona, Somali,
+Albanian, Sundanese, Swedish, Swahili, Turkish, Xhosa, Zulu
+Russian, Belarusian, Bulgarian, Kazakh, Mongolian, Serbian, Ukrainian, Uzbek, Macedonian, Kyrgyz,
+Simpliﬁed Chinese, Traditional Chinese, Cantonese
+Arabic, Persian, Urdu
+Devanagari
+Hindi, Marathi, Nepali
+Bangla, Assamese
+Amharic, Tigrinya
+Languages with distinct scripts: Armenian, Burmese, Georgian, Greek, Gujarati, Hebrew, Japanese,
+Kannada, Khmer, Korean, Lao, Malayalam, Odia, Punjabi, Sinhala, Tamil, Telugu, Thai, Tibetan,
+Vietnamesea
+aWhile Vietnamese is a Latin-script language, we have a dedicated model for it because of the large amount of diacritics not used in other Latin-script
+Table 2 Character error rates on the validation data using successively
+more of the system components described above for English (en), Spanish (es), German (de), Arabic (ar), Korean (ko), Thai (th), Hindi (hi),
+and Chinese (zh) along with the respective number of items and characters in the test and training datasets. Average latencies for all languages
+and models were computed on an Intel Xeon E5-2690 CPU running at
+Internal test data (per language)
+Characters
+Internal training data (per script)
+Characters
+15,850,724
+Unique supported characters
+Segment-and-decode 
+BLSTM (comparison) 
+Model architecture (this work)
+(2) BLSTM-CTC baseline curves
+(3) + n-gram LM
+(4) + character classes
+(5) + word LM
+Avg. latency per item
+Segment-and-decode 
+Number of parameters (per script)
+Segment-and-decode 
+V. Carbune et al.
+Fig. 2 An overview our
+recognition models. In our
+architecture, the input
+representation is passed through
+one or more bidirectional LSTM
+layers, and a ﬁnal softmax layer
+makes a classiﬁcation decision
+for the output at each time step
+difference between IBM-UB-1, IAM-OnDB, and our
+internal dataset.
+– We perform ablation studies and report results on numerous experiments highlighting the contributions of the
+individual components of the new recognition stack on
+our internal datasets.
+2 End-to-end model architecture
+Our handwriting recognition model draws its inspiration
+from research aimed at building end-to-end transcription
+models in the context of handwriting recognition , optical
+character recognition , and acoustic modeling in speech
+recognition . The model architecture is constructed from
+common neural network blocks, i.e., bidirectional LSTMs
+and fully connected layers (Fig. 2). It is trained in an end-toend manner using the CTC loss .
+Our architecture is similar to what is often used in the
+context of acoustic modeling for speech recognition , in
+which it is referred to as a CLDNN (Convolutions, LSTMs,
+and DNNs), yet we differ from it in four points. Firstly, we do
+not use convolution layers, which in our own experience do
+not add value for large networks trained on large datasets of
+relatively short (compared to speech input) sequences typically seen in handwriting recognition. Secondly, we use
+bidirectional LSTMs, which due to latency constraints is not
+feasible in speech recognition systems. Thirdly, our architecture does not make use of additional fully connected layers
+before and after the bidirectional LSTM layers. And ﬁnally,
+we train our system using the CTC loss, as opposed to the
+HMMs used in .
+This structure makes many components of our previous
+system unnecessary, e.g., feature extraction and segmentation. The heuristics that were hard-coded into our previous
+system, e.g., stroke-reordering and character hypothesis
+building, are now implicitly learned from the training data.
+The model takes as input a time series (v1, . . . , vT ) of
+length T encoding the user input (Sect. 2.1) and passes it
+through several bidirectional LSTM layers which learn
+the structure of characters (Sect. 2.2).
+The output of the ﬁnal LSTM layer is passed through a
+softmax layer (Sect. 2.3) leading to a sequence of probability
+distributions over characters for each time step.
+For CTC decoding (Sect. 3.1), we use beam search to
+combine the softmax outputs with character-based language
+models, word-based language models, and information about
+language-speciﬁc characters as in our previous system .
+2.1 Input representation
+In our earlier paper , we presented results on our datasets
+with a model similar to the one proposed in . In that
+model, we used 23 per-point features (similar to ) as
+described in our segment-and-decode system to represent
+the input. In further experimentation, we found that in substantially deeper and wider models, engineered features are
+unnecessary and their removal leads to better results. This
+conﬁrms the observation that learned representations often
+outperform handcrafted features in scenarios in which sufﬁcient training data are available, e.g., in computer vision 
+and in speech recognition . In the experiments presented
+here, we use two representations:
+2.1.1 Raw touch points
+The simplest representation of stroke data is as a sequence
+of touch points. In our current system, we use a sequence of
+5-dimensional points (xi, yi, ti, pi, ni) where (xi, yi) are the
+coordinates of the ith touchpoint, ti is the timestamp of the
+touchpoint since the ﬁrst touch point in the current observation in seconds, pi indicates whether the point corresponds to
+a pen-up (pi = 0) or pen-down (pi = 1) stroke, and ni = 1
+indicates the start of a new stroke (ni = 0 otherwise).4
+In order to keep the system as ﬂexible as possible with
+respect to differences in the writing surface, e.g., area shape,
+4 We acknowledge a redundancy between the features pi and ni which
+evolved over time from experimenting with explicit pressure data. We
+did not perform additional experiments to avoid this redundancy at this
+time but do not expect a large change in results when dropping either
+of these features.
+Fast multi-language LSTM-based online handwriting recognition
+size, spatial resolution, and sampling rate, we perform some
+minimal preprocessing:
+– Normalization of xi and yi coordinates, by shifting in x
+such that x0 = 0, and shifting and scaling the writing
+area isometrically such that the y coordinate spans the
+range between 0 and 1. In cases where the bounding box
+of the writing area is unknown, we use a surrogate area
+20% larger than the observed range of touch points.
+– Equidistant linear resampling along the strokes with δ =
+0.05, i.e., a line of length 1 will have 20 points.
+We do not assume that words are written on a ﬁxed baseline or
+that the input is horizontal. As in , we use the differences
+between consecutive points for the (x, y) coordinates and
+the time t such that our input sequence is (xi −xi−1, yi −
+yi−1, ti −ti−1, pi, ni) for i > 0, and (0, 0, 0, p0, n0) for
+2.1.2 Bézier curves
+However simple, the raw input data have some drawbacks,
+– Resolution: Not all input devices sample inputs at the
+same rate, resulting in different point densities along the
+input strokes, requiring resampling which may inadvertently normalize-out details in the input.
+– Length: We choose the (re-)sampling rate such as to
+represent the smallest features well, which leads to oversampling in less interesting parts of the stroke, e.g., in
+straight lines.
+– Model complexity: The model has to learn to map small
+consecutive steps to larger global features.
+Bézier curves are a natural way to describe trajectories in
+space, and have been used to represent online handwriting
+data in the past, yet mostly as a means of removing outliers
+in the input data , up-sampling sparse data , or for
+rendering handwriting data smoothly on a screen . Since
+a sequence of Bézier curves can represent a potentially long
+point sequence compactly, irrespective of the original sampling rate, we propose to represent a sequence of input points
+as a sequence of parametric cubic polynomials, and to use
+these as inputs to the recognition model.
+These Bézier curves for x, y, and t are cubic polynomials
+in s ∈ :
+x(s) = α0 + α1s + α2s2 + α3s3
+y(s) = β0 + β1s + β2s2 + β3s3
+t(s) = γ0 + γ1s + γ2s2 + γ3s3
+We start by normalizing the size of the entire ink such that
+the y values are within the range , similar to how we
+process it for raw points. The time values are scaled linearly
+to match the length of the ink such that
+tN−1 −t0 =
+(xi −xi−1)2 + (yi −yi−1)21/2
+in order to obtain values in the same numerical range as x
+and y. This sets the time difference between the ﬁrst and last
+points of the stroke to be equal to the total spatial length of
+the stroke.
+For each stroke in an ink, the coefﬁcients α, β, and γ are
+computed by minimizing the sum of squared errors (SSE)
+between each observed point i and its corresponding closest
+point (deﬁned by si) on the Bézier curve:
+(xi −x(si))2 + (yi −y(si))2 + (ti −t(si))2 .
+where N is the number of points in the stroke. Given a set
+of coordinates si, computing the coefﬁcients corresponds to
+solving the following linear system of equations:
+which can be solved exactly for N ≤4, and in the leastsquares sense otherwise, e.g., by solving the normalized
+V TZ = V TV Ω.
+for the coefﬁcients Ω. We alternate between minimizing the
+SSE in Eq. (3) and ﬁnding the corresponding points si, until
+convergence. The coordinates si are updated using a Newton
+x′(si)(xi −x(si)) + y′(si)(yi −y(si)) = 0,
+which is zero when (xi −x(si), yi −y(si)) is orthogonal to
+the direction of the curve (x′(si), y′(si)).
+If (a) the curve cannot ﬁt the points well (SSE error is
+too large) or if (b) the curve has too sharp bends (arc length
+longer than 3 times the endpoint distance), we split the curve
+into two parts. We determine the split point in case (a) by
+ﬁnding the triplet of consecutive points with the smallest
+V. Carbune et al.
+Fig. 3 Parameterization of each Bézier curve used to feed the network.
+Namely: vector between the endpoints (blue), distance between the
+control points and the endpoints (green dashed lines, 2 values), and the
+two angles between each control point and the endpoints (green arcs, 2
+values) (color ﬁgure online)
+angle, and in case (b) as the point closest to the maximum
+local curvature along the entire Bézier curve. This heuristic
+is applied recursively until both the curve matching criteria
+As a ﬁnal step, to remove spurious breakpoints, consecutive curves that can be represented by a single curve are
+stitched back together, resulting in a compact set of Bézier
+curves representing the data within the above constraints. For
+each consecutive pair of curves, we try to ﬁt a single curve
+using the combined set of underlying points. If the ﬁt agrees
+with the above criteria, we replace the two curves by the new
+one. This is applied repeatedly until no merging happens
+Since the Bézier coefﬁcients α, β, and γ may vary signiﬁcantly in range, each curve is fed to the network as a
+10-dimensional vector (dx, dy, d1, d2, α1, α2, γ1, γ2, γ3, p),
+– dx, dy: the vector between the endpoints (cp. Fig. 3)
+– d1, d2: the distance between the control points and the
+endpoints relative to the distance between the endpoints
+(cp. Fig. 3),
+– α1, α2: the angles between control points and endpoints
+in radians (cp. Fig. 3),
+– γ1, γ2 and γ3: the time coefﬁcients from Eq. 1,
+– p: a Boolean value indicating whether this is a pen-up or
+pen-down curve.
+Due to the normalization of the x, y, and t coordinates, as
+well as the constraints on the curves themselves, most of the
+resulting values are in the range [−1, 1].
+The resulting sequences of 10-dimensional curve representations are roughly 4× shorter than the corresponding
+5-dimensional raw representation (Sect.2.1.1) because each
+Bezier curve represents multiple points. This leads to faster
+recognition and thus better latency.
+In most of the cases, as highlighted through the experimental sections in this paper, the curve representations do
+not have a big impact on accuracy but contribute to faster
+speed of our models.
+2.2 Bidirectional long short-term memory recurrent
+neural networks
+LSTMs have become one of the most commonly
+used RNN cells because they are easy to train and give
+good results . In all experiments, we use bidirectional
+LSTMs , i.e., we process the input sequence forward
+andbackwardandmergetheoutputstatesofeachlayerbefore
+feeding them to the next layer. The exact number of layers
+and nodes is determined empirically for each script. We give
+an overview of the impact of the number of nodes and layers
+in Sect. 4. We also list the conﬁgurations for several scripts
+in our production system, as of this writing.
+2.3 Softmax layer
+The output of the LSTM layers at each timestep is fed into
+a softmax layer to get a probability distribution over the C
+possible characters in the script (including spaces, punctuation marks, numbers or other special characters), plus the
+blank label required by the CTC loss and decoder.
+2.4 Decoding
+The output of the softmax layer is a sequence of T time
+steps of (C + 1) classes that we decode using CTC decoding . The logits from the softmax layer are combined with
+language-speciﬁc prior knowledge (cp. Sect. 2.5). For each
+of these additional knowledge sources, we learn a weight
+(called “decoder weight” in the following) and combine them
+linearly (cp. Sect. 3). The learned combination is used as
+described in to guide the beam search during decoding.
+This combination of different knowledge sources allows
+us to train one recognition model per script (e.g., Latin script,
+or Cyrillic script) and then use it to serve multiple languages
+(see Table 1).
+2.5 Feature functions: language models and
+character classes
+Similar to our previous work , we deﬁne several scoring
+functions, which we refer to as feature functions. The goal of
+these feature functions is to introduce prior knowledge about
+the underlying language into the system. The introduction of
+BaseBeamScorer
+github.com/tensorﬂow/tensorﬂow/blob/master/tensorﬂow/
+core/util/ctc/ctc_beam_scorer.h)
+CTCBeamSearchDecoder implementation in TensorFlow .
+Fast multi-language LSTM-based online handwriting recognition
+recurrent neural networks has reduced the need for many of
+them, and we now use only the following three:
+– Character language models: For each language we support, we build a 7-gram language model over Unicode codepoints from a large web-mined text corpus
+using Stupid back-off . The ﬁnal ﬁles are pruned to
+10million 7-grams each. Compared to our previous system , we found that language model size has a smaller
+impact on the recognition accuracy, which is likely due
+to the capability of recurrent neural networks to capture
+dependencies between consecutive characters. We therefore use smaller language models over shorter contexts.
+– Word language models: For languages using spaces to
+separatewords,wealsouseaword-basedlanguagemodel
+trainedonasimilarcorpusasthecharacterlanguagemodels , using 3-grams pruned to between 1.25million
+and 1.5million entries.
+– Character classes: We add a scoring heuristic which
+boosts the score of characters from the language’s alphabet. This feature function provides a strong signal for
+rare characters that may not be recognized conﬁdently by
+the LSTM, and which the other language models might
+not weigh heavily enough to be recognized. This feature
+function was inspired by our previous system .
+In Sect. 4, we provide an experimental evaluation of how
+much each of these feature functions contributes to the ﬁnal
+result for several languages.
+3 Training
+The training of our system happens in two stages, on two
+different datasets:
+1. End-to-end training of the neural network model using
+the CTC loss using a large training dataset
+2. Tuning of the decoder weights using Bayesian optimization through Gaussian Processes in Vizier , using a
+much smaller and distinct dataset.
+Using separate datasets is important because the neural network learns the local appearance as well as an implicit
+language model from the training data. It will be overcon-
+ﬁdent on its training data, and thus, learning the decoder
+weights on the same dataset could result in weights biased
+toward the neural network model.
+3.1 Connectionist temporal classification loss
+As our training data do not contain frame-aligned labels,
+we rely on the CTC loss for training which treats the
+alignment between inputs and labels as a hidden variable.
+CTC training introduces an additional blank label which is
+used internally for learning alignments jointly with character
+hypotheses, as described in .
+We train all neural network weights jointly using the standard TensorFlow implementation of CTC training using
+theAdamOptimizer withabatchsizeof8,alearningrate
+of 10−4, and gradient clipping such that the gradient L2-norm
+is ≤9. Additionally, to improve the robustness of our models and prevent overﬁtting, we train our models using random
+dropout after each LSTM layer with a dropout rate
+of 0.5. We train until the error rate on the evaluation dataset
+no longer improves for 5million steps.
+3.2 Bayesian optimization for tuning decoder
+To optimize the decoder weights, we rely on the Google
+Vizier service and its default algorithm, speciﬁcally batched
+Gaussian process bandits, and expected improvement as the
+acquisition function .
+Foreachrecognizertraining,westart7Vizierstudies,each
+performing 500 individual trials, and then we pick the con-
+ﬁguration that performed best across all of these trials. We
+experimentally found that using 7 separate studies with different random initializations regularly leads to better results
+than running a single study once. We found that using more
+than 500 trials per study does not lead to any additional
+improvement.
+For each script, we train these weights on a subset of the
+languages for which we have sufﬁcient data, and transfer the
+weights to all the other languages. For example, for the Latinscript languages, we train the decoder weights on English and
+German, and use the resulting weights for all languages in
+the ﬁrst row of Table 1.
+4 Experimental evaluation
+In the following, where possible, we present results for public
+datasets in a closed data scenario, i.e., training and testing
+models on the public dataset using a standard protocol. In
+addition we present evaluation results for public datasets
+in an open data scenario against our production setup, i.e.,
+in which the model is trained on our own data. Finally, we
+showexperimentalresultsforsomeofthemajorlanguageson
+our internal datasets. Whenever possible we compare these
+results to the state of the art and to our previous system .
+4.1 IAM-OnDB
+The IAM-OnDB dataset is probably the most used evaluation dataset for online handwriting recognition. It consists
+V. Carbune et al.
+Fig. 4 CER of models trained on the IAM-OnDB dataset with different numbers of LSTM layers and LSTM nodes using raw (left) and curve
+(right) inputs. Solid lines indicate results without any language models or feature functions in decoding, and dashed lines indicate results with the
+fully tuned system
+Table 3 Comparison of character error rates (lower is better) on the
+IAM-OnDB test set for different LSTM layers conﬁgurations
+For each LSTM width and input type, we show the best result in bold
+of 298,523 characters in 86,272 word instances from a dictionary of 11,059 words written by 221 writers. We use the
+standard IAM-OnDBdataset separation: one training set, two
+validations sets and a test set containing 5363, 1438, 1518
+and 3859 written lines, respectively. We tune the decoder
+weights using the validation set with 1438 items and report
+error rates on the test set.
+We perform a more extensive study of the number of layers and nodes per layer for both the raw and curve input
+formats to determine the optimal size of the bidirectional
+LSTM network (see Fig. 4, Table 3). We ﬁrst run experiments
+without additional feature functions (Fig. 4, solid lines), then
+re-compute the results with tuned weights for language models and character classes (Fig. 4, dashed lines). We observe
+that for both input formats, using 3 or 5 layers outperforms
+more shallow networks, and using more layers gives hardly
+any improvement. Furthermore, using 64 nodes per layer is
+sufﬁcient, as wider networks give only small improvements,
+if at all. We see no signiﬁcant difference in the accuracy
+between the raw and the curve representation.
+Finally, we show a comparison of our old and new systems
+with the literature on the IAM-OnDB dataset in Table 4. Our
+method establishes a new state-of-the-art result when relying
+Table 4 Error rates on the IAM-OnDB test set in comparison with the
+state of the art and our previous system 
+Frinken et al. BLSTM 
+Graves et al. BLSTM 
+Liwicki et al. LSTM 
+This work (curve, 5x64, no FF)
+This work (curve, 5x64, FF)
+Our previous BLSTM *
+Combination *
+Our segment-and-decode *
+This work (production system)*
+A “*” in the “system” column indicates the use of an open training set.
+“FF” stands for “feature functions” as described in Sect. 2.4
+on closed data using IAM-OnDB, as well as when relying on
+our in-house data that we use for our production system,
+which was not tuned for the IAM-OnDB data and for which
+none of the IAM-OnDB data were used for training.
+To better understand where the improvements come from,
+we discuss the differences between the previous state-of-theart system (Graves et al. BLSTM ) and this work across
+four dimensions: input preprocessing and feature extraction,
+neural network architecture, CTC training and decoding, and
+model training methodology.
+Our input preprocessing (Sect. 2.1) differs only in minor
+ways: The x-coordinate used is not ﬁrst transformed using a
+high-pass ﬁlter, we do not split text-lines using gaps and we
+do not remove delayed strokes, nor do we do any skew and
+slant correction or other preprocessing.
+The major difference comes from feature extraction. In
+contrast to the 25 features per point used in , we use
+either 5 features (raw) or 10 features (curves). While the 25
+features included both temporal (position in the time series)
+and spatial features (ofﬂine representation), our work uses
+Fast multi-language LSTM-based online handwriting recognition
+Fig. 5 CER of models trained on the IBM-UB-1 dataset with different numbers of LSTM layers and LSTM nodes using raw (left) and curve (right)
+inputs. Solid lines indicate results without any language models or feature functions in decoding, and dashed lines indicate results with the fully
+tuned system
+only the temporal structure. In contrast also to our previous system , using a more compact representation (and
+reducing the number of points for curves) allows a feature
+representation, including spatial structure, to be learned in
+the ﬁrst or upper layers of the neural network.
+The neural network architecture differs both in internal
+structure of the LSTM cell as well as in the architecture con-
+ﬁguration. Our internal structure differs only in that we do
+not use peephole connections .
+As opposed to relying on a single bidirectional LSTM
+layer of width 100, we experiment with a number of con-
+ﬁguration variants as detailed in Fig. 4. We note that it is
+particularly important to have more than one layer in order
+to learn a meaningful representation without feature extraction.
+We use the CTC forward–backward training algorithm
+as described in , and implemented in TensorFlow. The
+training hyperparameters are described in Sect. 3.1.
+The CTC decoding algorithm incorporates feature functions similarly to how the dictionary is incorporated in the
+previous state-of-the-art system. However, we use more feature functions, our language models are trained on a different
+corpus, and the combination weights are optimized separately as described in Sec 3.2.
+4.2 IBM-UB-1
+Another publicly accessible English-language dataset is the
+IBM-UB-1 dataset . From the available datasets therein,
+we use the English query dataset, which consists of 63,268
+handwritten English words. As this dataset has not been
+used often in the academic literature, we propose an evaluation protocol. We split this dataset into 4 parts with
+non-overlapping writer IDs: 47,108 items for training, 4690
+Table 5 Error rates on IBM-UB-1 test set in comparison with our previous system 
+This work (curve, 5x64, no FF)
+This work (curve, 5x64, FF)
+Segment-and-decode from 
+This work (production system) (Sect. 5)*
+A “*” in the “system” column indicates the use of an open training set
+for decoder weight tuning, 6134 for validation and 5336 for
+We perform a similar set of experiments as we did for
+IAM-OnDB to determine the right depth and width of our
+neural network architecture. The results of these experiments
+are shown in Fig. 5. The conclusion for this dataset is similar to the conclusions we drew for the IAM-OnDB: using
+networks with 5 layers of bidirectional LSTMs with 64 cells
+each is sufﬁcient for good accuracy. Less deep and less wide
+networks perform substantially worse, but larger networks
+only give small improvements. This is true regardless of the
+input processing method chosen and again, we do not see a
+signiﬁcant difference in the accuracy between the raw and
+curve representation in accuracy.
+We give some exemplary results and a comparison with
+our current production system as well as results for our previous system in Table 5. We note that our current system
+is about 38% and 32% better (relative) in CER and WER,
+respectively, when compared to the previous segment-anddecode approach. The lack of improvement in error rate when
+evaluating on our production system is due to the fact that our
+datasets contain spaces while the same setup trained solely
+on IBM-UB-1 does not.
+6 Information about the exact experimental protocol is available at
+ 
+V. Carbune et al.
+4.3 Additional public datasets
+We provide an evaluation of our production system trained on
+our in-house datasets applied to a number of publicly available benchmark datasets from the literature. More details
+about our in-house datasets are available from Table 2. Note
+that for all experiments presented in this section, we evaluate our current live system without any tuning speciﬁc to the
+tasks at hand.
+4.3.1 Chinese isolated characters 
+The ICDAR-2013 Competition for Online Handwriting Chinese Character Recognition introduced a dataset for
+classifying the most common Chinese characters. We report
+the error rates in comparison with published results from the
+competition and more recent work done by others in Table 6.
+We evaluate our live production system on this dataset.
+Our system was not tuned to the task at hand and was trained
+as a multi-character recognizer, thus it is not even aware that
+eachsampleonlycontainsasinglecharacter.Further,oursystem supports 12,363 different characters, while the competition data only contain 3,755 characters. Note that our system
+did not have access to the training data for this task at all.
+Wheneveroursystemreturnsmorethanonecharacterfora
+sample, we count this as an error. (This happened twice on the
+entire test set of 224,590 samples.) Despite supporting almost
+four times as many characters than needed for the CASIA
+data and not having been tuned to the task, the accuracy of
+our system is still competitive with systems that were tuned
+for this data speciﬁcally.
+4.3.2 Vietnamese online handwriting recognition 
+IntheICFHR2018CompetitiononVietnameseOnlineHandwritten Text Recognition using VNOnDB , our produc-
+Table 6 Error rates on ICDAR-2013 Competition Database of Online
+Handwritten Chinese Character Recognition
+Human performance 
+Traditional benchmark 
+ICDAR-2011 winner 
+This work (production system) Sect. 5
+ICDAR-2013 winner: UWarwick 
+RNN: NET4 
+100LSTM-512LSTM-512FC-3755FC 
+RNN: ensemble-NET123456 
+Our system was trained with an open training set, including a mix of
+characters, words, and phrases
+Table 7 Results on the VNONDB-Word dataset
+Public test set
+Secret test set
+This work (Sect. 5)
+IVTOVTask1
+MyScriptTask1
+Table 8 Results on the VNONDB-Line dataset
+Public test set
+Secret test set
+This work (Sect. 5)
+IVTOVTask2
+MyScriptTask2_1
+MyScriptTask2_2
+tion system was evaluated against other systems. The system
+used in the competition is the one reported and described in
+this paper. Due to licensing restrictions, we were unable to do
+any experiments on the competition training data, or speciﬁc
+tuning for the competition, which was not the case for the
+other systems mentioned here.
+We participated in the two tasks that best suited the purpose of our system, speciﬁcally the “Word” (ref. Table 7) and
+the “Text line” (ref. Table 8) recognition levels. Even though
+we can technically process paragraph level inputs, our system
+was not built with this goal in mind.
+In contrast to us, the other teams used the training and
+validation sets to tune their systems:
+– The IVTOV team’s system is very similar to our system.
+It makes use of bidirectional LSTM layers trained end-toend with the CTC loss. The inputs used are delta x and y
+coordinates, together with pen-up strokes (Boolean feature quantifying whether a stroke has ended or not). They
+report using a two-layer network of 100 cells each and
+additional preprocessing for better handling the dataset.
+– The MyScript team submitted two systems. The ﬁrst system has an explicit segmentation component along with a
+feed-forward network for recognizing character hypotheses, similar in formulation to our previous system .
+In addition, they also make use of a bidirectional LSTM
+system trained end-to-end with the CTC loss. They do
+not provide additional details on which system is which.
+We note that the modeling stacks of the systems outperforming ours in this competition are not fundamentally
+different (to the best of our knowledge, according to released
+descriptions). We therefore believe that our system might
+Fast multi-language LSTM-based online handwriting recognition
+Fig. 6 CER of models trained on our internal datasets evaluated on our
+English-language validation set with different numbers of LSTM layers
+and LSTM nodes using raw (left) and curve (right) inputs. Solid lines
+indicate results without any language models or feature functions in
+decoding, and dashed lines indicate results with the fully tuned system
+perform comparably if trained on the competition training
+dataset as well.
+OnourinternaltestsetofVietnamesedata,ournewsystem
+obtains a CER of 3.3% which is 54% relative better than the
+old Segment-and-Decode system which had a CER of 7.2%
+(see also Fig. 7).
+4.4 Tuning neural network parameters on our
+internal data
+Our in-house datasets consist of various types of training
+data, the amount of which varies by script. Sources of training
+data include data collected through prompting, commercially
+available data, artiﬁcially inﬂated data, and labeled/selflabeled anonymized recognition requests (see for a
+more detailed description). This leads to more heterogeneous
+datasets than academic datasets such as IBM-UB-1 or IAM-
+OnDB which were collected under standardized conditions.
+The number of training samples varies from tens of thousands
+to several million per script, depending on the complexity
+and usage. We provide more information about the size of
+our internal training and tests datasets in Table 2.
+The best conﬁguration for our system was identiﬁed by
+runningmultipleexperimentsoverarangeoflayerdepthsand
+widths on our internal datasets. For the Latin-script experiments shown in Fig. 6, the training set we used was a mixture
+of data from all the Latin-script languages we support and
+evaluation is done on an English validation dataset, also used
+for the English evaluation in Table 2.
+Similar to experiments depicted in Figs. 4 and 5, increasing the depth and width of the network architecture brings
+diminishing returns fairly quickly. However, overﬁtting is
+less pronounced probably because our datasets are substantially larger than the publicly available datasets.
+For the experiments with our production datasets, we are
+using the Bézier curve inputs which perform slightly better in
+terms of accuracy than the raw input encoding but are much
+faster to train and evaluate because of the shorter sequence
+5 System performance and discussion
+The setup described throughout this paper that obtained the
+best results relies on input processing with Bézier spline
+interpolation (Sect. 2.1.2), followed by 4–5 layers of varying width bidirectional LSTMs, followed by a ﬁnal softmax
+layer. For each script, we experimentally determined the best
+conﬁguration through multiple training runs.
+We performed an ablation study with the best conﬁgurations for each of the six most important scripts7 by number
+of users and compare the results with our previous work 
+(Table 2). The largest relative improvement comes from the
+overall network architecture stack, followed by the use of the
+character language model and the other feature functions.
+In addition, we show the relative improvement in error
+rates on the languages for which we have evaluation datasets
+of more than 2000 items (Fig. 7). The new architecture performs between 20 and 40% (relative) better over almost all
+languages.
+5.1 Differences between IAM-OnDB, IBM-UB-1 and
+Our internal datasets
+To understand how the different datasets relate to each other,
+we performed a set of experiments and evaluations with
+the goal of better characterizing the differences between the
+We trained a recognizer on each of the three training sets
+separately, then evaluated each system on all three test sets
+7 For Latin script, we report results for 3 languages.
+V. Carbune et al.
+Fig. 7 A comparison of the CERs for the LSTM and segment-anddecode (SD) system for all languages on our internal test sets with
+more than 2000 items. The scatter plot shows the ISO language code
+at a position corresponding to the CER for the SD system (x-axis) and
+LSTM system (y-axis). Points below the diagonal are improvements of
+LSTM over SD. The plot also shows the lines of 20% and 40% relative
+improvement
+Table 9 CER comparison when training and evaluating IAM-OnDB,
+IBM-UB-1 and our Latin training/eval set
+Train/test
+Own dataset
+Own dataset
+We want to highlight the fundamental differences between the different
+(Table 9). The neural network architecture is the same as the
+one we determined earlier (5 layers bidirectional LSTMs of
+64 cells each) with the same feature functions, with weights
+tuned on the corresponding tuning dataset. The inputs are
+processed using Bézier curves.
+To better understand the source of discrepancy when training on IAM-OnDB and evaluating on IBM-UB-1, we note
+the different characteristics of the datasets:
+– IBM-UB-1 has predominantly cursive writing, while
+IAM-OnDB has mostly printed writing
+– IBM-UB-1 contains single words, while IAM-OnDB has
+lines of space-separated words
+This results in models trained on the IBM-UB-1 dataset
+not being able to predict spaces as they are not present in
+the dataset’s alphabet. In addition, the printed writing style
+of IAM-OnDB makes recognition harder when evaluating
+cursive writing from IBM-UB-1. It is likely that the lack of
+structure through words-only data makes recognizing IAM-
+OnDB on a system trained on IBM-UB-1 harder than vice
+Systems trained on IBM-UB-1 or IAM-OnDB alone perform signiﬁcantly worse on our internal datasets, as our data
+distribution covers a wide range of use-cases not necessarily
+relevant to, or present, in the two academic datasets: sloppy
+handwriting, overlapping characters for handling writing on
+small input surfaces, non-uniform sampling rates, and partially rotated inputs.
+The network trained on the internal dataset performs well
+on all three datasets. It performs better on IAM-OnDB than
+the system trained only thereon, but worse for IBM-UB-
+1. We believe that using only cursive words when training
+allows the network to better learn the sample characteristics,
+than when learning about space separation and other structure properties not present in IBM-UB-1.
+6 Conclusion
+We describe the online handwriting recognition system that
+we currently use at Google for 102 languages in 26 scripts.
+The system is based on an end-to-end trained neural network
+and replaces our old segment-and-decode system. Recognitionaccuracyof thenewsystemimproves by20–40%relative
+depending on the language while using smaller and faster
+models. We encode the touch inputs using a Bézier curve
+representation which performs at least as well as raw touch
+inputs but which also allows for a faster recognition because
+the input sequence representation is shorter.
+We further compare the performance of our system to
+the state of the art on publicly available datasets such as
+IAM-OnDB, IBM-UB-1, and CASIA and improve over the
+previous best published result on IAM-OnDB.
+Acknowledgements We would like to thank the following contributors for fruitful discussions, ideas, and support: Ashok Popat, Yasuhisa
+Fujii, Dmitriy Genzel, Jake Walker, David Rybach, Daan van Esch, and
+Eugene Brevdo. We thank Google’s OCR team for the numerous collaborations throughout the years that have made this work easier, as
+well as the speech recognition and machine translation teams at Google
+for tools and support for some of the components we use in this paper.
+Open Access This article is licensed under a Creative Commons
+Attribution 4.0 International License, which permits use, sharing, adaptation, distribution and reproduction in any medium or format, as
+long as you give appropriate credit to the original author(s) and the
+source, provide a link to the Creative Commons licence, and indicate if changes were made. The images or other third party material
+in this article are included in the article’s Creative Commons licence,
+unless indicated otherwise in a credit line to the material. If material
+is not included in the article’s Creative Commons licence and your
+Fast multi-language LSTM-based online handwriting recognition
+intended use is not permitted by statutory regulation or exceeds the
+permitteduse,youwillneedtoobtainpermissiondirectlyfromthecopyright holder. To view a copy of this licence, visit 
+ons.org/licenses/by/4.0/.

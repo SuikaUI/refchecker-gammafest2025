@@ -1,0 +1,1128 @@
+Finding and Understanding Bugs in C Compilers
+Xuejun Yang
+John Regehr
+University of Utah, School of Computing
+{ jxyang, chenyang, eeide, regehr }@cs.utah.edu
+Compilers should be correct. To improve the quality of C compilers,
+we created Csmith, a randomized test-case generation tool, and
+spent three years using it to ﬁnd compiler bugs. During this period
+we reported more than 325 previously unknown bugs to compiler
+developers. Every compiler we tested was found to crash and also
+to silently generate wrong code when presented with valid input.
+In this paper we present our compiler-testing tool and the results
+of our bug-hunting study. Our ﬁrst contribution is to advance the
+state of the art in compiler testing. Unlike previous tools, Csmith
+generates programs that cover a large subset of C while avoiding the
+undeﬁned and unspeciﬁed behaviors that would destroy its ability
+to automatically ﬁnd wrong-code bugs. Our second contribution is a
+collection of qualitative and quantitative results about the bugs we
+have found in open-source C compilers.
+Categories and Subject Descriptors
+D.2.5 [Software Engineering]: Testing and Debugging—testing tools; D.3.2 [Programming
+Languages]: Language Classiﬁcations—C; D.3.4 [Programming
+Languages]: Processors—compilers
+General Terms
+Languages, Reliability
+compiler testing, compiler defect, automated testing,
+random testing, random program generation
+Introduction
+The theory of compilation is well developed, and there are compiler
+frameworks in which many optimizations have been proved correct.
+Nevertheless, the practical art of compiler construction involves a
+morass of trade-offs between compilation speed, code quality, code
+debuggability, compiler modularity, compiler retargetability, and
+other goals. It should be no surprise that optimizing compilers—like
+all complex software systems—contain bugs.
+Miscompilations often happen because optimization safety
+checks are inadequate, static analyses are unsound, or transformations are ﬂawed. These bugs are out of reach for current and
+future automated program-veriﬁcation tools because the speciﬁcations that need to be checked were never written down in a precise
+way, if they were written down at all. Where veriﬁcation is impractical, however, other methods for improving compiler quality can
+succeed. This paper reports our experience in using testing to make
+C compilers better.
+c⃝ACM, 2011. This is the author’s version of the work. It is posted here by permission
+of ACM for your personal use. Not for redistribution.
+The deﬁnitive version was published in Proceedings of the 2011 ACM SIGPLAN
+Conference on Programming Language Design and Implementation (PLDI), San Jose,
+CA, Jun. 2011, 
+int foo (void) {
+signed char x = 1;
+unsigned char y = 255;
+return x > y;
+Figure 1. We found a bug in the version of GCC that shipped with
+Ubuntu Linux 8.04.1 for x86. At all optimization levels it compiles
+this function to return 1; the correct result is 0. The Ubuntu compiler
+was heavily patched; the base version of GCC did not have this bug.
+We created Csmith, a randomized test-case generator that supports compiler bug-hunting using differential testing. Csmith generates a C program; a test harness then compiles the program using several compilers, runs the executables, and compares the outputs. Although this compiler-testing approach has been used before , Csmith’s test-generation techniques substantially
+advance the state of the art by generating random programs that
+are expressive—containing complex code using many C language
+features—while also ensuring that every generated program has a
+single interpretation. To have a unique interpretation, a program
+must not execute any of the 191 kinds of undeﬁned behavior, nor
+depend on any of the 52 kinds of unspeciﬁed behavior, that are
+described in the C99 standard.
+For the past three years, we have used Csmith to discover bugs
+in C compilers. Our results are perhaps surprising in their extent: to
+date, we have found and reported more than 325 bugs in mainstream
+C compilers including GCC, LLVM, and commercial tools. Figure 1
+shows a representative example. Every compiler that we have tested,
+including several that are routinely used to compile safety-critical
+embedded systems, has been crashed and also shown to silently
+miscompile valid inputs. As measured by the responses to our bug
+reports, the defects discovered by Csmith are important. Most of
+the bugs we have reported against GCC and LLVM have been
+ﬁxed. Twenty-ﬁve of our reported GCC bugs have been classiﬁed as
+P1, the maximum, release-blocking priority for GCC defects. Our
+results suggest that ﬁxed test suites—the main way that compilers
+are tested—are an inadequate mechanism for quality control.
+We claim that Csmith is an effective bug-ﬁnding tool in part
+because it generates tests that explore atypical combinations of C
+language features. Atypical code is not unimportant code, however; it is simply underrepresented in ﬁxed compiler test suites.
+Developers who stray outside the well-tested paths that represent
+a compiler’s “comfort zone”—for example by writing kernel code
+or embedded systems code, using esoteric compiler options, or automatically generating code—can encounter bugs quite frequently.
+This is a signiﬁcant problem for complex systems. Wolfe , talking about independent software vendors (ISVs) says: “An ISV with
+a complex code can work around correctness, turn off the optimizer
+in one or two ﬁles, and usually they have to do that for any of the
+compilers they use” (emphasis ours). As another example, the front
+page of the Web site for GMP, the GNU Multiple Precision Arithmetic Library, states, “Most problems with compiling GMP these
+days are due to problems not in GMP, but with the compiler.”
+Improving the correctness of C compilers is a worthy goal:
+C code is part of the trusted computing base for almost every modern
+computer system including mission-critical ﬁnancial servers and lifecritical pacemaker ﬁrmware. Large-scale source-code veriﬁcation
+efforts such as the seL4 OS kernel and Airbus’s veriﬁcation
+of ﬂy-by-wire software can be undermined by an incorrect
+C compiler. The need for correct compilers is ampliﬁed because
+operating systems are almost always written in C and because C
+is used as a portable assembly language. It is targeted by code
+generators from a wide variety of high-level languages including
+Matlab/Simulink, which is used to generate code for industrial
+control systems.
+Despite recent advances in compiler veriﬁcation, testing is still
+needed. First, a veriﬁed compiler is only as good as its speciﬁcation
+of the source and target language semantics, and these speciﬁcations
+are themselves complex and error-prone. Second, formal veriﬁcation
+seldom provides end-to-end guarantees: “details” such as parsers,
+libraries, and ﬁle I/O usually remain in the trusted computing
+base. This second point is illustrated by our experience in testing
+CompCert , a veriﬁed C compiler. Using Csmith, we found
+previously unknown bugs in unproved parts of CompCert—bugs
+that cause this compiler to silently produce incorrect code.
+Our goal was to discover serious, previously unknown bugs:
+• in mainstream C compilers like GCC and LLVM;
+• that manifest when compiling core language constructs such as
+arithmetic, arrays, loops, and function calls;
+• targeting ubiquitous architectures such as x86 and x86-64; and
+• using mundane optimization ﬂags such as –O and –O2.
+This paper reports our experience in achieving this goal. Our ﬁrst
+contribution is to advance the state of the art in compiler test-case
+generation, ﬁnding—as far as we know—many more previously
+unknown compiler bugs than any similar effort has found. Our
+second contribution is to qualitatively and quantitatively characterize
+the bugs found by Csmith: What do they look like? In what parts of
+the compilers are they primarily found? How are they distributed
+across a range of compiler versions?
+Csmith began as a fork of Randprog , an existing random
+C program generator about 1,600 lines long. In earlier work, we
+extended and adapted Randprog to ﬁnd bugs in C compilers’
+translation of accesses to volatile-qualiﬁed objects , resulting
+in a 7,000-line program. Our previous paper showed that in many
+cases, these bugs could be worked around by turning volatile-object
+accesses into calls to helper functions. The key observation was this:
+while the rules regarding the addition, elimination, and reordering
+of accesses to volatile objects are not at all like the rules governing
+ordinary variable accesses in C, they are almost identical to the rules
+governing function calls.
+For some test programs generated by Randprog, our rewriting
+procedure was insufﬁcient to correct a defect that we had found in
+the C compiler. Our hypothesis was that this was always due to “regular” compiler bugs not related to the volatile qualiﬁer. To investigate
+these compiler defects, we shifted our research emphasis toward
+looking for generic wrong-code bugs. We turned Randprog into
+Csmith, a 40,000-line C++ program for randomly generating C programs. Compared to Randprog, Csmith can generate C programs
+that utilize a much wider range of C features including complex
+control ﬂow and data structures such as pointers, arrays, and structs.
+Most of Csmith’s complexity arises from the requirement that it
+compiler 1
+compiler 3
+compiler 2
+Figure 2. Finding bugs in three compilers using randomized differential testing
+interleave static analysis with code generation in order to produce
+meaningful test cases, as described below.
+Randomized Differential Testing using Csmith
+Random testing , also called fuzzing , is a black-box testing
+method in which test inputs are generated randomly. Randomized
+differential testing has the advantage that no oracle for test
+results is needed. It exploits the idea that if one has multiple, deterministic implementations of the same speciﬁcation, all implementations must produce the same result from the same valid input. When
+two implementations produce different outputs, one of them must
+be faulty. Given three or more implementations, a tester can use
+voting to heuristically determine which implementations are wrong.
+Figure 2 shows how we use these ideas to ﬁnd compiler bugs.
+Design Goals
+Csmith has two main design goals. First and most important, every
+generated program must be well formed and have a single meaning
+according to the C standard. The meaning of a C program is the
+sequence of side effects it performs. The principal side effect of a
+Csmith-generated program is to print a value summarizing the computation performed by the program.1 This value is a checksum of the
+program’s non-pointer global variables at the end of the program’s
+execution. Thus, if changing the compiler or compiler options causes
+the checksum emitted by a Csmith-generated program to change, a
+compiler bug has been found.
+The C99 language has 191 undeﬁned behaviors—e.g.,
+dereferencing a null pointer or overﬂowing a signed integer—that
+destroy the meaning of a program. It also has 52 unspeciﬁed
+behaviors—e.g., the order of evaluation of arguments to a function—
+where a compiler may choose from a set of options with no
+requirement that the choice be made consistently. Programs emitted
+by Csmith must avoid all of these behaviors or, in certain cases
+such as argument-evaluation order, be independent of the choices
+that will be made by the compiler. Many undeﬁned and unspeciﬁed
+behaviors can be avoided structurally by generating programs in
+such a way that problems never arise. However, a number of
+important undeﬁned and unspeciﬁed behaviors are not easy to avoid
+in a structural fashion. In these cases, Csmith solves the problem
+using static analysis and by adding run-time checks to the generated
+code. Section 2.4 describes the hazards that Csmith must avoid and
+its strategies for avoiding them.
+Csmith’s second design goal is to maximize expressiveness
+subject to constraints imposed by the ﬁrst goal. An “expressive”
+generator supports many language features and combinations of
+features. Our hypothesis is that expressiveness is correlated with
+bug-ﬁnding power.
+1 Accesses to volatile objects are also side effects as described in the C
+standard. We do not discuss these “secondary” side effects of Csmithgenerated programs further in this paper.
+Csmith creates programs with the following features:
+• function deﬁnitions, and global and local variable deﬁnitions
+• most kinds of C expressions and statements
+• control ﬂow: if/else, function calls, for loops, return,
+break, continue, goto
+• signed and unsigned integers of all standard widths
+• arithmetic, logical, and bitwise operations on integers
+• structs: nested, and with bit-ﬁelds
+• arrays of and pointers to all supported types, including pointers
+and arrays
+• the const and volatile type qualiﬁers, including at different
+levels of indirection for pointer-typed variables
+The most important language features not currently supported
+by Csmith are strings, dynamic memory allocation, ﬂoating-point
+types, unions, recursion, and function pointers. We plan to add some
+of these features to future versions of our tool.
+Randomly Generating Programs
+The shape of a program generated by Csmith is governed by a
+grammar for a subset of C. A program is a collection of type,
+variable, and function deﬁnitions; a function body is a block; a
+block contains a list of declarations and a list of statements; and a
+statement is an expression, control-ﬂow construct (e.g., if, return,
+goto, or for), assignment, or block. Assignments are modeled
+as statements—not expressions—which reﬂects the most common
+idiom for assignments in C code. We leverage our grammar to
+produce other idiomatic code as well: in particular, we include a
+statement kind that represents a loop iterating over an array. The
+grammar is implemented by a collection of hand-coded C++ classes.
+Csmith maintains a global environment that holds top-level
+deﬁnitions: i.e., types, global variables, and functions. The global
+environment is extended as new entities are deﬁned during program
+generation. To hold information relevant to the current programgeneration point, Csmith also maintains a local environment with
+three primary kinds of information. First, the local environment
+describes the current call chain, supporting context-sensitive pointer
+analysis. Second, it contains effect information describing objects
+that may have been read or written since (1) the start of the current
+function, (2) the start of the current statement, and (3) the previous
+sequence point.2 Third, the local environment carries points-to
+facts about all in-scope pointers. These elements and their roles
+in program generation are further described in Section 2.4.
+Csmith begins by randomly creating a collection of struct type
+declarations. For each, it randomly decides on a number of members
+and the type of each member. The type of a member may be
+a (possibly qualiﬁed) integral type, a bit-ﬁeld, or a previously
+generated struct type.
+After the preliminary step of producing type deﬁnitions, Csmith
+begins to generate C program code. Csmith generates a program
+top-down, starting from a single function called by main. Each step
+of the program generator involves the following sub-steps:
+1. Csmith randomly selects an allowable production from its grammar for the current program point. To make the choice, it consults
+2 As explained in Section 3.8 of the C FAQ , “A sequence point is a
+point in time at which the dust has settled and all side effects which have
+been seen so far are guaranteed to be complete. The sequence points listed
+in the C standard are at the end of the evaluation of a full expression (a full
+expression is an expression statement, or any other expression which is not a
+subexpression within any larger expression); at the ||, &&, ?:, and comma
+operators; and at a function call (after the evaluation of all the arguments,
+and just before the actual call).”
+a probability table and a ﬁlter function speciﬁc to the current
+point: there is a table/ﬁlter pair for statements, another for expressions, and so on. The table assigns a probability to each
+of the alternatives, where the sum of the probabilities is one.
+After choosing a production from the table, Csmith executes the
+ﬁlter, which decides if the choice is acceptable in the current context. Filters enforce basic semantic restrictions (e.g., continue
+can only appear within a loop), user-controllable limits (e.g.,
+maximum statement depth and number of functions), and other
+user-controllable options. If the ﬁlter rejects the selected production, Csmith simply loops back, making selections from the
+table until the ﬁlter succeeds.
+2. If the selected production requires a target—e.g., a variable or
+function—then the generator randomly selects an appropriate
+target or deﬁnes a new one. In essence, Csmith dynamically
+constructs a probability table for the potential targets and includes an option to create a new target. Function and variable
+deﬁnitions are thus created “on demand” at the time that Csmith
+decides to refer to them.
+3. If the selected production allows the generator to select a type,
+Csmith randomly chooses one. Depending on the current context,
+the choice may be restricted (e.g., while generating the operands
+of an integral-typed expression) or unrestricted (e.g., while
+generating the types of parameters to a new function). Random
+choices are guided by the grammar, probability tables, and ﬁlters
+as already described.
+4. If the selected production is nonterminal, the generator recurses.
+It calls a function to generate the program fragment that corresponds to the nonterminal production. More generally, Csmith
+recurses for each nonterminal element of the current production:
+e.g., for each subcomponent of a compound statement, or for
+each parameter in a function call.
+5. Csmith executes a collection of dataﬂow transfer functions. It
+passes the points-to facts from the local environment to the
+transfer functions, which produce a new set of points-to facts.
+Csmith updates the local environment with these facts.
+6. Csmith executes a collection of safety checks. If the checks
+succeed, the new code fragment is committed to the generated
+program. Otherwise, the fragment is dropped and any changes
+to the local environment are rolled back.
+When Csmith creates a call to a new function—one whose body
+does not yet exist—generation of the current function is suspended
+until the new function is ﬁnished. Thus, when the top-level function
+has been completely generated, Csmith is ﬁnished. At that point
+it pretty-prints all of the randomly generated deﬁnitions in an
+appropriate order: types, globals, prototypes, and functions. Finally,
+Csmith outputs a main function. The main function calls the toplevel randomly generated function, computes a checksum of the
+non-pointer global variables, prints the checksum, and exits.
+Safety Mechanisms
+Table 1 lists the mechanisms that Csmith uses to avoid generating C
+programs that execute undeﬁned behaviors or depend on unspeciﬁed
+behaviors. This section provides additional detail about the hazards
+that Csmith must avoid and its strategies for avoiding them.
+Integer safety
+More and more, compilers are aggressively exploiting the undeﬁned nature of integer behaviors such as signed
+overﬂow and shift-past-bitwidth. For example, recent versions of
+Intel CC, GCC, and LLVM evaluate (x+1)>x to 1 while also evaluating (INT_MAX+1) to INT_MIN. In another example, discovered
+by the authors of Google’s Native Client software , routine refactoring of C code caused the expression 1<<32 to be evaluated on a
+Code-Generation-
+Code-Execution-
+Time Solution
+Time Solution
+use without initialization
+explicit initializers,
+avoid jumping over
+initializers
+qualiﬁer mismatch
+static analysis
+inﬁnite recursion
+disallow recursion
+signed integer overﬂow
+bounded loop vars
+safe math wrappers
+OOB array access
+bounded loop vars
+force index in bounds
+unspeciﬁed eval. order
+effect analysis
+of function arguments
+R/W and W/W conﬂicts
+effect analysis
+betw. sequence points
+access to out-of-scope
+pointer analysis
+stack variable
+null pointer dereference
+pointer analysis
+null pointer checks
+Table 1. Summary of Csmith’s strategies for avoiding undeﬁned
+and unspeciﬁed behaviors. When both a code-generation-time and
+code-execution-time solution are listed, Csmith uses both.
+platform with 32-bit integers. The compiler exploited this undeﬁned
+behavior to turn a sandboxing safety check into a nop.
+To keep Csmith-generated programs from executing integer
+undeﬁned behaviors, we implemented a family of wrapper functions
+for arithmetic operators whose (promoted) operands might overﬂow.
+This was not difﬁcult, but had a few tricky aspects. For example,
+the C99 standard does not explicitly identify the evaluation of
+INT_MIN%-1 as being an undeﬁned behavior, but most compilers
+treat it as such. The C99 standard also has very restrictive semantics
+for signed left-shift: it is illegal (for implementations using 2’s
+complement integers) to shift a 1-bit into or past the sign bit. Thus,
+evaluating 1<<31 destroys the meaning of a C99 program on a
+platform with 32-bit ints.
+Several safe math libraries for C that we examined themselves execute operations with undeﬁned behavior while performing checks.
+Apparently, avoiding such behavior is indeed a tricky business.
+Type safety
+The aspect of C’s type system that required the
+most care was qualiﬁer safety: ensuring that const and volatile
+qualiﬁers attached to pointers at various levels of indirection are not
+removed by implicit casts. Accessing a const- or volatile-qualiﬁed
+object through a non-qualiﬁed pointer results in undeﬁned behavior.
+Pointer safety
+Null-pointer dereferences are easy to avoid using
+dynamic checks. There is, on the other hand, no portable run-time
+method for detecting references to a function-scoped variable whose
+lifetime has ended. (Hacks involving the stack pointer are not robust
+under inlining.) Although there are obvious ways to structurally
+avoid this problem, such as using a type system to ensure that a
+pointer to a function-scoped variable never outlives the function, we
+judged this kind of strategy to be too restrictive. Instead, Csmith
+freely permits pointers to local variables to escape (e.g., into global
+variables) but uses a whole-program pointer analysis to ensure that
+such pointers are not dereferenced or used in comparisons once they
+become invalid.
+Csmith’s pointer analysis is ﬂow sensitive, ﬁeld sensitive, context
+sensitive, path insensitive, and array-element insensitive. A points-to
+fact is an explicit set of locations that may be referenced, and may
+include two special elements: the null pointer and the invalid (outof-scope) pointer. Points-to sets containing a single element serve as
+must-alias facts unless the pointed-to object is an array element.
+Because Csmith does not generate programs that use the heap,
+assigning names to storage locations is trivial.
+Effect safety
+The C99 standard states that “[t]he order of evaluation of the function designator, the actual arguments, and subexpressions within the actual arguments is unspeciﬁed.” Also, undeﬁned
+behavior occurs if “[b]etween two sequence points, an object is
+modiﬁed more than once, or is modiﬁed and the prior value is read
+other than to determine the value to be stored.”
+To avoid these problems, Csmith uses its pointer analysis to
+perform a conservative interprocedural analysis and determine the
+effect of every expression, statement, and function that it generates.
+An effect consists of two sets: locations that may be read and
+locations that may be written. Csmith ensures that no location is
+both read and written, or written more than once, between any pair
+of sequence points. As a special case, in an assignment, a location
+can be read on the RHS and also written on the LHS.
+Effects are computed, and effect safety guaranteed, incrementally.
+At each sequence point, Csmith resets the current effect (i.e., mayread and may-write sets). As fragments of code are generated,
+Csmith tests if the new code has a read/write or write/write conﬂict
+with the current effect. If a conﬂict is detected, the new code is
+thrown away and the process restarts. For example, if Csmith is
+generating an expression p + func() and it happens that func may
+modify p, the call to func is discarded and a new subexpression is
+generated. If there is no conﬂict, the read and write sets are updated
+and the process continues. Probabilistic progress is guaranteed: by
+design, Csmith always has a non-zero chance of generating code
+that introduces no new conﬂicts, such as a constant expression.
+Array safety
+Csmith uses several methods to ensure that array
+indices are in bounds. First, it generates index variables that are
+modiﬁed only in the “increment” parts of for loops and whose
+values never exceed the bounds of the arrays being indexed. Second,
+variables with arbitrary value are forced to be in bounds using the
+modulo operator. Finally, as needed, Csmith emits explicit checks
+against array lengths.
+Initializer safety
+A C program must not use an uninitialized
+function-scoped variable. For the most part, initializer safety is
+easy to ensure structurally by initializing variables close to where
+they are declared. Gotos introduce the possibility that initializers
+may be jumped over; Csmith solves this by forbidding gotos from
+spanning initialization code.
+Efﬁcient Global Safety
+Csmith never commits to a code fragment unless it has been shown
+to be safe. However, loops and function calls threaten to invalidate
+previously validated code. For example, consider the following code,
+in which Csmith has just added the loop back-edge at line 7.
+int *p = &i;
+while (...) {
+The assignment through p at line 4 was safe when it was
+generated. However, the newly added line 7 makes line 4 unsafe,
+due to the back-edge carrying a null-valued p.
+One solution to this problem is to be conservative: run the wholeprogram dataﬂow analysis before committing any new statement to
+the program. This is not efﬁcient. We therefore restrict the analysis
+to local scope except when function calls and loops are involved. For
+a function call, the callee is re-analyzed at each call site immediately.
+Csmith uses a different strategy for loops. This is because so
+many statements are inside loops, and the extra calls to the dataﬂow
+analysis add substantial overhead to the code generator. Csmith’s
+strategy is to optimistically generate code that is locally safe. Local
+safety includes running a single step of the dataﬂow engine (which
+reaches a sound result when generating code not inside any loop).
+The global ﬁxpoint analysis is run when a loop is closed by adding
+its back-edge. If Csmith ﬁnds that the program contains unsafe
+statements, it deletes code starting from the tail of the loop until
+the program becomes globally safe. This strategy is about three
+times faster than pessimistically running the global dataﬂow analysis
+before adding every piece of code.
+Design Trade-offs
+Allow implementation-deﬁned behavior
+An ideally portable test
+program would be “strictly conforming” to the C language standard.
+This means that the program’s output would be independent of all
+unspeciﬁed and unspeciﬁed behaviors and, in addition, be independent of any implementation-deﬁned behavior. C99 has 114 kinds of
+implementation-deﬁned behavior, and they have pervasive impact
+on the behavior of real C programs. For example, the result of performing a bitwise operation on a signed integer is implementationdeﬁned, and operands to arithmetic operations are implicitly cast to
+int (which has implementation-deﬁned width) before performing
+the operation. We believe it is impossible to generate realistically expressive C code that retains a single interpretation across all possible
+choices of implementation-deﬁned behaviors.
+Programs generated by Csmith do not generate the same output
+across compilers that differ in (1) the width and representation of
+integers, (2) behavior when casting to a signed integer type when
+the value cannot be represented in an object of the target type, and
+(3) the results of bitwise operations on signed integers. In practice
+there is not much diversity in how C implementations deﬁne these
+behaviors. For mainstream desktop and embedded targets, there
+are roughly three equivalence classes of compiler targets: those
+where int is 32 bits and long is 64 bits (e.g., x86-64), those where
+int and long are 32 bits (e.g., x86, ARM, and PowerPC), and
+those where int is 16 bits and long is 32 bits (e.g., MSP430 and
+AVR). Using Csmith, we can perform differential testing within an
+equivalence class but not across classes.
+No ground truth
+Csmith’s programs are not self-checking: we are
+unable to predict their outputs without running them. This is not a
+problem when we use Csmith for randomized differential testing.
+We have never seen an “interesting” split vote where randomized
+differential testing of a collection of C compilers fails to produce
+a clear consensus answer, nor have we seen any cases in which a
+majority of tested compilers produces the same incorrect result.
+(We would catch the problem by hand as part of verifying the
+failure-inducing program.) In fact, we have not seen even two
+unrelated compilers produce the same incorrect output for a Csmithgenerated test case. It therefore seems unlikely that all compilers
+under test would produce the same incorrect output for a test case.
+Of course, if that did happen we would not detect that problem; this
+is an inherent limitation of differential testing without an oracle.
+In summary, despite the fact that Knight and Leveson found
+a substantial number of correlated errors in an experiment on Nversion programming, Csmith has yielded no evidence of correlated
+failures among unrelated C compilers. Our hypothesis is that the
+observed lack of correlation stems from the fact that most compiler
+bugs are in passes that operate on an intermediate representation
+and there is substantial diversity among IRs.
+No guarantee of termination
+It is not difﬁcult to generate random
+programs that always terminate. However, we judged that this would
+limit Csmith’s expressiveness too much: for example, it would force
+loops to be highly structured. Additionally, always-terminating
+tests cannot ﬁnd compiler bugs that wrongfully terminate a nonterminating program. (We have found bugs of this kind.) About
+10% of the programs generated by Csmith are (apparently) nonterminating. In practice, during testing, they are easy to deal with
+using timeouts.
+Target middle-end bugs
+Commercial test suites for C compilers are primarily aimed at checking standards conformance. Csmith, on the other hand, is mainly intended to ﬁnd bugs in
+the parts of a compiler that perform transformations on an intermediate representation—the so-called “middle end” of a compiler. As a
+result, we have found large numbers of middle-end bugs missed by
+existing testing techniques (Section 3.6). At the same time, Csmith
+is rather poor at ﬁnding gaps in standards conformance. For example,
+it makes no attempt to test a compiler’s handling of trigraphs, long
+identiﬁer names, or variadic functions.
+Targeting the middle end has several aspects. First, all generated
+programs pass the lexer, parser, and typechecker. Second, we performed substantial manual tuning of the 80 probabilities that govern
+Csmith’s random choices. Our goal was to make the generated programs “look right”—to contain a balanced mix of arithmetic and
+bitwise operations, of references to scalars and aggregates, of loops
+and straight-line code, of single-level and multi-level indirections,
+and so on. Third, Csmith speciﬁcally generates idiomatic code (e.g.,
+loops that access all elements of an array) to stress-test parts of the
+compiler we believe to be error-prone. Fourth, we designed Csmith
+with an eye toward generating programs that exercise the constructs
+of a compiler’s intermediate representation, and we decided to avoid
+generating source-level diversity that is unlikely to improve the
+“coverage” of a compiler’s intermediate representations. For example, since additional levels of parentheses around expressions are
+stripped away early in the compilation process, we do not generate
+them, nor do we generate all of C’s syntactic loop forms since they
+are typically all lowered to the same IR constructs. Finally, Csmith
+was designed to be fast enough that it can generate programs that
+are a few tens of thousands of lines long in a few seconds. Large
+programs are preferred because (empirically—see Section 3.3) they
+ﬁnd more bugs. In summary, many aspects of Csmith’s design and
+implementation were informed by our understanding of how modern
+compilers work and how they break.
+We conducted ﬁve experiments using Csmith, our random program
+generator. This section summarizes our ﬁndings.
+Our ﬁrst experiment was uncontrolled and unstructured: over a
+three-year period, we opportunistically found and reported bugs in
+a variety of C compilers. We found bugs in all the compilers we
+tested—hundreds of defects, many classiﬁed as high-priority bugs.
+In the second experiment, we compiled and ran one million
+random programs using several years’ worth of versions of GCC
+and LLVM, to understand how their robustness is evolving over time.
+As measured by our tests over the programs that Csmith produces,
+the quality of both compilers is generally improving. (§3.2)
+Third, we evaluated Csmith’s bug-ﬁnding power as a function of
+the size of the generated C programs. The largest number of bugs is
+found at a surprisingly large program size: about 81 KB. (§3.3)
+Fourth, we compared Csmith’s bug-ﬁnding power to that of four
+previous random C program generators. Over a week, Csmith was
+able to ﬁnd signiﬁcantly more distinct compiler crash errors than
+previous program generators could. (§3.4)
+Finally, we investigated the effect of testing random programs on
+branch, function, and line coverage of the GCC and LLVM source
+code. We found that these metrics did not signiﬁcantly improve
+when we added randomly generated programs to the compilers’
+existing test suites. Nevertheless, as shown by our other results,
+Csmith-generated programs allowed us to discover bugs that are
+missed by the compilers’ standard test suites. (§3.5)
+We conclude the presentation of results by analyzing some of
+the bugs we found in GCC and LLVM. (§3.6, §3.7)
+Wrong code
+Table 2. Crash and wrong-code bugs found by Csmith that manifest
+when compiler optimizations are disabled (i.e., when the –O0
+command-line option is used)
+Opportunistic Bug Finding
+We reported bugs to 11 different C compiler development teams.
+Five of these compilers (GCC, LLVM, CIL, TCC, and Open64)
+were open source and ﬁve were commercial products. The eleventh,
+CompCert, is publicly available but not open source.
+What kinds of bugs are there?
+It is useful to distinguish between
+errors whose symptoms manifest at compile time and those that
+only manifest when the compiler’s output is executed. Compiletime bugs that we see include assertion violations or other internal
+compiler errors; involuntary compiler termination due to memorysafety problems; and cases in which the compiler exhausts the RAM
+or CPU time allocated to it. We say that a compile-time crash error
+has occurred whenever the compiler process exits with a status other
+than zero or fails to produce executable output. Errors that manifest
+at run time include the computation of a wrong result; a crash or
+other abnormal termination of the generated code; termination of a
+program that should have executed forever; and non-termination of
+a program that should have terminated. We refer to these run-time
+problems as wrong-code errors. A silent wrong-code error is one
+that occurs in a program that was produced without any sort of
+warning from the compiler; i.e., the compiler silently miscompiled
+the test program.
+Experience with commercial compilers
+There exist many more
+commercial C compilers than we could easily test. The ones we
+chose to study are fairly popular and were produced by what we
+believe are some of the strongest C compiler development teams.
+Csmith found wrong-code errors and crash errors in each of these
+tools within a few hours of testing.
+Because we are not paying customers, and because our ﬁndings
+represent potential bad publicity, we did not receive a warm response
+from any commercial compiler vendor. Thus, for the most part, we
+simply tested these compilers until we found a few crash errors and
+a few wrong-code errors, reported them, and moved on.
+Experience with open-source compilers
+For several reasons, the
+bulk of our testing effort went towards GCC and LLVM. First and
+most important, compiler testing is inherently interactive: we require
+feedback from the development team in the form of bug ﬁxes.
+Bugs that occur with high probability can mask tricky, one-in-amillion bugs; thus, testing proceeds most smoothly when we can
+help developers rapidly destroy the easy bugs. Both the GCC and
+LLVM teams were responsive to our bug reports. The LLVM team
+in particular ﬁxed bugs quickly, often within a few hours and usually
+within a week. The second reason we prefer dealing with opensource compilers is that their development process is transparent:
+we can watch the mailing lists, participate in discussions, and see
+ﬁxes as they are committed. Third, we want to help harden the
+open-source development tools that we and many others use daily.
+So far we have reported 79 GCC bugs and 202 LLVM bugs—the
+latter ﬁgure represents about 2% of all LLVM bug reports. Most of
+our reported bugs have been ﬁxed, and twenty-ﬁve of the GCC bugs
+were marked by developers as P1: the maximum, release-blocking
+priority for a bug. To date, we have reported 325 in total across all
+tested compilers (GCC, LLVM, and others).
+An error that occurs at the lowest level of optimization is
+pernicious because it defeats the conventional wisdom that compiler
+bugs can be avoided by turning off the optimizer. Table 2 counts
+these kinds of bugs, causing both crash and wrong-code errors, that
+we found using Csmith.
+Testing CompCert
+CompCert is a veriﬁed, optimizing compiler for a large subset of C; it targets PowerPC, ARM, and x86. We
+put signiﬁcant effort into testing this compiler.
+The ﬁrst silent wrong-code error that we found in CompCert was
+due to a miscompilation of this function:
+int bar (unsigned x) {
+return -1 <= (1 && x);
+CompCert 1.6 for PowerPC generates code returning 0, but the
+proper result is 1 because the comparison is signed. This bug and ﬁve
+others like it were in CompCert’s unveriﬁed front-end code. Partly
+in response to these bug reports, the main CompCert developer
+expanded the veriﬁed portion of CompCert to include C’s integer
+promotions and other tricky implicit casts.
+The second CompCert problem we found was illustrated by two
+bugs that resulted in generation of code like this:
+stwu r1, -44432(r1)
+Here, a large PowerPC stack frame is being allocated. The problem
+is that the 16-bit displacement ﬁeld is overﬂowed. CompCert’s
+PPC semantics failed to specify a constraint on the width of this
+immediate value, on the assumption that the assembler would catch
+out-of-range values. In fact, this is what happened. We also found a
+handful of crash errors in CompCert.
+The striking thing about our CompCert results is that the middleend bugs we found in all other compilers are absent. As of early 2011,
+the under-development version of CompCert is the only compiler we
+have tested for which Csmith cannot ﬁnd wrong-code errors. This is
+not for lack of trying: we have devoted about six CPU-years to the
+task. The apparent unbreakability of CompCert supports a strong
+argument that developing compiler optimizations within a proof
+framework, where safety checks are explicit and machine-checked,
+has tangible beneﬁts for compiler users.
+Quantitative Comparison of GCC and LLVM Versions
+Figure 3 shows the results of an experiment in which we compiled and ran 1,000,000 randomly generated programs using
+LLVM 1.9–2.8, GCC 3. .0, and GCC 4. .0. Every program was compiled at –O0, –O1, –O2, –Os, and –O3. A test case
+was considered valid if every compiler terminated (successfully
+or otherwise) within ﬁve minutes and if every compiled random
+program terminated (correctly or otherwise) within ﬁve seconds. All
+compilers targeted x86. Running these tests took about 1.5 weeks
+on 20 machines in the Utah Emulab testbed . Each machine had
+one quad-core Intel Xeon E5530 processor running at 2.4 GHz.
+Compile-time failures
+The top row of graphs in Figure 3 shows
+the observed rate of crash errors. (Note that the y-axes of these
+graphs are logarithmic.) These graphs also indicate the number of
+crash bugs that were ﬁxed in response to our bug reports. Both
+compilers became at least three orders of magnitude less “crashy”
+over the range of versions covered in this experiment. The GCC
+results appear to tell a nice story: the 3.x release series increases
+in quality, the 4.0.0 release regresses because it represents a major
+change to GCC’s internals, and then quality again starts to improve.
+The middle row of graphs in Figure 3 shows the number of
+distinct assertion failures in LLVM and the number of distinct
+internal compiler errors in GCC induced by our tests. These are the
+numbers of code locations in LLVM and GCC at which an internal
+Crash Error Rate (%)
+LLVM version
+4 bugs fixed
+21 bugs fixed
+13 bugs fixed
+27 bugs fixed
+26 bugs fixed
+22 bugs fixed
+Crash Error Rate (%)
+GCC version
+21 bugs fixed
+11 bugs fixed
+Distinct Assert Failures
+LLVM version
+4 bugs fixed
+21 bugs fixed
+13 bugs fixed
+27 bugs fixed
+26 bugs fixed
+22 bugs fixed
+Distinct Internal Compiler Errors
+GCC version
+21 bugs fixed
+11 bugs fixed
+Wrong Code Error Rate (%)
+LLVM version
+4 bugs fixed
+16 bugs fixed
+11 bugs fixed
+6 bugs fixed
+7 bugs fixed
+11 bugs fixed
+Wrong Code Error Rate (%)
+GCC version
+5 bugs fixed
+11 bugs fixed
+Figure 3. Distinct crash errors found, and rates of crash and wrong-code errors, from recent LLVM and GCC versions
+consistency check failed. These graphs conservatively estimate the
+number of distinct failures in these compilers, since we encountered
+many segmentation faults caused by use of free memory, null-pointer
+dereferences, and similar problems. We did not include these faults
+in our graphed results due to the difﬁculty of mapping crashes back
+to distinct causes.
+It is not clear which of these two metrics of crashiness is
+preferable. The rate of crashes is easy to game: we can make it
+arbitrarily high by biasing Csmith to generate code triggering known
+bugs, and compiler writers can reduce it to zero by eliminating
+error messages and always returning a “success” status code to the
+operating system. The number of distinct crashes, on the other hand,
+suffers from the drawback that it depends on the quantity and style
+of assertions in the compiler under test. Although GCC has more
+total assertions than LLVM, LLVM has a higher density: about one
+assertion per 100 lines of code, compared to one in 250 for GCC.
+Run-time failures
+The bottom pair of graphs in Figure 3 shows
+the rate of wrong-code errors in our experiment. Unfortunately, we
+8193-16384
+16385-32768
+32769-65536
+Distinct Crash Errors
+Range of Program Sizes Tested, in Tokens
+Figure 4. Number of distinct crash errors found in 24 hours of
+testing with Csmith-generated programs in a given size range
+can only report the rate of errors, and not the number of bugs causing
+them, because we do not know how to automatically map failing
+tests back to the bugs that cause them. These graphs also indicate
+the number of wrong-code bugs that were ﬁxed in response to our
+bug reports.
+Bug-Finding Performance as a Function of Test-Case Size
+There are many ways in which a random test-case generator might
+be “tuned” for particular goals, e.g., to focus on certain kinds
+of compiler defects. We performed an experiment to answer this
+question: given the goal of ﬁnding many defects quickly, should one
+conﬁgure Csmith to generate small programs or large ones? Other
+factors being equal, small test cases are preferable because they are
+closer to being reportable to compiler developers.
+Using the same compilers and optimization options that we
+used for the experiments in Section 3.2, we ran our testing process
+multiple times. For each run we selected a size range for test inputs,
+conﬁgured Csmith to generate programs in that range,3 executed
+the test process for 24 hours, and counted the distinct crash errors
+found. We repeated this for various ranges of test-input sizes.
+Figure 4 shows that the rate of crash-error detection varies
+signiﬁcantly as a function of the sizes of the test programs produced
+by Csmith. The greatest number of distinct crash errors is found
+by programs containing 8 K–16 K tokens: these programs averaged
+81 KB before preprocessing. The conﬁdence intervals are at 95%
+and were computed based on ﬁve repetitions.
+We hypothesize that larger test cases expose more compiler errors
+for two reasons. First, throughput is increased because compiler startup costs are better amortized. Second, the combinatorial explosion of
+feature interactions within a single large test case works in Csmith’s
+favor. The decrease in bug-ﬁnding power at the largest sizes appears
+to come from algorithms—in Csmith and in the compilers—that
+have superlinear running time.
+Bug-Finding Performance Compared to Other Tools
+To evaluate Csmith’s ability to ﬁnd bugs, we compared it to four
+other random program generators: the two versions of Randprog
+described in Section 2 and two others described in Section 5. We ran
+each generator in its default conﬁguration on one of ﬁve identical
+3 Although we can tune Csmith to prefer generating larger or smaller output,
+it lacks the ability to construct a test case of a speciﬁc size on demand. We
+ran this experiment by precomputing seeds to Csmith’s random-number
+generator that cause it to generate programs of the sizes we desired.
+Cumulative Distinct Crash Errors
+Testing Time (Days)
+Csmith : 86 crashes
+Eide08 : 33 crashes
+Lindig07 : 20 crashes
+McKeeman98 : 9 crashes
+Turner05 : 14 crashes
+Figure 5. Comparison of the ability of ﬁve random program generators to ﬁnd distinct crash errors
+make check-c
+make check-c & random
+absolute change
+make test & random
+absolute change
+Table 3. Augmenting the GCC and LLVM test suites with 10,000
+randomly generated programs did not improve code coverage much
+and otherwise-idle machines, using one CPU on each host. Each
+generator repeatedly produced programs that we compiled and tested
+using the same compilers and optimization options that were used
+for the experiments in Section 3.2. Figure 5 plots the cumulative
+number of distinct crash errors found by these program generators
+during the one-week test. Csmith signiﬁcantly outperforms the other
+Code Coverage
+Because we ﬁnd many bugs, we hypothesized that randomly generated programs exercise large parts of the compilers that were not covered by existing test suites. To test this, we enabled code-coverage
+monitoring in GCC and LLVM. We then used each compiler to
+build its own test suite, and also to build its test suite plus 10,000
+Csmith-generated programs. Table 3 shows that the incremental
+coverage due to Csmith is so small as to be a negative result. Our
+best guess is that these metrics are too shallow to capture Csmith’s
+effects, and that we would generate useful additional coverage in
+terms of deeper metrics such as path or value coverage.
+Where Are the Bugs?
+Table 4 characterizes the GCC and LLVM bugs we found by
+compiler part. Tables 5 and 6 show the ten buggiest ﬁles in LLVM
+and GCC as measured by our experiment in Section 3.1. Most of
+the bugs we found in GCC were in the middle end: the machineindependent optimizers. LLVM is a younger compiler and our
+testing shook out some front-end and back-end bugs that would
+probably not be present in a more mature software base.
+Middle end
+Unclassiﬁed
+Table 4. Distribution of bugs across compiler stages. A bug is
+unclassiﬁed either because it has not yet been ﬁxed or the developer
+who ﬁxed the bug did not indicate what ﬁles were changed.
+C File Name
+fold-const
+constant folding
+instruction combining
+tree-ssa-pre
+partial redundancy elim.
+variable range propagation
+tree-ssa-dce
+dead code elimination
+tree-ssa-reassoc
+arithmetic expr. reassociation
+register reloading
+tree-ssa-looploop iteration counting
+dead store elimination
+tree-scalarscalar evolution
+Other (15 ﬁles)
+Total (25 ﬁles)
+Table 5. Top ten buggy ﬁles in GCC
+C++ File Name
+Instructionmid-level instruction
+SimpleRegisterregister coalescing
+Coalescing
+DAGCombiner
+instruction combining
+LoopUnswitch
+loop unswitching
+loop invariant code motion
+LoopStrengthloop strength reduction
+fast instruction selection
+llvm-convert
+GCC-LLVM IR conversion
+ExprConstant
+constant folding
+JumpThreading
+jump threading
+Other (72 ﬁles)
+Total (82 ﬁles)
+Table 6. Top ten buggy ﬁles in LLVM
+Examples of Wrong-Code Bugs
+This section characterizes a few of the bugs that were revealed by
+miscompilation of programs generated by Csmith. These bugs ﬁt
+into a simple model in which optimizations are structured like this:
+if (safety check) {
+transformation
+An optimization can fail to be semantics-preserving if the
+analysis is wrong, if the safety check is insufﬁciently conservative,
+or if the transformation is incorrect. The most common root cause
+for bugs that we found was an incorrect safety check.
+GCC Bug #1: wrong safety check4
+If x is variable and c1 and
+c2 are constants, the expression (x/c1)!=c2 can be proﬁtably
+rewritten as (x-(c1*c2))>(c1-1), using unsigned arithmetic
+to avoid problems with negative values. Prior to performing the
+transformation, expressions such as c1*c2 and (c1*c2)+(c1-1)
+are checked for overﬂow. If overﬂow occurs, further simpliﬁcations
+can be made; for example, (x/1000000000)!=10 always evaluates
+to 0 when x is a 32-bit integer. GCC falsely detected overﬂow for
+some choices of constants. In the failure-inducing test case that we
+discovered, (x/-1)!=1 was folded to 0. This expression should
+evaluate to 1 for many values of x, such as 0.
+GCC Bug #2: wrong transformation5
+In C, if an argument of
+type unsigned char is passed to a function with a parameter of
+type int, the values seen inside the function should be in the range
+0..255. We found a case in which a version of GCC inlined this kind
+of function call and then sign-extended the argument rather than
+zero-extending it, causing the function to see negative values of the
+parameter when the function was called with arguments in the range
+GCC Bug #3: wrong analysis6
+We found a bug that caused GCC
+to miscompile this code:
+1 static int g ;
+2 static int *p = &g ;
+3 static int *q = &g ;
+5 int foo (void) {
+return g ;
+The generated code returned 1 instead of 0. The problem occurred when the compiler failed to recognize that p and q are aliases;
+this happened because q was mistakenly identiﬁed as a read-only
+memory location, which is deﬁned not to alias a mutable location.
+The wrong not-alias fact caused the store in line 7 to be marked as
+dead so that a subsequent dead-store elimination pass removed it.
+GCC Bug #4: wrong analysis7
+A version of GCC miscompiled
+this function:
+1 int x = 4;
+4 void foo (void) {
+for (y = 1; y < 8; y += 7) {
+int *p = &y;
+When foo returns, y should be 11. A loop-optimization pass
+determined that a temporary variable representing *p was invariant
+with value x+7 and hoisted it in front of the loop, while retaining
+a dataﬂow fact indicating that x+7 == y+7, a relationship that no
+longer held after code motion. This incorrect fact lead GCC to
+generate code leaving 8 in y, instead of 11.
+4 
+5 
+6 
+7 
+LLVM Bug #1: wrong safety check8
+(x==c1)||(x<c2) can be
+simpliﬁed to x < c2 when c1 and c2 are constants and c1<c2.
+An LLVM version incorrectly transformed (x==0)||(x<-3) to
+x < -3. LLVM did a comparison between 0 and −3 in the safety
+check for this optimization, but performed an unsigned comparison
+rather than a signed one, leading it to incorrectly determine that the
+transformation was safe.
+LLVM Bug #2: wrong safety check9
+(x|c1)==c2 evaluates to 0
+if c1 and c2 are constants and (c1&˜c2)!=0. In other words, if any
+bit that is set in c1 is unset in c2, the original expression cannot be
+true. A version of LLVM contained a logic error in the safety check
+for this optimization, wrongly replacing this kind of expression with
+0 even when c1 was not a constant.
+LLVM Bug #3: wrong safety check10
+“Narrowing” is a strengthreduction optimization that can be applied to loads when only part
+of an object is needed, or to stores where only part of an object is
+modiﬁed. For example, at the level of the abstract machine this code
+loads and stores an unsigned int:
+1 unsigned y;
+3 void bar (void) {
+Optimizing compilers for x86 may translate bar into the following
+code, which loads nothing and stores a single byte:
+movb $-1, y
+We found a case in which LLVM attempted to perform an
+analogous narrowing operation, but a logic error caused the safety
+check to succeed even when a different store modiﬁed the object
+prior to the store that was the target of the narrowing transformation.
+LLVM Bug #4: wrong analysis11
+This code should print “5”:
+1 void foo (void) {
+for (x = 0; x < 5; x++) {
+if (x) continue;
+if (x) break;
+printf("%d", x);
+LLVM’s scalar evolution analysis computes properties of loop
+induction variables, including the maximum number of iterations.
+Line 5 of the program above caused this analysis to mistakenly
+conclude that x was 1 after the loop executed.
+Discussion
+Are we ﬁnding bugs that matter?
+One might suspect that random
+testing ﬁnds bugs that do not matter in practice. Undoubtedly
+this happens sometimes, but in a number of instances we have
+direct conﬁrmation that Csmith is ﬁnding bugs that matter, because
+bugs that we have found and reported have been independently
+rediscovered and re-reported by application developers. By a very
+conservative estimate—counting only the times that a compiler
+8 
+9 
+10 
+11 
+developer explicitly labeled a wrong-code bug report as a duplicate
+of one of ours—this has happened eight times: four times for GCC
+and four for LLVM. We also have indirect conﬁrmation that our bugs
+matter. The developers of open-source compilers ﬁxed almost all of
+the bugs that we reported, and the GCC development team marked
+25 of our bugs as P1: the maximum, release-blocking priority.
+Creating reportable bugs
+Reporting compiler crash bugs is easy,
+but reporting wrong-code bugs is harder. Compiler developers will
+(rightfully) ignore a wrong-code bug report that is based on a large
+random program. Rather, a bug report must be accompanied by compelling evidence that a bug exists; in most cases the best evidence
+is a small test case that is obviously miscompiled. Delta debugging automates test-case reduction, but all existing variants that
+are intended for reducing C programs—such as hierarchical delta
+debugging and Wilkerson’s implementation —introduce
+undeﬁned behavior. The resulting programs are small but useless.
+To avoid undeﬁned behavior during reduction, we rely on compiler
+warnings, dynamic checkers, and manual test-case reduction. There
+is substantial room for improvement.
+The relationship between testing and veriﬁcation
+As our Comp-
+Cert results make plain, veriﬁcation does not obviate testing, but
+rather complements it. Testing can provide end-to-end evidence that
+numerous paths through a system work properly. Veriﬁcation, on the
+other hand, typically focuses on a narrow slice of a stack of tools,
+and the parts outside the slice remain in the trusted computing base.
+There does not yet appear to be a nuanced understanding of the
+kinds of testing, and the amount of testing effort, that are rendered
+unnecessary by artifacts like CompCert and seL4 .
+Toward realistic, correct compilers
+Compilers must support rapid
+development to cope with new optimizations, new source languages,
+and new target architectures. Generated code often needs to be
+resource-efﬁcient to support application developers’ goals. Finally,
+compilers should generate correct code. Meeting even two of these
+goals is challenging, and it is not clear how to meet all three in a
+single tool. There seem to be four paths forward.
+Compiler veriﬁcation. Although it is difﬁcult to imagine a
+veriﬁed compiler for C++0x, due to the immense complexity of
+the draft standard, CompCert is an existence proof that a veriﬁed,
+optimizing C compiler is within reach. However, the burden of
+veriﬁcation is signiﬁcant. CompCert still lacks a number of useful
+C features and few mainstream compiler developers have the
+formal veriﬁcation skills that are needed to add new language
+features and optimization passes. On the other hand, projects such as
+XCERT may dramatically lower the bar for working on veriﬁed
+compilation.
+Compiler simplicity. For non-bottleneck applications, compiler
+optimization adds little end-user value. It would seem possible to
+take a simple compiler such as TCC , which does not optimize
+across statement boundaries, and validate it through code inspections, heavy use, and other techniques. At present, however, TCC is
+much buggier than more heavily-used compilers such as GCC and
+Compiler testing. We hypothesize that it is possible to gain
+high conﬁdence in a complex compiler like GCC by choosing a
+ﬁxed conﬁguration, disabling optimization passes whose effects are
+signiﬁcantly non-local, and performing “just enough testing.” A
+test plan would be sufﬁcient if all code paths through the compiler
+that are used to compile an application of interest had been tested.
+Clearly, a sophisticated way to abstract over paths is needed.
+Equivalence checking. If equivalence checkers for machine
+code could scale to large programs, veriﬁed compilers would
+be largely unnecessary because one compiler’s output could be
+proved equivalent to another’s. Although these tools are not likely
+to scale up to multi-megabyte applications anytime soon, it should
+be possible to automatically partition applications into smaller parts
+so that equivalence checking can be done piecewise.
+Future work
+Augmenting Csmith with white-box testing techniques, where the structure of the tested system is taken into account
+in a ﬁrst-class way, would be productive. This will be difﬁcult for
+several reasons. First, we anticipate substantial challenges in integrating the necessary constraint-solving machinery with Csmith’s
+existing logic for generating valid C programs. It is possible that we
+will need to start over, next time engineering a version of Csmith in
+which all constraints are explicit and declarative, rather than being
+buried in a small mountain of C++. Second, the inverse problems
+that must be solved to generate an input become prohibitively dif-
+ﬁcult when inputs pass through a parser, particularly if the parser
+contains hash tables. Godefroid et al. showed a way to solve this
+problem by integrating a constraint solver with a grammar for the
+language being generated. However, due to its non-local pointer and
+effect analyses, the validity decision problem for programs in the
+subset of C that Csmith generates is far harder than the question
+of whether a program can be generated by the JavaScript grammar
+used by Godefroid et al.
+Related Work
+Compilers have been tested using randomized methods for nearly
+50 years. Boujarwah and Saleh gave a good survey in 1997.
+In 1962, Sauder tested the correctness of COBOL compilers
+by placing random variables in programs’ data sections. In 1970,
+Hanford used a PL/1 grammar to drive the generation of random
+programs. The grammar was extensible and was augmented by
+“syntax generators” that could be used, for example, to ensure that
+variables were declared before being used. In 1972, Purdom 
+used a syntax-directed method to generate test sentences for a parser.
+He gave an efﬁcient algorithm for generating short sentences from a
+context-free grammar such that each production of the grammar was
+used at least once, and he tested LR(1) parsers using this technique.
+Burgess and Saidi designed an automatic generator of test
+cases for FORTRAN compilers. The tests were designed to be selfchecking and to contain features that optimizing compilers were
+known to exploit. In order to predict test cases’ results, the code
+generator restricted assignment statements to be executed only once
+during the execution of the sub-program or main program. These
+tests found four bugs in two FORTRAN 77 compilers.
+In 1998, McKeeman coined the term “differential testing.”
+His work resulted in DDT, a family of program generators that
+conform to the C standard at various levels, from level 1 (random
+characters) to level 7 (generated code is “model conforming,” incorporating some high-level structure). DDT is more expressive than
+Csmith (DDT is capable of generating all legal C programs) and it
+was used to ﬁnd numerous bugs in C compilers. To our knowledge,
+McKeeman’s paper contains the ﬁrst acknowledgment that it is important to avoid undeﬁned behavior in generated C programs used
+for compiler testing. However, DDT avoided only a small subset
+of all undeﬁned behaviors, and only then during test-case reduction, not during normal testing. Thus, it is not a suitable basis for
+automatic bug-ﬁnding.
+Lindig used randomly generated C programs to ﬁnd several
+compiler bugs related to calling conventions. His tool, called Quest,
+was specially targeted: rather than generating code with control
+ﬂow and arithmetic, Quest generates code that creates complex data
+structures, loads them with constant values, and passes them to a
+function where assertions check the received values. Because its
+tests are self-checking, Quest is not based on differential testing.
+Self-checking tests are convenient, but the drawback is that Quest
+is far less expressive than Csmith. Lindig used Quest to test GCC,
+LCC, ICC, and a few other compilers and found 13 bugs.
+Sheridan also used a random generator to ﬁnd bugs in
+C compilers. A script rotated through a list of constants of the
+principal arithmetic types, producing a source ﬁle that applied
+various operators to pairs of constants. This tool found two bugs in
+GCC, one bug in SUSE Linux’s version of GCC, and ﬁve bugs in
+CodeSourcery’s version of GCC for ARM. Sheridan’s tool produces
+self-checking tests. However, it is less expressive than Csmith and it
+fails to avoid undeﬁned behavior such as signed overﬂow.
+Zhao et al. created an automated program generator for
+testing an embedded C++ compiler. Their tool allows a general test
+requirement, such as which optimization to test, to be speciﬁed in a
+script. The generator constructs a program template based on the test
+requirement and uses it to drive further code generation. Zhao et al.
+used GCC as the reference to check the compiler under test. They
+reported greatly improved statement coverage in the tested modules
+and found several new compiler bugs.
+Conclusion
+Using randomized differential testing, we found and reported hundreds of previously unknown bugs in widely used C compilers, both
+commercial and open source. Many of the bugs we found cause a
+compiler to emit incorrect code without any warning. Most of our reported defects have been ﬁxed, meaning that compiler implementers
+found them important enough to track down, and 25 of the bugs we
+reported against GCC were classiﬁed as release-blocking. All of this
+evidence suggests that there is substantial room for improvement in
+the state of the art for compiler quality assurance.
+To create a random program generator with high bug-ﬁnding
+power, the key problem we solved was the expressive generation
+of C programs that are free of undeﬁned behavior and independent
+of unspeciﬁed behavior. Csmith, our program generator, uses both
+static analysis and dynamic checks to avoid these hazards.
+The return on investment from random testing is good. Our rough
+estimate—including faculty, staff, and student salaries, machines
+purchased, and university overhead—is that each of the more than
+325 bugs we reported cost less than $1,000 to ﬁnd. The incremental
+cost of a new bug that we ﬁnd today is much lower.
+Csmith is open source and available for download at
+ 
+Acknowledgments
+The authors would like to thank Bruce Childers, David Coppit,
+Chucky Ellison, Robby Findler, David Gay, Casey Klein, Gerwin
+Klein, Chris Lattner, Sorin Lerner, Xavier Leroy, Bill McKeeman,
+Diego Novillo, Alastair Reid, Julian Seward, Zach Tatlock, our
+shepherd Atanas Rountev, and the anonymous reviewers for their
+invaluable feedback on drafts of this paper. We also thank Hans
+Boehm, Xavier Leroy, Michael Norrish, Bryan Turner, and the GCC
+and LLVM development teams for their technical assistance in
+various aspects of our work.
+This research was primarily supported by an award from
+DARPA’s Computer Science Study Group.

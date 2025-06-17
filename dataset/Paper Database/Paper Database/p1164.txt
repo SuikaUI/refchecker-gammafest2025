@@ -1,0 +1,297 @@
+Under review as a conference paper at ICLR 2016
+CONDITIONAL COMPUTATION IN NEURAL NETWORKS
+FOR FASTER MODELS
+Emmanuel Bengio, Pierre-Luc Bacon, Joelle Pineau & Doina Precup
+School of Computer Science
+McGill University
+Montreal, Canada
+{ebengi,pbacon,jpineau,dprecup}@cs.mcgill.ca
+Deep learning has become the state-of-art tool in many applications, but the evaluation and training of deep models can be time-consuming and computationally
+expensive. The conditional computation approach has been proposed to tackle
+this problem . It operates by selectively
+activating only parts of the network at a time. In this paper, we use reinforcement
+learning as a tool to optimize conditional computation policies. More speciﬁcally, we cast the problem of learning activation-dependent policies for dropping
+out blocks of units as a reinforcement learning problem. We propose a learning
+scheme motivated by computation speed, capturing the idea of wanting to have
+parsimonious activations while maintaining prediction accuracy. We apply a policy gradient algorithm for learning policies that optimize this loss function and
+propose a regularization mechanism that encourages diversiﬁcation of the dropout
+policy. We present encouraging empirical results showing that this approach improves the speed of computation without impacting the quality of the approximation.
+Keywords Neural Networks, Conditional Computing, REINFORCE
+INTRODUCTION
+Large-scale neural networks, and in particular deep learning architectures, have seen a surge in
+popularity in recent years, due to their impressive empirical performance in complex supervised
+learning tasks, including state-of-the-art performance in image and speech recognition . Yet the task of training such networks remains a challenging optimization problem. Several
+related problems arise: very long training time (several weeks on modern computers, for some problems), potential for over-ﬁtting (whereby the learned function is too speciﬁc to the training data and
+generalizes poorly to unseen data), and more technically, the vanishing gradient problem , whereby the gradient information gets increasingly diffuse as it
+propagates from layer to layer.
+Recent approaches have proposed the use of conditional
+computation in order to address this problem. Conditional computation refers to activating only
+some of the units in a network, in an input-dependent fashion. For example, if we think we’re
+looking at a car, we only need to compute the activations of the vehicle detecting units, not of all
+features that a network could possible compute. The immediate effect of activating fewer units is
+that propagating information through the network will be faster, both at training as well as at test
+time. However, one needs to be able to decide in an intelligent fashion which units to turn on and off,
+depending on the input data. This is typically achieved with some form of gating structure, learned
+in parallel with the original network.
+A secondary effect of conditional computation is that during training, information will be propagated
+along fewer links. Intuitively, this allows sharper gradients on the links that do get activated. Moreover, because only parts of the network are active, and fewer parameters are used in the computation,
+ 
+Under review as a conference paper at ICLR 2016
+the net effect can be viewed as a form of regularization of the main network, as the approximator
+has to use only a small fraction of the possible parameters in order to produce an action.
+In this paper, we explore the formulation of conditional computation using reinforcement learning.
+We propose to learn input-dependent activation probabilities for every node (or blocks of nodes),
+while trying to jointly minimize the prediction errors at the output and the number of participating
+nodes at every layer, thus reducing the computational load. One can also think of our method as
+being related to standard dropout, which has been used as a tool to both regularize and speed up the
+computation. However, we emphasize that dropout is in fact a form of “unconditional” computation,
+in which the computation paths are data-independent. Therefore, usual dropout is less likely to lead
+to specialized computation paths within a network.
+We present the problem formulation, and our solution to the proposed optimization problem, using policy search methods . Preliminary results are included for standard
+classiﬁcation benchmarks.
+PROBLEM FORMULATION
+Our model consists in a typical fully-connected neural network model, joined with stochastic perlayer policies that activate or deactivate nodes of the neural network in an input-dependent manner,
+both at train and test time. The exact algorithm is detailed in appendix A.
+We cast the problem of learning the input-dependent activation probabilities at each layer in the
+framework of Markov Decision Processes (MDP) . We deﬁne a discrete time,
+continuous state and discrete action MDP ⟨S, U, P (· | s, u) , C⟩. An action u ∈{0, 1}k in this
+model consists in the application of a mask over the units of a given layer. We deﬁne the state space
+of the MDP over the vector-valued activations s ∈Rk of all nodes at the previous layer. The cost C
+is the loss of the neural network architecture (in our case the negative log-likelihood). This MDP is
+single-step: an input is seen, an action is taken, a reward is observed and we are at the end state.
+Similarly to the way dropout is described , each node or block in a given layer
+has an associated Bernoulli distribution which determines its probability of being activated. We train
+a different policy for each layer l, and parameterize it (separately of the neural network) such that
+it is input-dependent. For every layer l of k units, we deﬁne a policy as a k-dimensional Bernoulli
+distribution:
+π(l)(u | s) =
+i (1 −σi)(1−ui),
+σi = [sigm(Z(l)s + d(l))]i,
+where the σi denotes the participation probability, to be computed from the activations s of the layer
+below and the parameters θl = {Z(l), d(l)}. We denote the sigmoid function by sigm, the weight
+matrix by Z, and the bias vector by d. The output of a typical hidden layer h(x) that uses this
+policy is multiplied element-wise with the mask u sampled from the probabilities σ, and becomes
+(h(x) ⊗u). For clarity we did not superscript u, s and σi with l, but each layer has its own.
+LEARNING SIGMOID-BERNOULLI POLICIES
+We use REINFORCE (detailed in appendix B) to learn the parameters Θπ =
+{θ1, ..., θL} of the sigmoid-Bernoulli policies. Since the nature of the observation space changes
+at each decision step, we learn L disjoint policies (one for each layer l of the deep network). As a
+consequence, the summation in the policy gradient disappears and becomes:
+C(x)∇θl log π(l)(u(l) | s(l))
+since θl = {Z(l), d(l)} only appears in the l-th decision stage and the gradient is zero otherwise.
+Estimating (2) from samples requires propagating through many instances at a time, which we
+achieve through mini-batches of size mb . Under the mini-batch setting, s(l) becomes a matrix
+and π(· | ·) a vector of dimension mb . Taking the gradient of the parameters with respect to the
+Under review as a conference paper at ICLR 2016
+log action probabilities can then be seen as forming a Jacobian. We can thus re-write the empirical
+average in matrix form:
+C(xi)∇θl log π(l)(u(l)
+c⊤∇θl log π(l)(U(l) | S(l))
+where C(xi) is the total cost for input xi and mb is the number of examples in the mini-batch. The
+term c⊤denotes the row vector containing the total costs for every example in the mini-batch.
+FAST VECTOR-JACOBIAN MULTIPLICATION
+While Eqn (3) suggests that the Jacobian might have to be formed explicitly, Pearlmutter 
+showed that computing a differential derivative sufﬁces to compute left or right vector-Jacobian
+(or Hessian) multiplication. The same trick has also recently been revived with the class of socalled “Hessian-free” methods for artiﬁcial neural networks. Using the notation of
+Pearlmutter , we write Rθl {·} = c⊤∇θl for the differential operator.
+log π(U(l) | S(l))
+SPARSITY AND VARIANCE REGULARIZATIONS
+In order to favour activation policies with sparse actions, we add two penalty terms Lb and Le that
+depend on some target sparsity rate τ. The ﬁrst term pushes the policy distribution π to activate each
+unit with probability τ in expectation over the data. The second term pushes the policy distribution
+to have the desired sparsity of activations for each example. Thus, for a low τ, a valid conﬁguration
+would be to learn a few high probability activations for some part of the data and low probability
+activations for the rest of the data, which results in having activation probability τ in expectation.
+∥E{σj} −τ∥2
+Le = E{∥( 1
+Since we are in a minibatch setting, these expectations can be approximated over the minibatch:
+(σij) −τ∥2
+We ﬁnally add a third term, Lv, in order to favour the aforementioned conﬁgurations, where units
+only have a high probability of activation for certain examples, and low for the rest. We aim to maximize the variances of activations of each unit, across the data. This encourages units’ activations
+to be varied, and while similar in spirit to the Lb term, this term explicitly discourages learning a
+uniform distribution.
+vari{σij} ≈−
+We interleave the learning of the network parameters ΘNN and the learning of the policy parameters
+Θπ. We ﬁrst update the network and policy parameters to minimize the following regularized loss
+function via backpropagation :
+L = −log P(Y | X, ΘNN) + λs(Lb + Le) + λv(Lv) + λL2∥ΘNN∥2 + λL2∥Θπ∥2
+where λs can be understood as a trade-off parameter between prediction accuracy and parsimony of
+computation (obtained through sparse node activation), and λv as a trade-off parameter between a
+stochastic policy and a more input dependent saturated policy. We then minimize the cost function
+C with a REINFORCE-style approach to update the policy parameters :
+C = −log P(Y | X, ΘNN)
+As previously mentioned, we use minibatch stochastic gradient descent as well as minibatch policy
+gradient updates. A detailed algorithm is available in appendix A.
+Under review as a conference paper at ICLR 2016
+BLOCK ACTIVATION POLICY
+To achieve computational gain, instead of activating single units in hidden layers, we activate contiguous (equally-sized) groups of units together (independently for each example in the minibatch),
+thus reducing the action space as well as the number of probabilities to compute and sample.
+As such, there are two potential speedups. First, the policy is much smaller and faster to compute.
+Second, it offers a computational advantage in the computation of the hidden layer themselves, since
+we are now performing a matrix multiplication of the following form:
+((H ⊗MH)W) ⊗MO
+where MH and MO are binary mask matrices. MO is obtained for each layer from the sampling
+of the policy as described in eq. 1: each sampled action (0 or 1) is repeated so as to span the
+corresponding block. MH is simply the mask of the previous layer. MH and MO resemble this
+(here there are 3 blocks of size 2):
+This allows us to quickly perform matrix multiplication by only considering the non-zero output
+elements as well as the non-zero elements in H ⊗MH.
+EXPERIMENTS
+MODEL IMPLEMENTATION
+The proposed model was implemented within Theano , a standard library for
+deep learning and neural networks. In addition to using optimizations offered by Theano, we also
+implemented specialized matrix multiplication code for the operation exposed in section 3.4.
+A straightforward and fairly naive CPU implementation of this operation yielded speedups of up to
+5-10x, while an equally naive GPU implementation yielded speedups of up to 2-4x, both for sparsity
+rates of under 20% and acceptable matrix and block sizes.1
+We otherwise use fairly standard methods for our neural network. The weight matrices are initialized
+using the heuristic of Glorot & Bengio . We use a constant learning rate throughout minibatch
+SGD. We also use early stopping to avoid overﬁtting. We only use fully-connected
+layers with tanh activations (reLu activations offer similar performance).
+MODEL EVALUATION
+We ﬁrst evaluate the performance of our model on the MNIST digit dataset. We use a single hidden
+layer of 16 blocks of 16 units (256 units total), with a target sparsity rate of τ = 6.25% = 1/16,
+learning rates of 10−3 for the neural network and 5 × 10−5 for the policy, λv = λs = 200 and
+λL2 = 0.005. Under these conditions, a test error of around 2.3% was achieved. A normal neural
+network with the same number of hidden units achieves a test error of around 1.9%, while a normal
+neural network with a similar amount of computation (multiply-adds) being made (32 hidden units)
+achieves a test error of around 2.8%.
+Looking at the activation of the policy (1c), we see that it tends towards what was hypothesized in
+section 3.2, i.e. where examples activate most units with low probability and some units with high
+probability. We can also observe that the policy is input-dependent in ﬁgures 1a and 1b, since we
+see different activation patterns for inputs of class ’0’ and inputs of class ’1’.
+Since the computation performed in our model is sparse, one could hope that it achieves this performance with less computation time, yet we consistently observe that models that deal with MNIST
+are too small to allow our specialized (3.4) sparse implementation to make a substantial difference.
+We include this result to highlight conditions under which it is less desirable to use our model.
+1Implementations used in this paper are available at 
+Under review as a conference paper at ICLR 2016
+Figure 1: MNIST, (a,b,c), probability distribution of the policy, each example’s probability (y axis)
+of activating each unit (x axis) is plotted as a transparent red dot. Redder regions represent more
+examples falling in the probability region. Plot (a) is for class ’0’, (b) for class ’1’, (c) for all classes.
+(d), weight matrix of the policy.
+test error
+block size
+6.8s(26.2s)
+1.4s (8.2s)
+2.0s(10.4s)
+1.93s(10.3s)
+2.8s(10.3s)
+Figure 2: CIFAR-10, condnet: our approach, NN: Neural Network without the conditional activations, bdNN, block dropout Neural Network using a uniform policy. ’speedup’ is how many times
+faster the forward pass is when using a specialized implementation (3.4). ’test time’ is the time
+required to do a full pass over the test dataset using the implementation, on a CPU, running on a
+single core; in parenthesis is the time without the optimization.
+Next, we consider the performance of our model on the CIFAR-10 
+image dataset. A brief hyperparameter search was made, and a few of the best models are shown in
+ﬁgure 2. These results show that it is possible to achieve similar performance with our model (denoted condnet) as with a normal neural network (denoted NN), yet using sensibly reduced computation time. A few things are worth noting; we can set τ to be lower than 1 over the number of blocks,
+since the model learns a policy that is actually not as sparse as τ, mostly because REINFORCE pulls
+the policy towards higher probabilities on average. For example our best performing model has a
+target of 1/16 but learns policies that average an 18% sparsity rate (we used λv = λs = 20, except
+for the ﬁrst layer λv = 40, we used λL2 = 0.01, and the learning rates were 0.001 for the neural net,
+10−5 and 5 × 10−4 for the ﬁrst and second policy layers respectively). The neural networks without
+conditional activations are trained with L2 regularization as well as regular unit-wise dropout.
+We also train networks with the same architecture as our models, using blocks, but with a uniform
+policy (as in original dropout) instead of a learned conditional one. This model (denoted bdNN)
+does not perform as well as our model, showing that the dropout noise by itself is not sufﬁcient, and
+that learning a policy is required to fully take beneﬁt of this architecture.
+Under review as a conference paper at ICLR 2016
+time of validation (sec)
+valid error (%)
+Figure 3: SVHN, each point is an experiment. The x axis is the time required to do a full pass over
+the valid dataset (log scale, lower is better). Note that we plot the full hyperparameter exploration
+results, which is why condnet results are so varied.
+test error
+block size
+1.5s(2.2s)
+2.8s (4.3s)
+10.2s(14.1s)
+Figure 4: SVHN results (see ﬁg 2)
+Finally we tested our model on the Street View House Numbers (SVHN) 
+dataset, which also yielded encouraging results (ﬁgure 3). As we restrain the capacity of the models
+(by increasing sparsity or decreasing number of units), condnets retain acceptable performance with
+low run times, while plain neural networks suffer highly (their performance dramatically decreases
+with lower run times).
+The best condnet model has a test error of 7.3%, and runs a validation epoch in 10s (14s without
+speed optimization), while the best standard neural network model has a test error of 9.1%, and
+runs in 16s. Note that the variance in the SVHN results (ﬁgure 3) is due to the mostly random
+hyperparameter exploration, where block size, number of blocks, τ, λv, λs, as well of learning rates
+are randomly picked. The normal neural network results were obtained by varying the number of
+hidden units of a 2-hidden-layer model.
+For all three datasets and all condnet models used, the required training time was higher, but still
+reasonable. On average experiments took 1.5 to 3 times longer (wall time).
+EFFECTS OF REGULARIZATION
+The added regularization proposed in section 3.2 seems to play an important role in our ability to
+train the conditional model. When using only the prediction score, we observed that the algorithm
+tried to compensate by recruiting more units and saturating their participation probability, or even
+failed by dismissing very early what were probably considered bad units.
+In practice, the variance regularization term Lv only slightly affects the prediction accuracy and
+learned policies of models, but we have observed that it signiﬁcantly speeds up the training process,
+probably by encouraging policies to become less uniform earlier in the learning process. This can
+Under review as a conference paper at ICLR 2016
+valid error (%)
+run time (s)
+valid error (%)
+λv = 15.82
+λv = 369.8
+Figure 5: CIFAR-10, (a) each pair of circle and triangle is an experiment made with a given lambda
+(x axis), resulting in a model with a certain error and running time (y axes). As λs increases the
+running time decreases, but so does performance. (b) The same model is being trained with different
+values of λv. Redder means lower, greener means higher.
+be seen in ﬁgure 5b, where we train a model with different values of λv. When λv is increased, the
+ﬁrst few epochs have a much lower error rate.
+It is possible to tune some hyperparameters to affect the point at which the trade-off between computation speed and performance lies, thus one could push the error downwards at the expense of
+also more computation time. This is suggested by ﬁgure 5a, which shows the effect of one such
+hyperparameter (λs) on both running times and performance for the CIFAR dataset. Here it seems
+that λ ∼ offers the best trade-off, yet other values could be selected, depending on the
+speciﬁc requirements of an application.
+RELATED WORK
+Ba & Frey proposed a learning algorithm called standout for computing an input-dependent
+dropout distribution at every node. As opposed to our layer-wise method, standout computes a oneshot dropout mask over the entire network, conditioned on the input to the network. Additionally,
+masks are unit-wise, while our approach uses masks that span blocks of units. Bengio et al. 
+introduced Stochastic Times Smooth neurons as gaters for conditional computation within a deep
+neural network. STS neurons are highly non-linear and non-differentiable functions learned using
+estimators of the gradient obtained through REINFORCE. They allow a sparse binary gater to be
+computed as a function of the input, thus reducing computations in the then sparse activation of
+hidden layers.
+Stollenga et al. recently proposed to learn a sequential decision process over the ﬁlters of a
+convolutional neural network (CNN). As in our work, a direct policy search method was chosen to
+ﬁnd the parameters of a control policy. Their problem formulation differs from ours mainly in the
+notion of decision “stage”. In their model, an input is ﬁrst fed through a network, the activations are
+computed during forward propagation then they are served to the next decision stage. The goal of
+the policy is to select relevant ﬁlters from the previous stage so as to improve the decision accuracy
+on the current example. They also use a gradient-free evolutionary algorithm, in contrast to our
+gradient-based method.
+The Deep Sequential Neural Network (DSNN) model of Denoyer & Gallinari is possibly
+closest to our approach. The control process is carried over the layers of the network and uses the
+output of the previous layer to compute actions. The REINFORCE algorithm is used to train the policy with the reward/cost function being deﬁned as the loss at the output in the base network. DSNN
+considers the general problem of choosing between between different type of mappings (weights) in
+Under review as a conference paper at ICLR 2016
+a composition of functions. However, they test their model on datasets in which different modes are
+proeminent, making it easy for a policy to distinguish between them.
+Another point of comparison for our work are attention models . These models typically learn a policy, or a form of policy, that allows them
+to selectively attend to parts of their input sequentially, in a visual 2D environnement. Both attention
+and our approach aim to reduce computation times. While attention aims to perform dense computations on subsets of the inputs, our approach aims to be more general, since the policy focuses on
+subsets of the whole computation (it is in a sense more distributed). It should also be possible to
+combine these approaches, since one acts on the input space and the other acts on the representation space, altough the resulting policies would be much more complex, and not necessarily easily
+trainable.
+CONCLUSION
+This paper presents a method for tackling the problem of conditional computation in deep networks
+by using reinforcement learning. We propose a type of parameterized conditional computation policy that maps the activations of a layer to a Bernoulli mask. The reinforcement signal accounts for
+the loss function of the network in its prediction task, while the policy network itself is regularized
+to account for the desire to have sparse computations. The REINFORCE algorithm is used to train
+policies to optimize this cost. Our experiments show that it is possible to train such models at the
+same levels of accuracy as their standard counterparts. Additionally, it seems possible to execute
+these similarly accurate models faster due to their sparsity. Furthermore, the model has a few simple
+parameters that allow to control the trade-off between accuracy and running time.
+The use of REINFORCE could be replaced by a more efﬁcient policy search algorithm, and also,
+perhaps, one in which rewards (or costs) as described above are replaced by a more sequential
+variant. The more direct use of computation time as a cost may prove beneﬁcial. In general, we
+consider conditional computation to be an area in which reinforcement learning could be very useful,
+and deserves further study.
+All the running times reported in the Experiments section are for a CPU, running on a single core.
+The motivation for this is to explore deployment of large neural networks on cheap, low-power,
+single core CPUs such as phones, while retaining high model capacity and expressiveness. While
+the results presented here show that our model for conditional computation can achieve speedups in
+this context, it is worth also investigating adaptation of these sparse computation models in multicore/GPU architectures; this is the subject of ongoing work.
+ACKNOWLEDGEMENTS
+The authors gratefully acknowledge ﬁnancial support for this work by the Samsung Advanced Institute of Technology (SAIT), the Natural Sciences and Engineering Research Council of Canada
+(NSERC) and the Fonds de recherche du Qu´ebec - Nature et Technologies (FQRNT).

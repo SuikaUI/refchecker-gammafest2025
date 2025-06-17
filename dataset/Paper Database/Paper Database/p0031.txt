@@ -1,0 +1,856 @@
+Cascaded Diﬀusion Models
+for High Fidelity Image Generation
+Jonathan Ho∗
+ 
+Chitwan Saharia∗
+ 
+William Chan
+ 
+David J. Fleet
+ 
+Mohammad Norouzi
+ 
+Tim Salimans
+ 
+Google, 1600 Amphitheatre Parkway, Mountain View, CA 94043
+We show that cascaded diﬀusion models are capable of generating high ﬁdelity images on
+the class-conditional ImageNet generation benchmark, without any assistance from auxiliary
+image classiﬁers to boost sample quality. A cascaded diﬀusion model comprises a pipeline
+of multiple diﬀusion models that generate images of increasing resolution, beginning with a
+standard diﬀusion model at the lowest resolution, followed by one or more super-resolution
+diﬀusion models that successively upsample the image and add higher resolution details.
+We ﬁnd that the sample quality of a cascading pipeline relies crucially on conditioning
+augmentation, our proposed method of data augmentation of the lower resolution conditioning inputs to the super-resolution models. Our experiments show that conditioning
+augmentation prevents compounding error during sampling in a cascaded model, helping
+us to train cascading pipelines achieving FID scores of 1.48 at 64×64, 3.52 at 128×128
+and 4.88 at 256×256 resolutions, outperforming BigGAN-deep, and classiﬁcation accuracy
+scores of 63.02% (top-1) and 84.06% (top-5) at 256×256, outperforming VQ-VAE-2.
+Keywords: generative models, diﬀusion models, score matching, iterative reﬁnement,
+super-resolution
+Class ID = 213
+“Irish Setter”
+Figure 1: A cascaded diﬀusion model comprising a base model and two super-resolution models.
+∗. Equal contribution
+©2021 Jonathan Ho, Chitwan Saharia, William Chan, David J. Fleet, Mohammad Norouzi, Tim Salimans.
+License: CC-BY 4.0, see 
+ 
+Ho, Saharia, Chan, Fleet, Norouzi and Salimans
+Figure 2: Selected synthetic 256×256 ImageNet samples.
+1. Introduction
+Diﬀusion models have recently been shown to be capable of
+synthesizing high quality images and audio : an application of machine learning that has long been
+dominated by other classes of generative models such as autoregressive models, GANs, VAEs,
+and ﬂows . Most previous work on diﬀusion models demonstrating high quality
+samples has focused on data sets of modest size, or data with strong conditioning signals.
+Our goal is to improve the sample quality of diﬀusion models on large high-ﬁdelity data sets
+for which no strong conditioning information is available. To showcase the capabilities of
+the original diﬀusion formalism, we focus on simple, straightforward techniques to improve
+the sample quality of diﬀusion models; for example, we avoid using extra image classiﬁers to
+boost sample quality metrics .
+Our key contribution is the use of cascades to improve the sample quality of diﬀusion
+models on class-conditional ImageNet . Here, cascading refers to a simple technique to model
+high resolution data by learning a pipeline of separately trained models at multiple resolutions;
+a base model generates low resolution samples, followed by super-resolution models that
+upsample low resolution samples into high resolution samples. Sampling from a cascading
+pipeline occurs sequentially, ﬁrst sampling from the low resolution base model, followed by
+sampling from super-resolution models in order of increasing resolution. While any type of
+generative model could be used in a cascading pipeline , here we restrict ourselves to diﬀusion models. Cascading has been shown
+in recent prior work to improve the sample quality of diﬀusion models ; our work here concerns the improvement of diﬀusion cascading
+pipelines to attain the best possible sample quality.
+Cascaded Diffusion Models
+The simplest and most eﬀective technique we found to improve cascading diﬀusion
+pipelines is to apply strong data augmentation to the conditioning input of each superresolution model. We refer to this technique as conditioning augmentation. In our experiments,
+conditioning augmentation is crucial for our cascading pipelines to generate high quality
+samples at the highest resolution.
+With this approach we attain FID scores on classconditional ImageNet generation that are better than BigGAN-Deep at any
+truncation value, and classiﬁcation accuracy scores that are better than VQ-VAE-2 . We empirically ﬁnd that conditioning augmentation is eﬀective because it
+alleviates compounding error in cascading pipelines due to train-test mismatch, sometimes
+referred to as exposure bias in the sequence modeling literature .
+The key contributions of this paper are as follows:
+• We show that our Cascaded Diﬀusion Models (CDM) yield high ﬁdelity samples
+superior to BigGAN-deep and VQ-VAE-2 
+in terms of FID score and classiﬁcation accuracy score , the latter by a large margin. We achieve these results with pure
+generative models that are not combined with any classiﬁer.
+• We introduce conditioning augmentation for our super-resolution models, and ﬁnd it
+critical towards achieving high sample ﬁdelity. We perform an in-depth exploration
+of augmentation policies, and ﬁnd Gaussian augmentation to be a key ingredient for
+low resolution upsampling, and Gaussian blurring for high resolution upsampling. We
+also show how to eﬃciently train models amortized over varying levels of conditioning
+augmentation to enable post-training hyperparameter search for optimal sample quality.
+Section 2 reviews recent work on diﬀusion models. Section 3 describes the most eﬀective
+types of conditioning augmentation that we found for class-conditional ImageNet generation.
+Section 4 contains our sample quality results, ablations, and experiments on additional
+datasets. Appendix A contains extra samples and Appendix B contains details on hyperparameters and architectures. High resolution ﬁgures and additional supplementary material
+can be found at 
+2. Background
+We begin with background on diﬀusion models, their extension to conditional generation,
+and their associated neural network architectures.
+2.1 Diﬀusion Models
+A diﬀusion model is deﬁned by a forward process
+that gradually destroys data x0 ∼q(x0) over the course of T timesteps
+q(x1:T |x0) =
+q(xt|xt−1),
+q(xt|xt−1) = N(xt;
+1 −βtxt−1, βtI)
+Ho, Saharia, Chan, Fleet, Norouzi and Salimans
+and a parameterized reverse process pθ(x0) =
+pθ(x0:T ) dx1:T , where
+pθ(x0:T ) = p(xT )
+pθ(xt−1|xt),
+pθ(xt−1|xt) = N(xt−1; µθ(xt, t), Σθ(xt, t)).
+The forward process hyperparameters βt are set so that xT is approximately distributed
+according to a standard normal distribution, so p(xT ) is set to a standard normal prior as
+well. The reverse process is trained to match the joint distribution of the forward process by
+optimizing the evidence lower bound (ELBO) −Lθ(x0) ≤log pθ(x0):
+Lθ(x0) = Eq
+DKL(q(xt−1|xt, x0) ∥pθ(xt−1|xt)) −log pθ(x0|x1)
+where LT (x0) = DKL(q(xT |x0) ∥p(xT )). The forward process posteriors q(xt−1|xt, x0) and
+marginals q(xt|x0) are Gaussian, and the KL divergences in the ELBO can be calculated in
+closed form. Thus it is possible to train the diﬀusion model by taking stochastic gradient
+steps on random terms of Eq. (1). As previously suggested , we use the reverse process parameterizations
+exp(log ˜βt + (log βt −log ˜βt)vi
+where αt = 1 −βt, ¯αt = Qt
+s=1 αs, and ˜βt = 1−¯αt−1
+Sample quality can be improved, at the cost of log likelihood, by optimizing modiﬁed
+losses instead of the ELBO. The particular form of the modiﬁed loss depends on whether we
+are learning Σθ or treating it as a ﬁxed hyperparameter (and whether Σθ is learned is itself
+considered a hyperparameter choice that we set experimentally). For the case of non-learned
+Σθ, we use the simpliﬁed loss
+Lsimple(θ) = Ex0,ϵ∼N(0,I),t∼U({1,...,T})
+ϵθ(√¯αtx0 +
+1 −¯αtϵ, t) −ϵ
+which is a weighted form of the ELBO that resembles denoising score matching over multiple
+noise scales . For the case of learned Σθ, we employ
+a hybrid loss implemented using the expression
+Lhybrid(θ) = Lsimple(θ) + λLvb(θ)
+where Lvb = Ex0[Lθ(x0)] and a stop-gradient is applied to the ϵθ term inside Lθ. Optimizing
+this hybrid loss has the eﬀect of simultaneously learning µθ using Lsimple and learning Σθ
+using the ELBO.
+2.2 Conditional Diﬀusion Models
+In the conditional generation setting, the data x0 has an associated conditioning signal c, for
+example a label in the case of class-conditional generation, or a low resolution image in the
+case of super-resolution . The goal is then
+Cascaded Diffusion Models
+to learn a conditional model pθ(x0|c). To do so, we modify the diﬀusion model to include c
+as input to the reverse process:
+pθ(x0:T |c) = p(xT )
+pθ(xt−1|xt, c),
+pθ(xt−1|xt, c) = N(xt−1; µθ(xt, t, c), Σθ(xt, t, c))
+Lθ(x0|c) = Eq
+DKL(q(xt−1|xt, x0) ∥pθ(xt−1|xt, c)) −log pθ(x0|x1, c)
+The data and conditioning signal (x0, c) are sampled jointly from the data distribution,
+now called q(x0, c), and the forward process q(x1:T |x0) remains unchanged.
+modiﬁcation that needs to be made is to inject c as a extra input to the neural network
+function approximators: instead of µθ(xt, t) we now have µθ(xt, t, c), and likewise for Σθ.
+The particular architectural choices for injecting these extra inputs depends on the type of
+the conditioning c, as described next.
+2.3 Architectures
+The current best architectures for image diﬀusion models are U-Nets , which are a natural choice to map corrupted data xt to reverse process
+parameters (µθ, Σθ) that have the same spatial dimensions as xt. Scalar conditioning, such
+as a class label or a diﬀusion timestep t, is provided by adding embeddings into intermediate
+layers of the network . Lower resolution image conditioning is provided
+by channelwise concatenation of the low resolution image, processed by bilinear or bicubic
+upsampling to the desired resolution, with the reverse process input xt, as in the SR3 and Improved DDPM models. See Fig. 3 for an
+illustration of the SR3-based architecture that we use in this work.
+3. Conditioning Augmentation in Cascaded Diﬀusion Models
+Suppose x0 is high resolution data and z0 is its low resolution counterpart. We use the
+term cascading pipeline to refer to a sequence of generative models. At the low resolution
+we have a diﬀusion model pθ(z0), and at the high resolution, a super-resolution diﬀusion
+model pθ(x0|z0). The cascading pipeline forms a latent variable model for high resolution
+data; i.e., pθ(x0) =
+pθ(x0|z0)pθ(z0) dz0. It is straightforward to extend this to more than
+two resolutions. It is also straightforward to condition an entire cascading pipeline on class
+information or other conditioning information c: the models take on the form pθ(z0|c) and
+pθ(x0|z0, c), each using the conditioning mechanism described in Section 2.2. An example
+cascading pipeline is depicted in Fig. 4.
+Cascading pipelines have been shown to be useful with other generative model families . A major beneﬁt to training a
+cascading pipeline over training a standard model at the highest resolution is that most of
+the modeling capacity can be dedicated to low resolutions, which empirically are the most
+important for sample quality, and training and sampling at low resolutions tends to be the
+most computationally eﬃcient. In addition, cascading allows the individual models to be
+trained independently, and architecture choices can be tuned at each speciﬁc resolution for
+the best performance of the entire pipeline.
+Ho, Saharia, Chan, Fleet, Norouzi and Salimans
+K )2, 2 × MK
+2 )2, 2 × M2
+N 2, 2 × M1
+Figure 3: The U-Net architecture used in each model of a CDM pipeline. The ﬁrst model is a
+class-conditional diﬀusion model that receives the noisy image xt and the class label
+y and as input. (The class label y and timestep t are injected into each block as an
+embedding, not depicted here). The remaining models in the pipeline are class-conditional
+super-resolution models that receive xt, y, and an additional upsampled low-resolution
+image z as input. The downsampling/upsampling blocks adjust the image input resolution
+N × N by a factor of 2 through each of the K blocks. The channel count at each block
+is speciﬁed using channel multipliers M1, M2, ..., MK, and the upsampling pass has
+concatenation skip connections to the downsampling pass.
+Class ID = 933
+“Cheeseburger”
+Conditional
+Conditional
+Conditional
+Figure 4: Detailed CDM pipeline for generation of class conditional 256×256 images. The ﬁrst
+model is a class-conditional diﬀusion model, and it is followed by a sequence of two
+class-conditional super-resolution diﬀusion models. Each model has a U-Net architecture
+as depicted in Fig. 3.
+The most eﬀective technique we found to improve the sample quality of cascading pipelines
+is to train each super-resolution model using data augmentation on its low resolution input.
+We refer to this general technique as conditioning augmentation. At a high level, for some
+super-resolution model pθ(x0|z) from a low resolution image z to a high resolution image x0,
+conditioning augmentation refers to applying some form of data augmentation to z. This
+augmentation can take any form, but what we found most eﬀective at low resolutions is
+adding Gaussian noise (forward process noise), and for high resolutions, randomly applying
+Gaussian blur to z. In some cases, we found it more practical to train super-resolution
+models amortized over the strength of conditioning augmentation and pick the best strength
+in a post-training hyperparameter search for optimal sample quality. Details on conditioning
+Cascaded Diffusion Models
+augmentation and its realization during training and sampling are given in the following
+3.1 Blurring Augmentation
+One simple instantiation of conditioning augmentation is augmentation of z by blurring.
+We found this to be most eﬀective for upsampling to images with resolution 128×128 and
+256×256. More speciﬁcally, we apply a Gaussian ﬁlter of size k and sigma σ to obtain zb.
+We use a ﬁlter size of k = (3, 3) and randomly sample σ from a ﬁxed range during training.
+We perform hyper-parameter search to ﬁnd the range for σ. During training, we apply this
+blurring augmentation to 50% of the examples. During inference, no augmentation is applied
+to low resolution inputs. We explored applying diﬀerent amounts of blurring augmentations
+during inference, but did not ﬁnd it helpful in initial experiments.
+3.2 Truncated Conditioning Augmentation
+Here we describe what we call truncated conditioning augmentation, a form of conditioning
+augmentation that requires a simple modiﬁcation to the training and architecture of the
+super-resolution models, but no change to the low resolution model at the initial stage of
+the cascade. We found this method to be most useful at resolutions smaller than 128×128.
+Normally, generating a high resolution sample x0 involves ﬁrst generating z0 from the low
+resolution model pθ(z0), then feeding that result into the super-resolution model pθ(x0|z0).
+In other words, generating a high resolution sample is performed using ancestral sampling
+from the latent variable model
+pθ(x0|z0)pθ(z0) dz0 =
+pθ(x0|z0)pθ(z0:T ) dz0:T .
+(For simplicity, we have assumed that the low resolution and super-resolution models both use
+the same number of timesteps T.) Truncated conditioning augmentation refers to truncating
+the low resolution reverse process to stop at timestep s > 0, instead of 0; i.e.,
+pθ(x0|zs)pθ(zs) dzs =
+pθ(x0|zs)pθ(zs:T ) dzs:T .
+The base model is now pθ(zs) =
+pθ(zs:T )dzs+1:T , and the super-resolution model is now
+pθ(x0|zs) =
+t=1 pθ(xt−1|xt, zs)dx1:T , where
+pθ(xt−1|xt, zs) = N(xt−1; µθ(xt, t, zs, s), Σθ(xt, t, zs, s)).
+The reason truncating the low resolution reverse process is a form of data augmentation is
+that the training procedure for pθ(x0|zs) involves conditioning on noisy zs ∼q(zs|z0), which,
+up to scaling, is z0 augmented with Gaussian noise. To be more precise about training a
+cascading pipeline with truncated conditioning augmentation, let us examine the ELBO for
+θ(x0) in Eq. (2). We can treat ps
+θ(x0) as a VAE with a diﬀusion model prior, a diﬀusion
+model decoder, and the approximate posterior
+q(x1:T , z1:T |x0, z0) =
+q(xt|xt−1)q(zt|zt−1),
+Ho, Saharia, Chan, Fleet, Norouzi and Salimans
+which runs forward processes independently on a low and high resolution pair. The ELBO is
+DKL(q(zt−1|zt, z0) ∥pθ(zt−1|zt)) −log pθ(x0|zs)
+where LT (z0) = DKL(q(zT |z0) ∥p(zT )). Note that the sum over t is truncated at s, and the
+decoder pθ(x0|zs) is the super-resolution model conditioned on zs. The decoder itself has an
+ELBO of the form −log pθ(x0|zs) ≤Lθ(x0|zs), where
+Lθ(x0|zs) = Eq
+DKL(q(xt−1|xt, x0) ∥pθ(xt−1|xt, zs)) −log pθ(x0|x1, zs)
+Thus we have an ELBO for the combined model
+DKL(q(zt−1|zt, z0) ∥pθ(zt−1|zt)) + Lθ(x0|zs)
+It is apparent that optimizing Eq. (3) trains the low and high resolution models separately.
+For a ﬁxed value of s, the low resolution process is trained up to the truncation timestep s,
+and the super-resolution model is trained on a conditioning signal corrupted using the low
+resolution forward process stopped at timestep s.
+In practice, since we pursue sample quality as our main objective, we do not use these
+ELBO expressions directly when training models with learnable reverse process variances.
+Rather, we train on the “simple” unweighted loss or the hybrid loss described in Section 2,
+and the particular loss we use is considered a hyperparameter reported in Appendix B.
+We would like to search over multiple values of s to select for the best sample quality. To
+make this search practical, we avoid retraining models by amortizing a single super-resolution
+model over uniform random s at training time. Because each possible truncation time
+corresponds to a distinct super-resolution task, the super-resolution model for µθ and Σθ
+must take zs as input along with s, and this can be accomplished using a single network
+with an extra time embedding input for s. We leave the low resolution model training
+unchanged, because the standard diﬀusion training procedure already trains with random s.
+The complete training procedure for a two-stage cascading pipeline is listed in Algorithm 1.
+3.3 Non-truncated Conditioning Augmentation
+Another form of conditioning augmentation, which we call non-truncated conditioning augmentation, uses the same model modiﬁcations and training procedure as truncated conditioning
+augmentation (Section 3.2). The only diﬀerence is at sampling time. Instead of truncating the
+low resolution reverse process, in non-truncated conditioning augmentation we always sample
+z0 using the full, non-truncated low resolution reverse process; then we corrupt z0 using the
+forward process into z′
+s ∼q(zs|z0) and feed the corrupted z′
+s into the super-resolution model.
+The main advantage of non-truncated conditioning augmentation over truncated conditioning augmentation is a practical one during the search phase over s. In the case of
+truncated augmentation, if we want to run the super-resolution model over all s in parallel,
+we must store all low resolution samples zs for all values of s considered. In the case of
+Cascaded Diffusion Models
+Algorithm 1 Training a two-stage CDM with Gaussian conditioning augmentation
+▷Train base model
+(z0, c) ∼p(z, c)
+▷Sample low-resolution image and label
+t ∼U({1, . . . , T})
+ϵ ∼N(0, I)
+zt = √¯αtz0 + √1 −¯αtϵ
+θ ←θ −η∇θ ∥ϵθ(zt, t, c) −ϵ∥2
+▷Simple loss (can be replaced with a hybrid loss)
+7: until converged
+▷Train super-resolution model (in parallel with the base model)
+(x0, z0, c) ∼p(x, z, c)
+▷Sample low- and high-resolution images and label
+s, t ∼U({1, . . . , T})
+ϵz, ϵx ∼N(0, I)
+▷Note: ϵz, ϵx should have the same shapes as z0, x0, respectively
+zt = √¯αsz0 + √1 −¯αsϵz
+▷Apply Gaussian conditioning augmentation
+xt = √¯αtx0 + √1 −¯αtϵx
+θ ←θ −η∇θ ∥ϵθ(xt, t, zs, s, c) −ϵx∥2
+15: until converged
+Algorithm 2 Sampling from a two-stage CDM with Gaussian conditioning augmentation
+Require: c: class label
+Require: s: conditioning augmentation truncation time
+1: zT ∼N(0, I)
+2: if using truncated conditioning augmentation then
+for t = T, . . . , s + 1 do
+zt−1 ∼pθ(zt−1|zt, c)
+for t = T, . . . , 1 do
+zt−1 ∼pθ(zt−1|zt, c)
+zs ∼q(zs|z0)
+▷Overwrite previously sampled value of zs
+11: end if
+12: xT ∼N(0, I)
+13: for t = T, . . . , 1 do
+xt−1 ∼pθ(xt−1|xt, zs, c)
+15: end for
+16: return x0
+non-truncated augmentation, we need to store the low resolution samples just once, since
+sampling z′
+s ∼q(zs|z0) is computationally inexpensive. These sampling procedures are listed
+in Algorithm 2.
+Truncated and non-truncated conditioning augmentation should perform similarly because zs and z′
+s should have similar marginal distributions if the low resolution model is
+trained well enough. Indeed, in Section 4.3, we empirically ﬁnd that sample quality metrics
+are similar for both truncated and non-truncated conditioning augmentation.
+Ho, Saharia, Chan, Fleet, Norouzi and Salimans
+Figure 5: Classwise Synthetic 256×256 ImageNet images. Each row represents a speciﬁc
+ImageNet class. Classes from top to bottom - Flamingo (130), White Wolf (270),
+Tiger (292), Monarch Butterﬂy (323), Zebra (340) and Dome (538).
+Cascaded Diffusion Models
+Figure 6: Classwise Synthetic 256×256 ImageNet images. Each row represents a speciﬁc
+ImageNet class. Classes from top to bottom - Greenhouse (580), Model T (661),
+Streetcar (829), Comic Book (917), Crossword Puzzle (918), Cheeseburger (933).
+Ho, Saharia, Chan, Fleet, Norouzi and Salimans
+4. Experiments
+We designed experiments to improve the sample quality metrics of cascaded diﬀusion models
+on class-conditional ImageNet generation. Our cascading pipelines consist of class-conditional
+diﬀusion models at all resolutions, so class information is injected at all resolutions: see Fig. 4.
+Our ﬁnal ImageNet results are described in Section 4.1.
+To give insight into our cascading pipelines, we begin with improvements on a baseline
+non-cascaded model at the 64×64 resolution (Section 4.2), then we show that cascading up
+to 64×64 improves upon our best non-cascaded 64×64 model, but only in conjunction with
+conditioning augmentation. We also show that truncated and non-truncated conditioning
+augmentation perform equally well (Section 4.3), and we study random Gaussian blur augmentation to train super-resolution models to resolutions of 128×128 and 256×256 (Section 4.4).
+Finally, we verify that conditioning augmentation is also eﬀective on the LSUN dataset and therefore is not speciﬁc to ImageNet (Section 4.5).
+We cropped and resized the ImageNet dataset in the same
+manner as BigGAN . We report Inception scores using the standard
+practice of generating 50k samples and calculating the mean and standard deviation over 10
+splits . Generally, throughout our experiments, we selected models and
+performed early stopping based on FID score calculated over 10k samples, but all reported
+FID scores are calculated over 50k samples for comparison with other work . The FID scores we used for model selection and reporting model performance are
+calculated against training set statistics according to common practice, but since this can be
+seen as overﬁtting on the performance metric, we additionally report model performance
+using FID scores calculated against validation set statistics. We also report results on
+Classiﬁcation Accuracy Score (CAS), which was proposed by Ravuri and Vinyals due
+to their ﬁndings that non-GAN models may score poorly on FID and IS despite generating
+visually appealing samples and that FID and IS are not correlated (sometimes anti-correlated)
+with performance on downstream tasks.
+4.1 Main Cascading Pipeline Results
+Table 1a reports the main results on the cascaded diﬀusion model (CDM ), for the 64×64,
+128×128, and 256×256 ImageNet dataset resolutions, along with baselines. CDM outperforms
+BigGAN-deep in terms of FID score on the image resolutions considered, but GANs perform
+better in terms of Inception score when their truncation parameter is optimized for Inception
+score . We also outperform concurrently released diﬀusion models that
+do not use classiﬁer guidance to boost sample quality scores .
+See Fig. 8 for a qualitative assessment of sample quality and diversity compared to VQ-VAE-
+2 and BigGAN-deep , and see Figs. 5 and 6 for
+examples of generated images.
+Table 1b reports the results on Classiﬁcation Accuracy Score (CAS) for our models at the 128×128 and 256×256 resolutions. We ﬁnd that CDM outperforms
+VQ-VAE-2 and BigGAN-deep at both resolutions by a signiﬁcant margin on the CAS metric,
+suggesting better potential performance on downstream tasks. Figure 7 compares class-wise
+classiﬁcation accuracy scores between classiﬁers trained on real training data, and CDM
+samples. The CDM classiﬁer outperforms real data on 96 classes compared to 6 and 31
+Cascaded Diffusion Models
+classes by BigGAN-deep and VQ-VAE-2 respectively. We also show samples from classes
+with best and worst accuracy scores in Appendix Figure 11 and 12.
+Our cascading pipelines are structured as a 32×32 base model, a 32×32→64×64 superresolution model, followed by 64×64→128×128 or 64×64→256×256 super-resolution models.
+Models at 32×32 and 64×64 resolutions use 4000 diﬀusion timesteps and architectures similar
+to DDPM and Improved DDPM . Models
+at 128×128 and 256×256 resolutions use 100 sampling steps, determined by post-training
+hyperparameter search (Section 4.4), and they use architectures similar to SR3 . All base resolution and super-resolution models are conditioned on class labels.
+See Appendix B for details.
+Classiﬁcation Accuracy
+Real Training Data
+CDM Samples
+Figure 7: Classwise Classiﬁcation Accuracy Score comparison between real data (blue) and
+generated data (red) at the 256×256 resolution. Accompanies Table 1b.
+4.2 Baseline Model Improvements
+To set a strong baseline for class-conditional ImageNet generation at the 64×64 resolution,
+we reproduced and improved upon a 4000 timestep non-cascaded 64×64 class-conditional
+diﬀusion model from Improved DDPM . Our reimplementation
+used dropout and was trained longer than reported by Nichol and Dhariwal; we found that
+adding dropout generally slowed down convergence of FID and Inception scores, but improved
+their best values over the course of a longer training period. We further improved the training
+set FID score and Inception score by adding noise to the trained model’s samples using the
+forward process to the 2000 timestep point, then restarting the reverse process from that
+point. See Table 2a for the resulting sample quality metrics.
+Ho, Saharia, Chan, Fleet, Norouzi and Salimans
+vs validation
+32×32 resolution
+CDM (ours)
+26.01 ± 0.59
+64×64 resolution
+BigGAN-deep, by 
+Improved DDPM 
+ADM 
+CDM (ours)
+67.95 ± 1.97
+128×128 resolution
+BigGAN-deep 
+BigGAN-deep, max IS 
+LOGAN 
+ADM 
+CDM (ours)
+128.80 ± 2.51
+256×256 resolution
+BigGAN-deep 
+BigGAN-deep, max IS 
+VQ-VAE-2 
+Improved DDPM 
+SR3 
+ADM 
+ADM+upsampling 
+CDM (ours)
+158.71 ± 2.26
+(a) Class-conditional ImageNet sample quality results for classiﬁer guidance-free methods
+Top-1 Accuracy
+Top-5 Accuracy
+128×128 resolution
+BigGAN-deep 
+HAM 
+CDM (ours)
+256×256 resolution
+BigGAN-deep 
+VQ-VAE-2 
+CDM (ours)
+(b) Classiﬁcation Accuracy Score (CAS) results
+Table 1: Main results. Numbers are bolded only when at least two are available for comparison. CAS for real data and other models are from Ravuri and Vinyals .
+Cascaded Diffusion Models
+CDM (ours)
+BigGAN-deep
+Figure 8: Comparing the quality and diversity of model samples in selected 256×256 ImageNet classes {Tench(0), Goldﬁsh(1) and Ostrich(9)}. VQVAE-2 and BigGAN
+samples are taken from Razavi et al. .
+Ho, Saharia, Chan, Fleet, Norouzi and Salimans
+vs validation
+Improved DDPM 
+Our reimplementation
+49.81 ± 0.65
++ more sampling steps
+52.72 ± 1.15
+(a) Improvements to a non-cascaded baseline
+Conditioning
+vs validation
+No cascading
+52.72 ± 1.15
+16×16→64×64 cascading
+35.59 ± 1.19
+44.72 ± 1.12
+54.47 ± 1.05
+(b) Small-scale ablation comparing no cascading to 16×16→64×64 cascading
+Table 2: 64×64 ImageNet sample quality: ablations.
+4.3 Conditioning Augmentation Experiments up to 64×64
+Building on our reimplementation in Section 4.2, we verify in a small scale experiment that
+cascading improves sample quality at the 64×64 resolution. We train a two-stage cascading
+pipeline that comprises a 16×16 base model and a 16×16→64×64 super-resolution model.
+The super-resolution model architecture is identical to the best 64×64 non-cascaded baseline
+model in Section 4.2, except for the trivial modiﬁcation of adding in the low resolution image
+conditioning information by channelwise concatenation at the input (see Section 2).
+See Table 2b and Fig. 9 for the results of this 16×16→64×64 cascading pipeline. Interestingly, we ﬁnd that without conditioning augmentation, the cascading pipeline attains lower
+sample quality than the non-cascaded baseline 64×64 model; the FID score, for example,
+degrades from 2.35 to 6.02. With suﬃcient conditioning augmentation, however, the sample
+quality of the cascading pipeline becomes better than the non-cascaded baseline. We train
+two super-resolution models with non-truncated conditioning augmentation, one at truncation time s = 101 and another at s = 1001 (we could have amortized both into a single
+model, but we chose not to do so in this experiment to prevent potential model capacity
+issues from confounding the results). The ﬁrst model achieves better sample quality than
+the non-augmented model but is still worse than the non-cascaded baseline. The second
+model achieves a FID score of 2.13, outperforming the non-cascaded baseline. Conditioning
+augmentation is therefore crucial to improve sample quality in this particular cascading
+To further improve sample quality at the 64×64 resolution, we found it helpful to increase
+model sizes and to switch to a cascading pipeline starting with a 32×32 base resolution
+model. We train a 32×32 base model applying random left-right ﬂips, which we found to
+help 32×32 scores at the expense of longer training times. Training without random ﬂips, the
+Cascaded Diffusion Models
+(a) 16×16 base
+(b) 16×16→64×64 super-resolution, s = 0
+(c) 16×16→64×64 super-resolution, s = 101
+(d) 16×16→64×64 super-resolution, s = 1001
+Figure 9: Generated images for varying amounts of conditioning augmentation (nontruncated) in a small-scale 16×16→64×64 pipeline for ablation purposes. Accompanies Table 2b.
+Ho, Saharia, Chan, Fleet, Norouzi and Salimans
+best 32×32 resolution FID score is 1.25 at 300k training steps, while training with random
+ﬂips it is 1.11 at 700k training steps. The 32×32→64×64 super-resolution model is now
+amortized over the truncation time s by providing s as an extra time embedding input to
+the network (Section 2), allowing us to perform a more ﬁne grained search over s without
+retraining the model.
+Table 3a displays the resulting sample quality scores for both truncated and non-truncated
+augmentation. The sample quality metrics improve and then degrade non-monotonically
+as the truncation time is increased. This indicates that moderate amounts of conditioning
+augmentation are beneﬁcial to sample quality of the cascading pipeline, but too much
+conditioning augmentation causes the super-resolution model to behave as a non-conditioned
+model unable to beneﬁt from cascading. For comparison, Table 3b shows sample quality when
+the super-resolution model is conditioned on ground truth data instead of generated data.
+Here, sample quality monotonically degrades as truncation time is increased. Conditioning
+augmentation is therefore useful precisely when conditioning on generated samples, so as a
+technique it is uniquely suited to cascading pipelines.
+Based on these ﬁndings on non-monotonicity of sample quality with respect to truncation
+time, we conclude that conditioning augmentation works because it alleviates compounding
+error from a train-test mismatch for the super-resolution model. This occurs when lowresolution model samples are out of distribution compared to the ground truth data on
+which the super-resolution model is trained. A suﬃcient amount of Gaussian conditioning
+augmentation prevents the super-resolution model from attempting to upsample erroneous,
+out-of-distribution details in the low resolution generated samples. In contrast, sample
+quality degrades monotonically with respect to truncation time when conditioning the
+super-resolution model on ground truth data, because there is no such train-test mismatch.
+Table 3a additionally shows that truncated and non-truncated conditioning augmentation
+are approximately equally eﬀective at improving sample quality of the cascading pipeline,
+albeit at diﬀerent values of the truncation time parameter. Thus we generally recommend
+non-truncated augmentation due to its practical beneﬁts described in Section 3.3.
+4.4 Experiments at 128×128 and 256×256
+While we found Gaussian noise augmentation to be a key ingredient to boost the performance
+of our cascaded models at low resolutions, our initial experiments with similar augmentations
+for 128×128 and 256×256 upsampling yielded negative results. Hence, we explore Gaussian
+blurring augmentation for these resolutions. As mentioned in Section 3.1, we apply the
+blurring augmentation 50% of the time during training, and use no blurring during inference.
+We explored other settings (e.g. applying blurring to all training examples, and using varying
+amounts of blurring during inference), but found this to be most eﬀective in our initial
+experiments.
+Table 4a shows the results of applying Gaussian blur augmentation to the 64×64 →
+256×256 super-resolution model. While any amount of blurring helps improve the scores
+of the 256×256 samples over the baseline model with no blur, we found that sampling
+σ ∼U(0.4, 0.6) gives the best results. Table 4b shows further improvements from class
+conditioning, large batch training, and random ﬂip augmentation for the super-resolution
+model. While we ﬁnd class conditioning helpful for upsampling at low resolution settings, it is
+Cascaded Diffusion Models
+Conditioning
+vs validation
+No conditioning augmentation (baseline)
+61.34 ± 1.58
+Truncated conditioning augmentation
+66.76 ± 1.76
+67.95 ± 1.97
+68.48 ± 1.77
+67.95 ± 1.51
+67.20 ± 1.94
+67.09 ± 1.67
+Non-truncated conditioning augmentation
+66.21 ± 1.51
+67.59 ± 1.85
+67.48 ± 1.31
+66.51 ± 1.59
+66.28 ± 1.49
+65.59 ± 0.86
+(a) Base model for low resolution conditioning
+Conditioning
+vs validation
+Ground truth training data
+74.84 ± 1.43
+71.79 ± 0.89
+70.68 ± 1.26
+69.93 ± 1.40
+69.03 ± 1.26
+67.92 ± 1.65
+66.7 ± 1.21
+Ground truth validation data
+64.33 ± 1.24
+63.17 ± 1.19
+62.65 ± 0.76
+62.21 ± 0.94
+61.53 ± 1.39
+60.58 ± 0.93
+60.02 ± 0.84
+(b) Ground truth for low resolution conditioning
+Table 3: 64×64 ImageNet sample quality: large scale experiment comparing truncated
+and non-truncated conditioning augmentation for 32×32→64×64 cascading, using
+amortized truncation time conditioning.
+Ho, Saharia, Chan, Fleet, Norouzi and Salimans
+Inference Steps
+FID vs Train
+FID vs Validation
+Figure 10: FID on 256×256 images vs inference steps in 64×64 →256×256 super-resolution.
+vs validation
+σ = 0 (no blur)
+134.53 ± 2.97
+σ ∼U(0.4, 0.6)
+142.71 ± 2.83
+σ ∼U(0.4, 0.8)
+136.57 ± 4.34
+σ ∼U(0.4, 1.0)
+141.40 ± 4.34
+(a) Gaussian blur noise in conditioning
+vs validation
+142.71 ± 2.83
++ Class Conditioning
+152.17 ± 2.29
++ Large Batch Training
+157.84 ± 2.60
+158.71 ± 2.26
+(b) Further improvements on super-resolution
+Table 4: 256×256 ImageNet sample quality: experiments on 64×64 →256×256 superresolution.
+Cascaded Diffusion Models
+interesting that it still gives a huge boost to the upsampling performance at high resolutions
+even when the low resolution inputs at 64×64 can be suﬃciently informative. We also
+found increasing the training batch size from 256 to 1024 further improved performance by a
+signiﬁcant margin. We also obtain marginal improvements by training the super-resolution
+model on randomly ﬂipped data.
+Since the sampling cost increases quadratically with the target image resolution, we
+attempt to minimize the number of denoising iterations for our 64×64 →256×256 and
+64×64 →128×128 super-resolution models. To this end, we train these super-resolution
+models with continuous noise conditioning, like Saharia et al. and Chen et al. ,
+and tune the noise schedule for a given number of steps during inference. This tuning is
+relatively inexpensive as we do not need to retrain the models. We report all results using
+100 inference steps for these models. Figure 10 shows FID vs number of inference steps
+for our 64×64 →256×256 model. The FID score deteriorates marginally even when using
+just 4 inference steps. Interestingly, we do not observe any concrete improvement in FID by
+increasing the number of inference steps from 100 to 1000.
+4.5 Experiments on LSUN
+While the main results of this work are on class-conditional ImageNet generation, here we
+study the eﬀectiveness of non-truncated conditioning augmentation for a 64×64→128×128
+cascading pipeline on the LSUN Bedroom and Church datasets in order to
+verify that conditioning augmentation is not an ImageNet-speciﬁc method. LSUN Bedroom
+and Church are two separate unconditional datasets that do not have any class labels,
+so our study here additionally veriﬁes the eﬀectiveness of conditioning augmentation for
+unconditional generation.
+Table 5 displays our LSUN sample quality results, which conﬁrm that a nonzero amount
+of conditioning augmentation is beneﬁcial to sample quality. (The relatively large FID
+scores between generated examples and the validation sets are explained by the fact that
+the LSUN Church and Bedroom validation sets are extremely small, consisting of only 300
+examples each.) We observe a similar eﬀect as our ImageNet results in Table 3b: because the
+super-resolution model is conditioned on base model samples, the sample quality improves
+then degrades non-monotonically as the truncation time s is increased. See Appendix A for
+examples of images generated by our LSUN models.
+5. Related Work
+One way to formulate cascaded diﬀusion models is to modify the original diﬀusion formalism
+of a forward process q(x0:T ) at single resolution so that the transition q(xt|xt−1) performs
+downsampling at certain intermediate timesteps, for example at t ∈S := {T/4, 2T/4, 3T/4}.
+The reverse process would then be required to perform upsampling at those timesteps, similar
+to our cascaded models here. However, there is no guarantee that the reverse transitions
+at the timesteps in S are conditional Gaussian, unlike the guarantee for reverse transitions
+at other timesteps for suﬃciently slow diﬀusion. By contrast, our cascaded diﬀusion model
+construction dedicates entire conditional diﬀusion models for these upsampling steps, so it is
+speciﬁed more ﬂexibly.
+Ho, Saharia, Chan, Fleet, Norouzi and Salimans
+Conditioning
+vs validation
+LSUN Bedroom
+LSUN Church
+Table 5: 128×128 LSUN sample quality: non-truncated conditioning augmentation for
+a 64×64→128×128 cascading pipeline using the base model for low resolution
+conditioning.
+Recent interest in diﬀusion models started with work connecting diﬀusion models to denoising score matching over multiple noise scales . There have been a number of improvements and alternatives
+proposed to the diﬀusion framework, for example generalization to continuous time , deterministic sampling , adversarial training , and others . For simplicity, we base our models on
+DDPM with modiﬁcations from Improved DDPM to stay close to the original diﬀusion framework.
+Cascading pipelines have been investigated in work on VQ-VAEs and autoregressive models .
+Cascading pipelines have also been investigated for diﬀusion models, such as SR3 , Improved DDPM , and concurrently in ADM . Our work here focuses on improving cascaded diﬀusion models for
+ImageNet generation and is distinguished by the extensive study on conditioning augmentation and deeper cascading pipelines. Our conditioning augmentation work also resembles
+scheduled sampling in autoregressive sequence generation , where noise
+is used to alleviate the mismatch between train and inference conditions.
+Concurrent work showed that diﬀusion models are capable
+of generating high quality ImageNet samples using an improved architecture, named ADM,
+and a classiﬁer guidance technique in which a class-conditional diﬀusion model sampler is
+modiﬁed to simultaneously take gradient steps to maximize the score of an extra trained image
+Cascaded Diffusion Models
+classiﬁer. By contrast, our work focuses solely on improving sample quality by cascading, so
+we avoid introducing extra model elements such as the image classiﬁer. We are interested in
+avoiding classiﬁer guidance because the FID and Inception score sample quality metrics that
+we use to evaluate our models are themselves computed on activations of an image classiﬁer
+trained on ImageNet, and therefore classiﬁer guidance runs the risk of cheating these metrics.
+Avoiding classiﬁer guidance comes at the expense of using thousands of diﬀusion timesteps
+in our low resolution models, where ADM uses hundreds. ADM with classiﬁer guidance
+outperforms our models in terms of FID and Inception scores, while our models outperform
+ADM without classiﬁer guidance as reported by Dhariwal and Nichol. Our work is a showcase
+of the eﬀectiveness of cascading alone in a pure generative model, and since classiﬁer guidance
+and cascading complement each other as techniques to improve sample quality and can be
+applied together, we expect classiﬁer guidance would improve our results too.
+6. Conclusion
+We have shown that cascaded diﬀusion models are capable of outperforming state-of-the-art
+generative models on the ImageNet class-conditional generation benchmark when paired
+with conditioning augmentation, our technique of introducing data augmentation into the
+conditioning information of super-resolution models. Our models outperform BigGAN-deep
+and VQ-VAE-2 as measured by FID score and classiﬁcation accuracy score. We found that
+conditioning augmentation helps sample quality because it combats compounding error in
+cascading pipelines due to train-test mismatch in super-resolution models, and we proposed
+practical methods to train and test models amortized over varying levels of conditioning
+augmentation.
+Although there could be negative impact of our work in the form of malicious uses of
+image generation, our work has the potential to improve beneﬁcial downstream applications
+such as data compression while advancing the state of knowledge in fundamental machine
+learning problems. We see our results as a conceptual study of the image synthesis capabilities
+of diﬀusion models in their original form with minimal extra techniques, and we hope our
+work serves as inspiration for future advances in the capabilities of diﬀusion models.
+Acknowledgments
+We thank Jascha Sohl-Dickstein, Douglas Eck and the Google Brain team for feedback,
+research discussions and technical assistance.
+Ho, Saharia, Chan, Fleet, Norouzi and Salimans
+Appendix A. Samples
+Figure 11: Samples from classes with best relative classiﬁcation accuracy score. Each row represents
+a speciﬁc ImageNet class. Classes from top to bottom - Tiger Cat (282), Gong (577),
+Coﬀee Mug (504), Squirrel Monkey (382), Miniature Schnauzer (196) and Corn (987).
+Cascaded Diffusion Models
+Figure 12: Samples from classes with worst relative classiﬁcation accuracy score. Each row represents
+a speciﬁc ImageNet class. Classes from top to bottom - Letter Opener (623), Plate (923),
+Overskirt (689), Tobacco Shop (860), Black-and-tan Coonhound (165) and Bathtub
+Ho, Saharia, Chan, Fleet, Norouzi and Salimans
+Figure 13: Samples from LSUN 128x128: bedroom subset (ﬁrst six rows) and church subset (last
+six rows).
+Cascaded Diffusion Models
+Appendix B. Hyperparameters
+B.1 ImageNet
+Here we give the hyperparameters of the models in our ImageNet cascading pipelines. Each
+model in the pipeline is described by its diﬀusion process, its neural network architecture, and
+its training hyperparameters. Architecture hyperparameters, such as the base channel count
+and the list of channel multipliers per resolution, refer to hyperparameters of the U-Net in
+DDPM and related models . The cosine noise schedule and the hybrid loss method of learning reverse process variances are from Improved DDPM . Some models
+are conditioned on ¯αt for post-training sampler tuning .
+32×32 base model
+• Architecture
+– Base channels: 256
+– Channel multipliers: 1, 2, 3, 4
+– Residual blocks per resolution: 6
+– Attention resolutions: 8, 16
+– Attention heads: 4
+• Training
+– Optimizer: Adam
+– Batch size: 2048
+– Learning rate: 1e-4
+– Steps: 700000
+– Dropout: 0.1
+– EMA: 0.9999
+– Hardware: 256 TPU-v3 cores
+• Diﬀusion
+– Timesteps: 4000
+– Noise schedule: cosine
+– Learned variances: yes
+– Loss: hybrid
+Ho, Saharia, Chan, Fleet, Norouzi and Salimans
+32×32→64×64 super-resolution
+• Architecture
+– Base channels: 256
+– Channel multipliers: 1, 2, 3, 4
+– Residual blocks per resolution: 5
+– Attention resolutions: 8, 16
+– Attention heads: 4
+• Training
+– Optimizer: Adam
+– Batch size: 2048
+– Learning rate: 1e-4
+– Steps: 400000
+– Dropout: 0.1
+– EMA: 0.9999
+– Hardware: 256 TPU-v3 cores
+• Diﬀusion
+– Timesteps: 4000
+– Noise schedule: cosine
+– Learned variances: yes
+– Loss: hybrid
+64×64→128×128 super-resolution
+• Architecture
+– Base channels: 128
+– Channel multipliers: 1, 2, 4, 8, 8
+– Residual blocks per resolution: 3
+– Attention resolutions: 16
+– Attention heads: 1
+• Training
+– Optimizer: Adam
+– Batch size: 1024
+– Learning rate: 1e-4
+– Steps: 500000
+– Dropout: 0.0
+– EMA: 0.9999
+– Hardware: 128 TPU-v3 cores
+• Diﬀusion (Training)
+– Timesteps: 2000
+– Noise schedule: linear
+– Learned variances: no
+– Loss: simple
+– Continuous noise conditioning
+• Diﬀusion (Inference)
+– Timesteps: 100
+– Noise schedule: linear
+Cascaded Diffusion Models
+64×64→256×256 super-resolution
+• Architecture
+– Base channels: 128
+– Channel multipliers: 1, 2, 4, 4, 8, 8
+– Residual blocks per resolution: 3
+– Attention resolutions: 16
+– Attention heads: 1
+• Training
+– Optimizer: Adam
+– Batch size: 1024
+– Learning rate: 1e-4
+– Steps: 500000
+– Dropout: 0.0
+– EMA: 0.9999
+– Hardware: 128 TPU-v3 cores
+• Diﬀusion (Training)
+– Timesteps: 2000
+– Noise schedule: linear
+– Learned variances: no
+– Loss: simple
+– Continuous noise conditioning
+• Diﬀusion (Inference)
+– Timesteps: 100
+– Noise schedule: linear
+Ho, Saharia, Chan, Fleet, Norouzi and Salimans
+Here we give the hyperparameters of our LSUN Bedroom and Church pipelines. We used
+the same hyperparameters for both datasets.
+64×64 base model
+• Architecture
+– Base channels: 128
+– Channel multipliers: 1, 2, 3, 4
+– Residual blocks per resolution: 3
+– Attention resolutions: 8, 16, 32
+– Attention heads dimension: 64
+• Training
+– Optimizer: Adam
+– Batch size: 2048
+– Learning rate: 3e-4
+– Steps: 100000
+– Dropout: 0.1
+– EMA: 0.9999
+– Hardware: 64 TPU-v3 cores
+• Diﬀusion (Training)
+– Noise schedule: cosine
+– Learned variances: no
+– Loss: simple
+– Continuous noise conditioning
+• Diﬀusion (Inference)
+– Timesteps: 256
+– Noise schedule: cosine
+64×64→128×128 super-resolution
+• Architecture
+– Base channels: 64
+– Channel multipliers: 1, 2, 4, 6, 8
+– Residual blocks per resolution: 3
+– Attention resolutions: 8, 16, 32
+– Attention heads dimension: 64
+• Training
+– Optimizer: Adam
+– Batch size: 1024
+– Learning rate: 2e-4
+– Steps: 220000
+– Dropout: 0.1
+– EMA: 0.9999
+– Hardware: 64 TPU-v3 cores
+• Diﬀusion (Training)
+– Noise schedule: cosine
+– Learned variances: no
+– Loss: simple
+– Continuous noise conditioning
+• Diﬀusion (Inference)
+– Timesteps: 256
+– Noise schedule: cosine
+Cascaded Diffusion Models

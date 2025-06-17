@@ -1,0 +1,618 @@
+Neural Network Pruning with Residual-Connections and Limited-Data
+Jian-Hao Luo
+Jianxin Wu∗
+National Key Laboratory for Novel Software Technology
+Nanjing University, Nanjing, China
+ , 
+Filter level pruning is an effective method to accelerate
+the inference speed of deep CNN models. Although numerous pruning algorithms have been proposed, there are still
+two open issues. The ﬁrst problem is how to prune residual
+connections. We propose to prune both channels inside and
+outside the residual connections via a KL-divergence based
+criterion. The second issue is pruning with limited data.
+We observe an interesting phenomenon: directly pruning
+on a small dataset is usually worse than ﬁne-tuning a small
+model which is pruned or trained from scratch on the large
+dataset. Knowledge distillation is an effective approach to
+compensate for the weakness of limited data. However, the
+logits of a teacher model may be noisy. In order to avoid
+the inﬂuence of label noise, we propose a label reﬁnement
+approach to solve this problem. Experiments have demonstrated the effectiveness of our method (CURL, Compression Using Residual-connections and Limited-data). CURL
+signiﬁcantly outperforms previous state-of-the-art methods
+on ImageNet. More importantly, when pruning on small
+datasets, CURL achieves comparable or much better performance than ﬁne-tuning a pretrained small model.
+1. Introduction
+Deep neural networks have now become the dominating method in various computer vision ﬁelds, such as image recognition and object detection , and
+we have witnessed a great improvement in model accuracy.
+But, deploying a large CNN model on resource constrained
+devices like mobile phones is still challenging. Due to overparameterization, it is both storage and time consuming to
+run a cumbersome large model on small devices.
+Network pruning is a useful tool to obtain a satisfactory balance between inference speed and model accuracy.
+Among these methods, ﬁlter level pruning aims to remove
+∗This research was partially supported by the National Natural Science
+Foundation of China (61772256, 61921006). J. Wu is the corresponding
+(a) bottleneck
+(b) hourglass
+(c) wallet
+Figure 1. Illustration of residual block pruning with different
+strategies. (a) Bottleneck structure of residual blocks. (b) Only
+prune channels inside the bottleneck, generating an hourglass
+structure. (c) Prune channels both inside and outside the residual
+connection, generating a shape similar to an opened wallet.
+the whole unimportant ﬁlters according to a certain criterion. This strategy will not damage the original model structure and is attracting more and more attention recently.
+Although numerous ﬁlter level pruning algorithms have
+been proposed, there are still several open issues. First,
+pruning residual connections is very difﬁcult. As illustrated
+in Fig. 1, most previous pruning methods only prune ﬁlters inside the residual connection, leaving the number of
+output channels unchanged. With a smaller target model
+(i.e., more ﬁlters pruned), the original bottleneck structure
+will become an hourglass. Obviously, representation ability
+of middle layers inside the hourglass structure is severely
+handicapped. Therefore, pruning channels both inside and
+outside the residual connection is more preferred for accelerating networks. Then, the pruned block is still bottleneck
+or in an opened wallet shape.
+As illustrated in the experiments section, the wallet
+structure has more advantages compared with hourglass: 1)
+it is more accurate thanks to a larger pruning space; 2) it is
+faster even with the same number of FLOPs; 3) it can save
+more storage space because more weights will be pruned.
+The second issue is about pruning models with limited
+data. Most current pruning methods only report their results
+on toy datasets (e.g., MNIST , CIFAR ) or large
+scale datasets (e.g., ImageNet ), ignoring an important
+real application scenario: pruning models on small datasets
+which have few images per category. This is a very common
+ 
+requirement, because we will not apply ImageNet in a real
+application. Directly pruning on a target dataset (which is
+usually small) is necessary.
+In order to get a small model on a target small dataset,
+there are two different ways: 1) compress the network using the large dataset (or using a small network trained from
+scratch on the large dataset), and then ﬁne-tune on the target
+small dataset; 2) directly prune the model without access to
+the large dataset. In many real-world scenarios, the only
+choice is to compress the network using the small dataset
+and ﬁne-tune on the same small dataset.
+But, the reality is that directly pruning on a small dataset
+usually has a signiﬁcantly lower accuracy than ﬁne-tuning
+a small model which is pruned or trained from scratch on
+the large scale dataset.
+This phenomenon widely exists
+in various networks and datasets. For example, as shown
+in ThiNet , ﬁne-tuning a pruned model which is compressed on ImageNet is a better choice when transferring
+to other domains. They found that the accuracy of directly
+pruning on CUB200 is only 66.90%, while ﬁne-tuning
+a pruned ImageNet model can achieve 69.43%. A dilemma
+is that directly pruning on the target dataset is often the case
+in real-world applications, where large datasets are either
+proprietary or too expensive to be used by ordinary users.
+In this paper, we propose CURL, namely Compression
+Using Residual-connections and Limited-data, to address
+both issues. In order to prune the channels outside of the
+residual connection, we show that all the blocks in the same
+stage should be pruned simultaneously due to the shortcut connection. We propose a KL-divergence based criterion to evaluate the importance of these ﬁlters. The channels inside and outside the residual connections will both
+be pruned, leading to a wallet shaped structure. Experiments on ImageNet show that the proposed residual block
+pruning method outperforms the previous state-of-the-art.
+To address the problem caused by the lack of enough training data, we propose to combine knowledge distillation 
+and mixup together and enlarge the training dataset via
+image transformation. We also propose a novel method to
+correct the noise in the logits of the teacher model. All the
+techniques greatly improve the accuracy of directly pruning
+with limited data.
+Our contributions are summarized as follows.
+• We propose a novel way to compress residual blocks.
+We prune not only channels inside the residual branch,
+but also channels of its output activation maps (both
+the identity branch and the residual branch). The resulting wallet-shaped structure shows more advantages
+than previous hourglass-shaped structure.
+• Data augmentation is very effective in model ﬁnetuning with limited data. We show that combining data
+augmentation and knowledge distillation can achieve
+better performance. To avoid the inﬂuence of label
+noise, we propose a label reﬁnement strategy which
+can further improve the accuracy.
+2. Related Work
+Pruning is an effective method to accelerate model inference speed and to reduce model size. Recent developments
+on network pruning can be roughly divided into two categories, non-structured and structured pruning.
+In the early stage, researchers mainly focused on nonstructured pruning. Han et al. proposed a magnitudebased pruning method to remove redundant weights. Connections with small absolute values are regarded as unimportant and are discarded. In order to compensate for the
+unexpected loss, Guo et al. incorporated the splicing operation into network pruning. Once the pruned connections
+are found to be important, they could be recovered at any
+However, the weakness of non-structured pruning is obvious. Due to the cache and memory access issues caused
+by irregular connections, its actual inference speed will be
+adversely affected. Therefore, structured pruning such as
+ﬁlter level pruning is more preferred.
+In ﬁlter level pruning, the whole ﬁlter is discarded if it
+is considered to be unimportant. Importance evaluation criterion plays a crucial role in the success of pruning. Li et
+al. introduced previous magnitude based criterion into
+ﬁlter level pruning and calculated importance scores according to its ℓ1-norm. He et al. proposed to select ﬁlters by a LASSO regression based method and least square
+reconstruction. Luo et al. calculated ﬁlter importance
+based on statistics computed from its next layer.
+al. calculated the geometric median of the ﬁlters within
+one layer to prune ﬁlters with redundant information.
+There are also some explorations without explicitly calculating the importance of each ﬁlter. Liu et al. imposed ℓ1 regularization on the scaling factors of batch normalization layers to select unimportant channels. Huang
+and Wang also introduced scaling factors into the
+model training process. By forcing some of the factors to
+zero, the unimportant ﬁlters will be pruned. Luo et al. 
+designed an efﬁcient channel selection layer to ﬁnd less important ﬁlters in an end-to-end manner. He et al. leveraged reinforcement learning to efﬁciently sample the design space and achieved better compression performance.
+Yu et al. proposed slimmable neural networks, a general method to train a single CNN model executable at different widths. Although this approach is not designed for
+pruning, the output dimensions of residual blocks are reduced. But, except slimmable networks, the pruned models
+of the above ﬁlter pruning methods are all hourglass shaped.
+To sum up, these pruning methods achieve pretty good
+results on toy datasets or large scale datasets and contribute
+64  64  1  1
+64  64  3  3
+256  64  1  1
+connection
+residual block 1
+64  256  1  1
+64  64  3  3
+256  64  1  1
+connection
+residual block 2
+32  64  1  1
+32  32  3  3
+128  32  1  1
+connection
+residual block 1
+32  128  1  1
+32  32  3  3
+128  32  1  1
+connection
+residual block 2
+Figure 2. Illustration of residual block pruning strategy.
+method prunes not only channels inside the residual block (red
+numbers), but also channels of its output (green numbers). The
+ﬁrst two numbers in each rectangle (convolutional layer) represent
+the number of output and input channels in a layer, respectively.
+This ﬁgure is best viewed in color.
+a lot to the development of network pruning. But they all
+ignored the problem of pruning with limited data, and the
+pruned models are hourglass shaped. To the best of our
+knowledge, this is the ﬁrst attempt to solve the problem of
+pruning networks on a small limited dataset.
+3. Our Method
+In this section, we will propose our method, CURL,
+which stands for Compression Using Residual-connections
+and Limited-data. As its name implies, CURL consists of
+two major parts: prune residual-connections and prune with
+limited small-scale data.
+3.1. Prune Residual-Connections
+The ﬁrst step is to evaluate the importance of each ﬁlter,
+and prune away some less important ﬁlters to get a small
+model. We will give a quick recap of residual-connections,
+including its structure and the weakness of current evaluation criterion. Then, our new method will be presented.
+Recap of Residual-Connections
+Fig. 2 illustrates our strategy for residual block pruning.
+The left part shows a typical residual structure of
+ResNet .
+Suppose there are two residual blocks in
+the current stage. Each block consists of three convolutional layers (including the batch normalization layer and
+the ReLU activation layer). Usually, a down-sample layer is
+necessary to process the different activation sizes and channel numbers between two stages.
+Due to the existence of the shortcut connection, the channel numbers of all residual blocks in a stage need to be consistent in order for the sum operations to be valid. Hence,
+pruning residual connection is very difﬁcult. Most previous
+studies only focus on reducing channels inside the residual
+block (as shown in the red numbers of Fig. 2), leaving the
+output dimension unchanged.
+However, there is a great need for residual connection’s
+pruning. Firstly, pruning both inside and outside channels
+is faster than only pruning inside channels during inference,
+even though their FLOPs are the same. Secondly, since the
+activation map of each block is reduced, we can save more
+memory spaces. Last but not least, reducing residual output
+means our pruning space is enlarged. We can achieve higher
+accuracy with the same compression ratio.
+In order to reduce the output dimension, all the blocks in
+the same stage should be pruned simultaneously (as well as
+the down-sample layer). This is not a simple task, which can
+not be ﬁnished with previous method. Most of the previous
+importance evaluation criterion only focus on single layer
+(e.g., the ThiNet method ), and ignore the relation of
+other layers. Hence, we should design a new importance
+criterion that can evaluate multiple ﬁlters simultaneously.
+The Proposed Pruning Method
+Inspired by ThiNet , we propose a new method that can
+evaluate ﬁlter importance globally. The main idea of ThiNet
+is to minimize the reconstruction error of the next layer’s
+output. Similarly, our goal is to minimize the information
+loss of the last layer (i.e., softmax layer).
+Let us take Fig. 2 as an example. The output dimension of residual blocks is 256. Now we want to evaluate
+the importance score of each channel. A natural idea is to
+remove the output channels one by one, and calculate the
+information loss after channel removal. Due to the structure constraint, the output channels of each residual block
+should be removed simultaneously. For example, the ﬁrst
+output channel of block 1, block 2 and the down-sample
+layer should be removed simultaneously in Fig. 2.
+Inspired by network slimming , we will reset the parameters of the BN layers to remove the corresponding ﬁlters. The output channel of each block is calculated by
+yi = γ xi −µB
+where γ, β, µB, σB are the batch-normalization parameters. Since BN is channel independent, we can simply set
+γ = β = 0 and the corresponding output channel will be
+zeroed out. It means the corresponding ﬁlters of each output
+block are removed.
+Then, we will evaluate the performance change before/after channel removal. Hence, we need a proxy dataset.
+Naturally, the proxy dataset could be the training dataset.
+However, using all the training images can be messy and
+time-consuming. We randomly select 256 images from the
+training dataset, and extract the prediction probability (the
+output of the softmax layer) on these 256 images.
+Let p be the output probability of the original network,
+and q be the probability after channel removal. A popular method to compare the similarity of two probability distributions is KL-divergence. We calculate the ﬁlter importance score as
+s = DKL(p||q) =
+If the current ﬁlter is redundant, s will approach 0. Removing this ﬁlter has almost no inﬂuence to the prediction results. Conversely, a larger value of s means the current dimension is more important. Hence, using the KLdivergence to denote the importance score is reasonable. It
+can reﬂect the information loss of removing some ﬁlters.
+This step will be repeated 256 times, resulting in 256 importance scores, one for each channel.
+As for those channels inside the residual block (red numbers of Fig. 2), the process is easier. We only need to erase
+one ﬁlter of the current layer at each step. Finally, ﬁlter
+scores in all layers will be sorted in the ascending order.
+The top k ﬁlters will be removed, leading to a pruned small
+model. In practice, the value of k depends on the available
+computational or storage budget. To prevent any extreme
+issues (e.g., there are only few ﬁlters left in a layer after
+pruning), the smallest compression rate of each layer should
+not be smaller than a threshold (e.g., 0.3).
+The beneﬁts of our pruning method are obvious. First, it
+is a global criterion which can evaluate the impact of all ﬁlters simultaneously. Such kind of global criterion makes
+possible the pruning of residual connections.
+there is no direct correlation between importance score and
+ﬁlter location. In previous magnitude-based methods (e.g.,
+ℓ1-norm of each ﬁlter ), the magnitude of importance
+scores among layers are different. Hence, a ﬁxed compression ratio should be speciﬁed for each layer. However, we
+can achieve an adaptive compression.
+How many ﬁlters
+should be removed entirely depends on the scores.
+3.2. Prune with Limited Data
+The pruned small model is then ﬁne-tuned on the target
+dataset. Fine-tuning with limited small-scale data is challenging. Data-augmentation (e.g., mixup ) plays an important role in this step. As aforementioned, ImageNet pretraining is a crucial augmentation method which achieves
+much higher accuracy than directly pruning on the small
+dataset. The major difference between ImageNet and small
+dataset is the number of training examples. In order to compensate for this gap, we use several image transformation
+(a) the original image
+(b) rotate
+(c) cutout 
+(d) 2 × 2 shufﬂe 
+(e) 3 × 3 shufﬂe 
+(f) 4 × 4 shufﬂe 
+Figure 3. Visualization of the expanded dataset.
+techniques to expand the training dataset and ﬁne-tune the
+pruned small model with knowledge distillation . However, the logits may be noisy (since the teacher model has
+not seen these augmented data). We then propose a label
+reﬁnement method to update these noisy logits.
+Data Expansion
+Since the main difﬁculty of ﬁne-tuning on small dataset is
+caused by limited data, a natural idea is to generate or collect more training images. For example, Chen et al. exploited GAN to generate training samples. However, training the generator network can be a more challenging issue,
+especially for real images with large resolution. Here, we
+adopt a simpler method to expand the training dataset.
+Fig. 3 shows examples of data expansion results. We use
+three different image transformation techniques:
+• Rotate: randomly rotate the original images r degrees,
+where r ∈[0, 360).
+• Cutout : cut out a rectangle patch from the original
+image pixels with random location. The side length of
+rectangle is randomly selected from [0.2, 0.5] times the
+original image size.
+• Shufﬂe : uniformly partition the image into N × N
+sub-regions, and shufﬂe these partitioned local regions.
+We use three different partition sizes, namely 2 × 2,
+3 × 3, 4 × 4.
+Our motivation behind these transformation is that the
+most discriminative information often lies in local image
+patches (e.g., leg color of a bird) for object recognition
+problems. In order to ﬁnd these discriminative regions, the
+network should pay more attention to local patches rather
+than global information. Hence, we can cut out some regions or even shufﬂe the whole image to remove the inﬂuence of global information (i.e., background).
+Label Reﬁnement
+We use knowledge distillation to ﬁne-tune the small
+model. The original large model plays the role of a teacher
+model and the pruned small model is the student model.
+A typical strategy is to train the student model under the
+supervision of soft target (the logits of teacher models) and
+hard target (the groundtruth label). However, because the
+teacher model has not seen the new data, its output (logits)
+may be noisy.
+Inspired by PENCIL and R2-D2 , we can update the noisy logits during model training via SGD. However, updating logits is dangerous. The quality of soft targets can be updated to become worse if the student model is
+not accurate enough. To avoid this situation, we divide the
+whole training process into two steps: ﬁne-tuning on original small dataset with knowledge distillation plus mixup
+and ﬁne-tuning on expanded dataset with label reﬁnement.
+Note that the expanded new data and our proposed reﬁnement method are only used in step 2.
+Step 1: knowledge distillation with mixup. Knowledge distillation and mixup are two widely used
+techniques, which are really helpful for the training with
+limited data. We propose to combine these two techniques
+together. First, a new input is generated via mixup:
+˜x = λxi + (1 −λ)xj,
+˜y = λyi + (1 −λ)yj,
+where (xi, yi) and (xj, yj) are two random examples, λ ∈
+ is drawn from a Beta distribution. The new input ˜x
+is then fed into teacher and student models. Let u denote
+the output logits of the teacher model, and v denote the student’s output. Our total loss is calculated as:
+L = αT 2LKL(p, q) + (1 −α)LCE(q, ˜y),
+where p = softmax(u/T), q = softmax(v/T) are the softmax output under temperature T.
+LKL and LCE denote
+KL-divergence loss and cross-entropy loss, respectively.
+α ∈ controls the balance between losses. With these
+two techniques, the pruned small model can converge into a
+good local minima.
+Step 2: knowledge distillation with label reﬁnement.
+We then ﬁne-tune the small model on our expanded dataset
+and update logits to remove label noises. Fig. 4 illustrates
+the framework of our label reﬁnement process. The soft
+target (i.e., teacher model’s logits) of each image in our expanded dataset will be extracted ﬁrst, and stored in memory.
+Our loss function is designed as:
+L = αT 2LKL(q, p) + (1 −α)LCE(q, y).
+The notations are the same as Eq. (4). Note that mixup is
+not used here. The major difference with knowledge distillation is that we use a reversed KL-divergence loss to encourage the model to pay more attention to label reﬁnement,
+pruned model
+soft-target
+hard-target
+Figure 4. Illustration of label reﬁnement. The soft target (teacher
+model’s logits) will also be updated during model ﬁne-tuning.
+Solid and dashed arrows denote forward and backward propagation, respectively.
+as in . During model ﬁne-tuning, the soft-target will
+also be updated via SGD:
+u ←−u −η · ∇uL ,
+where η is the learning rate for updating u, ∇uL denotes the
+gradient of the loss function L with respected to u which is
+calculated via back-propagation.
+4. Experiments
+In this section, we will evaluate the performance of
+CURL. In order to compare CURL with state-of-the-art
+methods, we ﬁrst test the effectiveness on ImageNet .
+ResNet50 will be pruned on this dataset. Then, more
+results on small-scale datasets will be presented.
+method achieves better or comparable performance on these
+datasets than small models with ImageNet pretraining. Finally, we will end this section with ablation studies. All the
+experiments were conducted with PyTorch .
+4.1. Pruning ResNet50 on ImageNet
+Implementation details. We follow the previous training settings. For a fair comparison, all the ﬁne-tuning techniques introduced in Section 3.2 are not used here.
+other words, we do not use mixup, knowledge distillation or
+dataset expansion techniques in the ImageNet experiment.
+Once the ﬁlter importance has been evaluated by CURL, we
+will remove all unimportant ﬁlters of all layers. The pruned
+model is then ﬁne-tuned with 100 epochs. Data argumentation strategy and parameter settings are the same as Py-
+Torch ofﬁcial examples. We adopt a large mini-batch size
+512. The initial learning rate is set to 0.1. Warmup and
+cosine learning rate decay are also used here. Since
+the output of the last stage is closely related to prediction,
+we will not prune the output dimension of the last residual
+stage .
+Table 1 shows the pruning results of ResNet50. We test
+model accuracy using 1-crop validation: the shorter side is
+resized to 256, followed by a 224 × 224 center crop and
+Table 1. Comparison results of pruning ResNet50 on ImageNet.
+Top-1 Acc. Top-5 Acc. MACs #Param.
+ThiNet-30 
+GAL-1-joint 
+GDP-0.5 
+Taylor-FO 
+Slimmable NN 
+AutoPruner 
+Table 2. Summary of 4 small datasets.
+Dataset Name
+Meta-Class #Train #Val. #Categories
+CUB200-2011 
+Oxford Pets 
+Stanford Dogs 
+12000 8580
+Stanford Car 
+mean-std normalization.
+The accuracy of the last epoch
+will be reported. Obviously, CURL is signiﬁcantly better
+than previous state-of-the-art. Our method obtains a higher
+accuracy even with fewer MACs (Multiply-ACcumulate operations) and parameters.
+In order to demonstrate our motivation for residual connection pruning, we also test the actual inference speed on
+a NVIDIA Tesla M40 GPU. AutoPruner only prunes
+channels inside the residual block. With a small compression rate (more ﬁlters will be removed), the middle layer
+of a residual block will be very thin, leading the bottleneck
+structure into hourglass. By contrast, we prune both channels inside and outside residual blocks. The pruned structure is still bottleneck or opened wallet.
+Wallet is not only more accurate than hourglass (which
+has been demonstrated above), but also faster even with the
+same number of MACs. For a fair comparison, we adjust
+the threshold to obtain a new model with 1.39G MACs and
+7.83M parameters. The inference time of hourglass on M40
+GPU to process a mini-batch of 256 images is 0.21s, while
+wallet only cost 0.19s. More importantly, the model size
+of wallet is much smaller than hourglass (nearly halved).
+Hence, memory consumption could be greatly reduced with
+our pruned structure.
+4.2. Pruning on Small-Scale Datasets
+We then prune large models on small datasets. Our goal
+is to demonstrate that directly pruning with limited data using CURL could achieve comparable or even better performance than those small models pruned or trained with ImageNet. Two widely used network, namely ResNet50 
+and MobileNetV2 , will be pruned on four small-scale
+datasets. Table 2 summarizes the information of these four
+datasets, including training and validation sizes.
+Baseline setting.
+We adopt three baselines for comparison: 1) Fine-tune the large model which is pretrained
+on ImageNet.
+This is a typical approach to get a classiﬁcation network on a target task. 2) Fine-tune a small
+model which is pretrained (MobileNetV2-0.5) or pruned
+(ResNet50-CURL, the CURL model in Table 1) on ImageNet. This is a compromise due to the difﬁculty of pruning with limited data. 3) Directly prune the ﬁne-tuned large
+model (i.e., baseline 1) on the target small dataset using the
+slimmable neural network method . During ﬁne-tuning,
+the models are trained with the mini-batch size of 32 for 300
+epochs. Learning rate is initialized as 0.001, and reduced
+with cosine schedule. Warmup is used in the ﬁrst 5 epochs.
+Mixup is also adopted with α = 1. Other parameter settings
+and data argumentation strategies are the same as PyTorch
+ofﬁcial examples.
+Implementation details of CURL. The ﬁne-tuning process of CURL is divided into two steps. For a fair comparison, the total ﬁne-tuning epochs are still 300. In the ﬁrst
+step, the pruned model is trained with mixup and knowledge
+distillation in 200 epochs. The temperature T of knowledge distillation is set to 2, α in Eq. (4) is set to 0.7, and
+learning rate is 0.01. Warmup and cosine decay schedule
+are also used. In the second step, since the dataset is enlarged 6 times, we train the small model with 16 epochs
+(16 × 6 ≈100). Because logits will be updated during
+ﬁne-tuning, the model is not sensitive to temperature, we set
+T = 1 here. The value of α is not changed. The learning
+rate for pruned network is set to 0.0001 and reduced using
+cosine schedule. As for the learning rate η for updating logits, we set it to 1 and will not change during training. Other
+parameter settings are the same as those used in baselines.
+The pruning strategy for ResNet is the same as experiment
+on ImageNet. As for MobileNetV2, all the bottleneck will
+be pruned. Note that the second layer of each bottleneck is
+depth-wise convolution, which means the input dimension
+should be the same as its output. Hence, the ﬁrst two layers
+of each residual block will be pruned simultaneously.
+Table 3 shows results on these four datasets.
+Performance comparison between the second and third lines prove
+that with limited training data, directly pruning on a small
+dataset is usually worse than ﬁne-tuning a small model
+trained or pruned on ImageNet. In other words, ImageNet
+pretraining is still a strong technique to get a more accurate model with limited data. However, this technique may
+not be applicable in many real-world applications. Training
+on large scale datasets is cumbersome and time-consuming,
+too. The original large dataset may be even not available in
+many real-world scenarios.
+In stark contrast, the proposed CURL approach works
+well on most datasets. Our method achieves comparable
+or even better performance than ﬁne-tuning small models
+trained or pruned on ImageNet. When MobileNetV2-1.0
+Table 3. Pruning results on small-scale datasets. In each model, there are 4 methods: 1) ﬁne-tune the large model which is trained on
+ImageNet; 2) ﬁne-tune the small model which is trained or pruned on ImageNet; 3) directly prune the large model on small dataset using
+slimmable neural network ; 4) directly prune the large model on small dataset using CURL.
+CUB200-2011 
+MobileNetV2
+MobileNetV2-1.0
+MobileNetV2-0.5
+Slimmable NN 
+ResNet50-CURL
+Slimmable NN 
+Table 4. Pruning MobileNetV2 on CUB200 with different ﬁnetuning methods. Here, “nothing” indicates a standard ﬁne-tuning
+process, “KD” is knowledge distillation, and “scratch” denotes
+training from scratch.
+Method nothing +mixup +KD +mixup&KD ours scratch
+78.72 64.39
+model is pruned, CURL outperforms MobileNetV2-0.5 on
+all datasets by a large margin. It is worth mentioning that
+on Oxford Car, CURL is even better than the original large
+model. This result demonstrates that the proposed CURL
+method is really useful when prune with limited data.
+As for ResNet, since ResNet50-CURL is a very strong
+baseline (ResNet50-CURL achieves the best performance
+on ImageNet compared with previous state-of-the-art and it
+is already trained using CURL), the advantage of directly
+pruning on small dataset is not so signiﬁcant. However,
+we can still achieve better results than ResNet50-CURL on
+CUB200-2011 and Oxford Car.
+4.3. Ablation Studies
+To explore the impact of different modules of CURL,
+we will perform an ablative study in this section. Three
+major modules, namely ﬁne-tuning strategy, pruning criterion and label reﬁnement will be studied. All the ablation
+studies are conducted on CUB200-2011 with the MobileNetV2 model.
+Impact of Fine-Tuning Strategy
+We ﬁrst study the impact of different ﬁne-tuning strategies.
+The large ﬁne-tuned model (MobileNetV2-1.0) is evaluated
+and pruned by CURL, generating a small but not accurate
+model. Then the pruned model is ﬁne-tuned using several
+different strategies with 300 epochs. Other parameter settings are the same as in previous experiments.
+Table 4 summarizes the results of different ﬁne-tuning
+methods. A standard approach is to train the small model
+without augmentation techniques like mixup or knowledge distillation. Unfortunately, the ﬁnal accuracy is only
+70.76%, which is much worse than MobileNetV2-0.5 ﬁnetuned by the same approach (72.97%). If mixup is used, the
+accuracy can be improved to 73.89%, but still worse than
+MobileNetV2-0.5 ﬁne-tuned with mixup (73.96%). Note
+that if we prune the model using Slimmable NN with
+the same ﬁne-tuning strategy, its accuracy is only 72.20%
+(see Table 3 for more details). This phenomenon suggests
+that our KL-divergence based criterion, i.e., Eq. (2), works
+well in evaluating ﬁlter importance.
+On the other hand,
+these results also demonstrate our motivation: directly pruning on a small dataset is usually worse than ﬁne-tuning a
+small model which is trained or pruned on the large dataset.
+Although our pruning method outperforms previous stateof-the-art on ImageNet, ﬁne-tuning on small dataset is still
+very challenging due to the lack of enough training data.
+Knowledge distillation contributes a lot to the success of
+pruning with limited data as shown in . If we equip the
+standard ﬁne-tuning approach with knowledge distillation,
+the ﬁnal accuracy can be improved to 77.87%. If we combine mixup and knowledge distillation together, the accuracy can be further improved to 77.99%. Based on these observations, we propose to enlarge the training dataset with
+image transformation methods, and update teacher model’s
+logits with label reﬁnement.
+Finally, the pruned small
+model can reach an accuracy of 78.72%, which is almost the
+same as unpruned large model (78.77%). Please note that
+the combination of mixup and knowledge distillation, and
+the updating of teacher’s logits are both novel approaches
+proposed in our CURL in the network compression ﬁeld.
+The last experiment is about training from scratch. We
+randomly initialize the weights of pruned network structure
+and train the model by 1000 epochs with mixup. Starting
+from 0.05, the value of learning rate is also reduced by cosine schedule. Other parameter settings are the same as previous ones. However, the accuracy of training from scratch
+is only 64.39%, much lower than any pruned results.
+Table 5. Pruning MobileNetV2 on CUB200 with different evaluation criterion. We prune 50% ﬁlters of the middle layers of the last
+bottleneck. The accuracy is tested without ﬁne-tuning.
+Weight Sum
+KL-Div. (Ours)
+This phenomenon is reasonable, because training with
+limited data is very challenging.
+Recently, a study 
+suggests that training the same network from scratch could
+achieve comparable or better performance than pruning.
+They think the real value of pruning is to ﬁnd a better network structure rather than important ﬁlters. This conclusion
+may be correct with enough training time and data. However, when the conditions are not applicable (e.g., training
+with limited data), this conclusion will fail to hold true. In
+this situation, ﬁnding important ﬁlters becomes more valuable. To sum up, our pruning method provides a feasible
+solution for how to obtain a small model with limited data
+and how to get rid of the dependence on the large dataset,
+which is really important in many real-world applications.
+Impact of Pruning Criterion
+We then study the impact of different criterion for evaluating ﬁlter importance, i.e., Eq. (2). We focus on the last
+bottleneck structure of MobileNetV2. There are two layers
+(point-wise convolution and depth-wise convolution) in this
+block. Due to the structure constraint of depth-wise convolution, we should prune these two layers simultaneously.
+The easiest way to ﬁnish this task is to randomly discard channels. We randomly prune 50% ﬁlters of these two
+layers and get 6.80% top-1 accuracy on CUB200 without
+ﬁne-tuning (as shown in Table 5). Starting from this simplest baseline, we then focus on how to design a better way
+to evaluate the importance of multiple ﬁlters.
+One possible solution is to extend previous magnitudebased criterion. Weight sum is such kind of a method
+which calculates ﬁlter importance based on its ℓ1-norm.
+Here, we simply add the scores of two ﬁlters together:
+i ∥1 + ∥W 2
+i ∥1, where W 1
+i denote ﬁlter
+i of the ﬁrst (point-wise convolution) and second (depthwise convolution) hidden layers, respectively. However, the
+extended version of weight sum is only a little better than
+the random strategy (8.25% vs. 6.80%).
+We then consider data-driven criteria and concentrate on
+the output of the network. A natural idea is evaluating the
+change of accuracy. If removing some ﬁlters has no inﬂuence to the model accuracy, then we can regard them as
+unimportant. However, this approach is impractical. We
+ﬁnd that model accuracy is not sensitive to one or two ﬁlters. Most channels will get the same score after evaluation.
+Since accuracy is closely related to loss, we can replace ac-
+Table 6. Pruning results on several small datasets with/without the
+proposed label reﬁnement method.
+Reﬁnement? CUB200
+MobileNetV2
+77.43% 86.65% 74.02% 87.15%
+78.72% 86.89% 74.72% 87.64%
+82.88% 90.32% 78.65% 91.77%
+83.64% 90.30% 79.79% 92.19%
+curacy change with loss change and calculate the score as
+si = Lpruned −Lunpruned. The performance of this criterion
+is 21.83%. Although this result is signiﬁcantly better than
+random and weight sum, accuracy of the pruned network is
+still not satisfying.
+Inspired by knowledge distillation, we propose a KLdivergence based criterion to evaluate the information loss
+of the pruned model. With this criterion, the accuracy is
+dramatically improved to 66.33%.
+Impact of Label Reﬁnement
+In order to compensate for the gap of limited data, we propose a label reﬁnement technique. The original dataset is
+enlarged by 6 times via several image transformation methods. The ﬁne-tuned model is then trained on this enlarged
+dataset with knowledge distillation. Due to label noise, soft
+target will also be updated during training.
+Table 6 illustrates the effectiveness of our label reﬁnement strategy.
+Compared with standard knowledge distillation equipped with mixup, using our label reﬁnement
+method can achieve better performance on most datasets.
+Updating soft target can further improve model accuracy. For examples, if we set η = 0 (do not update soft
+target) and ﬁne-tune the pruned MobileNetV2 on the expanded CUB200 dataset, the accuracy is 78.56%, slightly
+lower than the result of updating soft target (78.72%). In
+this work, we adopt a simple method to process label noise
+of soft target. How to correct the misleading wrong labels is
+still worth exploring. If a more advanced algorithm is used,
+the model accuracy can be further improved.
+5. Conclusion
+In this paper, we proposed a novel ﬁlter level pruning
+method to accelerate the inference speed of deep CNN models. Different from previous pruning strategies, we prune
+both channels inside and outside the residual connections
+via a KL-divergence based criterion. We also propose a
+label reﬁnement approach to avoid the inﬂuence of label
+noise. With the proposed CURL method, we can directly
+prune models on the small dataset and achieve comparable
+or even better results than ﬁne-tuning a small model pruned
+or trained on the large scale dataset, which is of great value
+in many real-world scenarios.

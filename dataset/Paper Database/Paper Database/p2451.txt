@@ -1,0 +1,985 @@
+IEEE TRANSACTIONS ON PATTERN ANALYSIS AND MACHINE INTELLIGENCE
+High-Speed Tracking with
+Kernelized Correlation Filters
+João F. Henriques, Rui Caseiro, Pedro Martins, and Jorge Batista
+Abstract—The core component of most modern trackers is a discriminative classiﬁer, tasked with distinguishing between the target
+and the surrounding environment. To cope with natural image changes, this classiﬁer is typically trained with translated and scaled
+sample patches. Such sets of samples are riddled with redundancies – any overlapping pixels are constrained to be the same. Based
+on this simple observation, we propose an analytic model for datasets of thousands of translated patches. By showing that the resulting
+data matrix is circulant, we can diagonalize it with the Discrete Fourier Transform, reducing both storage and computation by several
+orders of magnitude. Interestingly, for linear regression our formulation is equivalent to a correlation ﬁlter, used by some of the fastest
+competitive trackers. For kernel regression, however, we derive a new Kernelized Correlation Filter (KCF), that unlike other kernel
+algorithms has the exact same complexity as its linear counterpart. Building on it, we also propose a fast multi-channel extension of
+linear correlation ﬁlters, via a linear kernel, which we call Dual Correlation Filter (DCF). Both KCF and DCF outperform top-ranking
+trackers such as Struck or TLD on a 50 videos benchmark, despite running at hundreds of frames-per-second, and being implemented
+in a few lines of code (Algorithm 1). To encourage further developments, our tracking framework was made open-source.
+Index Terms—Visual tracking, circulant matrices, discrete Fourier transform, kernel methods, ridge regression, correlation ﬁlters.
+INTRODUCTION
+RGUABLY one of the biggest breakthroughs in recent
+visual tracking research was the widespread adoption
+of discriminative learning methods. The task of tracking, a
+crucial component of many computer vision systems, can
+be naturally speciﬁed as an online learning problem , .
+Given an initial image patch containing the target, the goal
+is to learn a classiﬁer to discriminate between its appearance
+and that of the environment. This classiﬁer can be evaluated
+exhaustively at many locations, in order to detect it in
+subsequent frames. Of course, each new detection provides
+a new image patch that can be used to update the model.
+It is tempting to focus on characterizing the object of
+interest – the positive samples for the classiﬁer. However,
+a core tenet of discriminative methods is to give as much
+importance, or more, to the relevant environment – the
+negative samples. The most commonly used negative samples are image patches from different locations and scales,
+reﬂecting the prior knowledge that the classiﬁer will be
+evaluated under those conditions.
+An extremely challenging factor is the virtually unlimited amount of negative samples that can be obtained from
+an image. Due to the time-sensitive nature of tracking,
+modern trackers walk a ﬁne line between incorporating
+as many samples as possible and keeping computational
+demand low. It is common practice to randomly choose only
+a few samples each frame , , , , .
+Although the reasons for doing so are understandable,
+we argue that undersampling negatives is the main factor
+inhibiting performance in tracking. In this paper, we develop tools to analytically incorporate thousands of samples
+The authors are with the Institute of Systems and Robotics, University of
+E-mail: {henriques,ruicaseiro,pedromartins,batista}@isr.uc.pt
+at different relative translations, without iterating over them
+explicitly. This is made possible by the discovery that, in the
+Fourier domain, some learning algorithms actually become
+easier as we add more samples, if we use a speciﬁc model for
+translations.
+These analytical tools, namely circulant matrices, provide a useful bridge between popular learning algorithms
+and classical signal processing. The implication is that we
+are able to propose a tracker based on Kernel Ridge Regression that does not suffer from the “curse of kernelization”, which is its larger asymptotic complexity, and
+even exhibits lower complexity than unstructured linear
+regression. Instead, it can be seen as a kernelized version
+of a linear correlation ﬁlter, which forms the basis for the
+fastest trackers available , . We leverage the powerful kernel trick at the same computational complexity as
+linear correlation ﬁlters. Our framework easily incorporates
+multiple feature channels, and by using a linear kernel we
+show a fast extension of linear correlation ﬁlters to the multichannel case.
+RELATED WORK
+On tracking-by-detection
+A comprehensive review of tracking-by-detection is outside
+the scope of this article, but we refer the interested reader
+to two excellent and very recent surveys , . The most
+popular approach is to use a discriminative appearance
+model , , , . It consists of training a classiﬁer
+online, inspired by statistical machine learning methods, to
+predict the presence or absence of the target in an image
+patch. This classiﬁer is then tested on many candidate
+patches to ﬁnd the most likely location. Alternatively, the
+position can also be predicted directly . Regression with
+ 
+IEEE TRANSACTIONS ON PATTERN ANALYSIS AND MACHINE INTELLIGENCE
+Kernelized Correlation Filter (proposed)
+Figure 1: Qualitative results for the proposed Kernelized Correlation Filter (KCF), compared with the top-performing Struck and
+TLD. Best viewed on a high-resolution screen. The chosen kernel is Gaussian, on HOG features. These snapshots were taken at
+the midpoints of the 50 videos of a recent benchmark . Missing trackers are denoted by an “x”. KCF outperforms both Struck
+and TLD, despite its minimal implementation and running at 172 FPS (see Algorithm 1, and Table 1).
+class labels can be seen as classiﬁcation, so we use the two
+terms interchangeably.
+We will discuss some relevant trackers before focusing
+on the literature that is more directly related to our analytical methods. Canonical examples of the tracking-bydetection paradigm include those based on Support Vector Machines (SVM) , Random Forest classiﬁers , or
+boosting variants , . All the mentioned algorithms had
+to be adapted for online learning, in order to be useful for
+tracking. Zhang et al. propose a projection to a ﬁxed
+random basis, to train a Naive Bayes classiﬁer, inspired
+by compressive sensing techniques. Aiming to predict the
+target’s location directly, instead of its presence in a given
+image patch, Hare et al. employed a Structured Output
+SVM and Gaussian kernels, based on a large number of
+image features. Examples of non-discriminative trackers
+include the work of Wu et al. , who formulate tracking as a sequence of image alignment objectives, and of
+Sevilla-Lara and Learned-Miller , who propose a strong
+appearance descriptor based on distribution ﬁelds. Another
+discriminative approach by Kalal et al. uses a set of
+structural constraints to guide the sampling process of a
+boosting classiﬁer. Finally, Bolme et al. employ classical
+signal processing analysis to derive fast correlation ﬁlters.
+We will discuss these last two works in more detail shortly.
+On sample translations and correlation ﬁltering
+Recall that our goal is to learn and detect over translated
+image patches efﬁciently. Unlike our approach, most attempts so far have focused on trying to weed out irrelevant
+image patches. On the detection side, it is possible to use
+branch-and-bound to ﬁnd the maximum of a classiﬁer’s
+response while avoiding unpromising candidate patches
+ . Unfortunately, in the worst-case the algorithm may
+still have to iterate over all patches. A related method ﬁnds
+the most similar patches of a pair of images efﬁciently ,
+but is not directly translated to our setting. Though it does
+not preclude an exhaustive search, a notable optimization
+is to use a fast but inaccurate classiﬁer to select promising
+patches, and only apply the full, slower classiﬁer on those
+ , .
+On the training side, Kalal et al. propose using
+structural constraints to select relevant sample patches from
+each new image. This approach is relatively expensive,
+limiting the features that can be used, and requires careful
+tuning of the structural heuristics. A popular and related
+method, though it is mainly used in ofﬂine detector learning, is hard-negative mining . It consists of running
+an initial detector on a pool of images, and selecting any
+wrong detections as samples for re-training. Even though
+both approaches reduce the number of training samples, a
+major drawback is that the candidate patches have to be
+considered exhaustively, by running a detector.
+The initial motivation for our line of research was the
+recent success of correlation ﬁlters in tracking , . Correlation ﬁlters have proved to be competitive with far more
+complicated approaches, but using only a fraction of the
+computational power, at hundreds of frames-per-second.
+They take advantage of the fact that the convolution of
+two patches (loosely, their dot-product at different relative
+translations) is equivalent to an element-wise product in the
+Fourier domain. Thus, by formulating their objective in the
+Fourier domain, they can specify the desired output of a
+linear classiﬁer for several translations, or image shifts, at
+A Fourier domain approach can be very efﬁcient, and
+has several decades of research in signal processing to draw
+from . Unfortunately, it can also be extremely limiting.
+We would like to simultaneously leverage more recent advances in computer vision, such as more powerful features,
+large-margin classiﬁers or kernel methods , , .
+A few studies go in that direction, and attempt to apply
+kernel methods to correlation ﬁlters , , , . In
+these works, a distinction must be drawn between two types
+IEEE TRANSACTIONS ON PATTERN ANALYSIS AND MACHINE INTELLIGENCE
+of objective functions: those that do not consider the power
+spectrum or image translations, such as Synthetic Discriminant Function (SDF) ﬁlters , , and those that do,
+such as Minimum Average Correlation Energy , Optimal
+Trade-Off and Minimum Output Sum of Squared Error
+(MOSSE) ﬁlters . Since the spatial structure can effectively
+be ignored, the former are easier to kernelize, and Kernel
+SDF ﬁlters have been proposed , , . However,
+lacking a clearer relationship between translated images,
+non-linear kernels and the Fourier domain, applying the
+kernel trick to other ﬁlters has proven much more difﬁcult
+ , , with some proposals requiring signiﬁcantly higher
+computation times and imposing strong limits on the number of image shifts that can be considered .
+For us, this hinted that a deeper connection between
+translated image patches and training algorithms was
+needed, in order to overcome the limitations of direct
+Fourier domain formulations.
+Subsequent work
+Since the initial version of this work , an interesting
+time-domain variant of the proposed cyclic shift model has
+been used very successfully for video event retrieval .
+Generalizations of linear correlation ﬁlters to multiple channels have also been proposed , , , some of which
+building on our initial work. This allows them to leverage
+more modern features (e.g. Histogram of Oriented Gradients – HOG). A generalization to other linear algorithms,
+such as Support Vector Regression, was also proposed .
+We must point out that all of these works target off-line
+training, and thus rely on slower solvers , , . In
+contrast, we focus on fast element-wise operations, which
+are more suitable for real-time tracking, even with the kernel
+CONTRIBUTIONS
+A preliminary version of this work was presented earlier
+ . It demonstrated, for the ﬁrst time, the connection
+between Ridge Regression with cyclically shifted samples
+and classical correlation ﬁlters. This enabled fast learning
+with O (n log n) Fast Fourier Transforms instead of expensive matrix algebra. The ﬁrst Kernelized Correlation Filter
+was also proposed, though limited to a single channel.
+Additionally, it proposed closed-form solutions to compute
+kernels at all cyclic shifts. These carried the same O (n log n)
+computational cost, and were derived for radial basis and
+dot-product kernels.
+The present work adds to the initial version in signiﬁcant ways. All the original results were re-derived using a
+much simpler diagonalization technique (Sections 4-6). We
+extend the original work to deal with multiple channels,
+which allows the use of state-of-the-art features that give an
+important boost to performance (Section 7). Considerable
+new analysis and intuitive explanations are added to the
+initial results. We also extend the original experiments from
+12 to 50 videos, and add a new variant of the Kernelized
+Correlation Filter (KCF) tracker based on Histogram of
+Oriented Gradients (HOG) features instead of raw pixels.
+Via a linear kernel, we additionally propose a linear multichannel ﬁlter with very low computational complexity, that
+almost matches the performance of non-linear kernels. We
+name it Dual Correlation Filter (DCF), and show how it
+is related to a set of recent, more expensive multi-channel
+ﬁlters . Experimentally, we demonstrate that the KCF
+already performs better than a linear ﬁlter, without any
+feature extraction. With HOG features, both the linear DCF
+and non-linear KCF outperform by a large margin topranking trackers, such as Struck or Track-Learn-Detect
+(TLD) , while comfortably running at hundreds of framesper-second.
+BUILDING BLOCKS
+In this section, we propose an analytical model for image
+patches extracted at different translations, and work out the
+impact on a linear regression algorithm. We will show a
+natural underlying connection to classical correlation ﬁlters.
+The tools we develop will allow us to study more complicated algorithms in Sections 5-7.
+Linear regression
+We will focus on Ridge Regression, since it admits a simple
+closed-form solution, and can achieve performance that is
+close to more sophisticated methods, such as Support Vector
+Machines . The goal of training is to ﬁnd a function
+f(z) = wT z that minimizes the squared error over samples
+xi and their regression targets yi,
+(f(xi) −yi)2 + λ ∥w∥2 .
+The λ is a regularization parameter that controls overﬁtting, as in the SVM. As mentioned earlier, the minimizer has
+a closed-form, which is given by 
+ XT X + λI
+where the data matrix X has one sample per row xi, and
+each element of y is a regression target yi. I is an identity
+Starting in Section 4.4, we will have to work in the
+Fourier domain, where quantities are usually complexvalued. They are not harder to deal with, as long as we
+use the complex version of Eq. 2 instead,
+where XH is the Hermitian transpose, i.e., XH = (X∗)T ,
+and X∗is the complex-conjugate of X. For real numbers,
+Eq. 3 reduces to Eq. 2.
+In general, a large system of linear equations must be
+solved to compute the solution, which can become prohibitive in a real-time setting. Over the next paragraphs we
+will see a special case of xi that bypasses this limitation.
+IEEE TRANSACTIONS ON PATTERN ANALYSIS AND MACHINE INTELLIGENCE
+Base sample
+Figure 2: Examples of vertical cyclic shifts of a base sample.
+Our Fourier domain formulation allows us to train a tracker
+with all possible cyclic shifts of a base sample, both vertical and
+horizontal, without iterating them explicitly. Artifacts from the
+wrapped-around edges can be seen (top of the left-most image),
+but are mitigated by the cosine window and padding.
+Cyclic shifts
+For notational simplicity, we will focus on single-channel,
+one-dimensional signals. These results generalize to multichannel, two-dimensional images in a straightforward way
+(Section 7).
+Consider an n × 1 vector representing a patch with
+the object of interest, denoted x. We will refer to it as
+the base sample. Our goal is to train a classiﬁer with both
+the base sample (a positive example) and several virtual
+samples obtained by translating it (which serve as negative
+examples). We can model one-dimensional translations of
+this vector by a cyclic shift operator, which is the permutation
+The product Px = [xn, x1, x2, . . . , xn−1]T shifts x by
+one element, modeling a small translation. We can chain
+u shifts to achieve a larger translation by using the matrix
+power P ux. A negative u will shift in the reverse direction.
+A 1D signal translated horizontally with this model is illustrated in Fig. 3, and an example for a 2D image is shown in
+The attentive reader will notice that the last element
+wraps around, inducing some distortion relative to a true
+translation. However, this undesirable property can be mitigated by appropriate padding and windowing (Section
+A.1). The fact that a large percentage of the elements of a
+signal are still modeled correctly, even for relatively large
+translations (see Fig. 2), explains the observation that cyclic
+shifts work well in practice.
+Due to the cyclic property, we get the same signal x
+periodically every n shifts. This means that the full set of
+shifted signals is obtained with
+{P ux | u = 0, . . . n −1} .
+Again due to the cyclic property, we can equivalently
+view the ﬁrst half of this set as shifts in the positive direction, and the second half as shifts in the negative direction.
+Figure 3: Illustration of a circulant matrix. The rows are cyclic
+shifts of a vector image, or its translations in 1D. The same
+properties carry over to circulant matrices containing 2D images.
+Circulant matrices
+To compute a regression with shifted samples, we can use
+the set of Eq. 5 as the rows of a data matrix X:
+X = C(x) =
+An illustration of the resulting pattern is given in Fig. 3.
+What we have just arrived at is a circulant matrix, which has
+several intriguing properties , . Notice that the pattern is deterministic, and fully speciﬁed by the generating
+vector x, which is the ﬁrst row.
+What is perhaps most amazing and useful is the fact
+that all circulant matrices are made diagonal by the Discrete
+Fourier Transform (DFT), regardless of the generating vector
+x . This can be expressed as
+X = F diag (ˆx) F H,
+where F is a constant matrix that does not depend on x,
+and ˆx denotes the DFT of the generating vector, ˆx = F (x).
+From now on, we will always use a hat ˆ as shorthand for
+the DFT of a vector.
+The constant matrix F is known as the DFT matrix, and
+is the unique matrix that computes the DFT of any input
+vector, as F (z) = √nFz. This is possible because the DFT
+is a linear operation.
+Eq. 7 expresses the eigendecomposition of a general
+circulant matrix. The shared, deterministic eigenvectors F
+lie at the root of many uncommon features, such as commutativity or closed-form inversion.
+Putting it all together
+We can now apply this new knowledge to simplify the linear
+regression in Eq. 3, when the training data is composed
+of cyclic shifts. Being able to work solely with diagonal
+matrices is very appealing, because all operations can be
+done element-wise on their diagonal elements.
+Take the term XHX, which can be seen as a noncentered covariance matrix. Replacing Eq. 7 in it,
+XHX = F diag (ˆx∗) F HF diag (ˆx) F H.
+Since diagonal matrices are symmetric, taking the Hermitian transpose only left behind a complex-conjugate, ˆx∗.
+IEEE TRANSACTIONS ON PATTERN ANALYSIS AND MACHINE INTELLIGENCE
+Additionally, we can eliminate the factor F HF = I. This
+property is the unitarity of F and can be canceled out in
+many expressions. We are left with
+XHX = F diag (ˆx∗) diag (ˆx) F H.
+Because operations on diagonal matrices are elementwise, we can deﬁne the element-wise product as ⊙and
+XHX = F diag (ˆx∗⊙ˆx) F H.
+An interesting aspect is that the vector in brackets is
+known as the auto-correlation of the signal x (in the Fourier
+domain, also known as the power spectrum ). In classical
+signal processing, it contains the variance of a time-varying
+process for different time lags, or in our case, space.
+The above steps summarize the general approach taken
+in diagonalizing expressions with circulant matrices. Applying them recursively to the full expression for linear
+regression (Eq. 3), we can put most quantities inside the
+ˆx∗⊙ˆx + λ
+or better yet,
+ˆx∗⊙ˆx + λ.
+The fraction denotes element-wise division. We can easily recover w in the spatial domain with the Inverse DFT,
+which has the same cost as a forward DFT. The detailed
+steps of the recursive diagonalization that yields Eq. 12 are
+given in Appendix A.5.
+At this point we just found an unexpected formula from
+classical signal processing – the solution is a regularized
+correlation ﬁlter , .
+Before exploring this relation further, we must highlight the computational efﬁciency of Eq. 12, compared to
+the prevalent method of extracting patches explicitly and
+solving a general regression problem. For example, Ridge
+Regression has a cost of O
+, bound by the matrix inversion and products1. On the other hand, all operations in
+Eq. 12 are element-wise (O (n)), except for the DFT, which
+bounds the cost at a nearly-linear O (n log n). For typical
+data sizes, this reduces storage and computation by several
+orders of magnitude.
+Relationship to correlation ﬁlters
+Correlation ﬁlters have been a part of signal processing since
+the 80’s, with solutions to a myriad of objective functions
+in the Fourier domain , . Recently, they made a
+reappearance as MOSSE ﬁlters , which have shown remarkable performance in tracking, despite their simplicity
+and high FPS rate.
+1. We remark that the complexity of training algorithms is usually
+reported in terms of the number of samples n, disregarding the number
+of features m. Since in our case m = n (X is square), we conﬂate the
+two quantities. For comparison, the fastest SVM solvers have “linear”
+complexity in the samples O (mn), but under the same conditions m =
+n would actually exhibit quadratic complexity, O
+The solution to these ﬁlters looks like Eq. 12 (see Appendix A.2), but with two crucial differences. First, MOSSE
+ﬁlters are derived from an objective function speciﬁcally
+formulated in the Fourier domain. Second, the λ regularizer
+is added in an ad-hoc way, to avoid division-by-zero. The
+derivation we showed above adds considerable insight, by
+specifying the starting point as Ridge Regression with cyclic
+shifts, and arriving at the same solution.
+Circulant matrices allow us to enrich the toolset put forward by classical signal processing and modern correlation
+ﬁlters, and apply the Fourier trick to new algorithms. Over
+the next section we will see one such instance, in training
+non-linear ﬁlters.
+NON-LINEAR REGRESSION
+One way to allow more powerful, non-linear regression
+functions f(z) is with the “kernel trick” . The most
+attractive quality is that the optimization problem is still
+linear, albeit in a different set of variables (the dual space).
+On the downside, evaluating f(z) typically grows in complexity with the number of samples.
+Using our new analysis tools, however, we will show
+that it is possible to overcome this limitation, and obtain
+non-linear ﬁlters that are as fast as linear correlation ﬁlters,
+both to train and evaluate.
+Kernel trick – brief overview
+This section will brieﬂy review the kernel trick, and deﬁne
+the relevant notation.
+Mapping the inputs of a linear problem to a non-linear
+feature-space ϕ(x) with the kernel trick consists of:
+Expressing the solution w as a linear combination
+of the samples:
+The variables under optimization are thus α, instead of w. This alternative representation α is said
+to be in the dual space, as opposed to the primal space
+w (Representer Theorem [23, p. 89]).
+Writing the algorithm in terms of dot-products
+ϕT (x)ϕ(x′) = κ(x, x′), which are computed using
+the kernel function κ (e.g., Gaussian or Polynomial).
+The dot-products between all pairs of samples are usually stored in a n × n kernel matrix K, with elements
+Kij = κ(xi, xj).
+The power of the kernel trick comes from the implicit
+use of a high-dimensional feature space ϕ(x), without ever
+instantiating a vector in that space. Unfortunately, this is
+also its greatest weakness, since the regression function’s
+complexity grows with the number of samples,
+f(z) = wT z =
+αiκ(z, xi).
+In the coming sections we will show how most drawbacks of the kernel trick can be avoided, assuming circulant
+IEEE TRANSACTIONS ON PATTERN ANALYSIS AND MACHINE INTELLIGENCE
+Fast kernel regression
+The solution to the kernelized version of Ridge Regression
+is given by 
+α = (K + λI)−1 y,
+where K is the kernel matrix and α is the vector of coefﬁcients αi, that represent the solution in the dual space.
+Now, if we can prove that K is circulant for datasets of
+cyclic shifts, we can diagonalize Eq. 16 and obtain a fast
+solution as for the linear case. This would seem to be intuitively true, but does not hold in general. The arbitrary nonlinear mapping ϕ(x) gives us no guarantee of preserving
+any sort of structure. However, we can impose one condition
+that will allow K to be circulant. It turns out to be fairly
+broad, and apply to most useful kernels.
+Theorem 1. Given circulant data C (x), the corresponding
+kernel matrix K is circulant if the kernel function satisﬁes
+κ(x, x′) = κ(Mx, Mx′), for any permutation matrix M.
+For a proof, see Appendix A.2. What this means is that,
+for a kernel to preserve the circulant structure, it must treat
+all dimensions of the data equally. Fortunately, this includes
+most useful kernels.
+Example 2. The following kernels satisfy Theorem 1:
+Radial Basis Function kernels – e.g., Gaussian.
+Dot-product kernels – e.g., linear, polynomial.
+Additive kernels – e.g., intersection, χ2 and Hellinger
+kernels .
+Exponentiated additive kernels.
+Checking this fact is easy, since reordering the dimensions of x and x′ simultaneously does not change κ(x, x′)
+for these kernels. This applies to any kernel that combines
+dimensions through a commutative operation, such as sum,
+product, min and max.
+Knowing which kernels we can use to make K circulant,
+it is possible to diagonalize Eq. 16 as in the linear case,
+where kxx is the ﬁrst row of the kernel matrix K = C(kxx),
+and again a hat ˆ denotes the DFT of a vector. A detailed
+derivation is in Appendix A.3.
+To better understand the role of kxx, we found it useful
+to deﬁne a more general kernel correlation. The kernel correlation of two arbitrary vectors, x and x′, is the vector kxx′
+with elements
+= κ(x′, P i−1x).
+In words, it contains the kernel evaluated for different
+relative shifts of the two arguments. Then ˆkxx is the kernel
+correlation of x with itself, in the Fourier domain. We can
+refer to it as the kernel auto-correlation, in analogy with the
+linear case.
+This analogy can be taken further. Since a kernel is
+equivalent to a dot-product in a high-dimensional space
+ϕ(·), another way to view Eq. 18 is
+= ϕT (x′)ϕ(P i−1x),
+which is the cross-correlation of x and x′ in the highdimensional space ϕ(·).
+Notice how we only need to compute and operate on
+the kernel auto-correlation, an n × 1 vector, which grows
+linearly with the number of samples. This is contrary to the
+conventional wisdom on kernel methods, which requires
+computing an n × n kernel matrix, scaling quadratically
+with the samples. Our knowledge of the exact structure of
+K allowed us to do better than a generic algorithm.
+Finding the optimal α is not the only problem that can
+be accelerated, due to the ubiquity of translated patches in a
+tracking-by-detection setting. Over the next paragraphs we
+will investigate the effect of the cyclic shift model on the
+detection phase, and even in computing kernel correlations.
+Fast detection
+It is rarely the case that we want to evaluate the regression
+function f(z) for one image patch in isolation. To detect
+the object of interest, we typically wish to evaluate f(z) on
+several image locations, i.e., for several candidate patches.
+These patches can be modeled by cyclic shifts.
+Denote by Kz the (asymmetric) kernel matrix between
+all training samples and all candidate patches. Since the
+samples and patches are cyclic shifts of base sample x and
+base patch z, respectively, each element of Kz is given by
+κ(P i−1z, P j−1x). It is easy to verify that this kernel matrix
+satisﬁes Theorem 1, and is circulant for appropriate kernels.
+Similarly to Section 5.2, we only need the ﬁrst row to
+deﬁne the kernel matrix:
+Kz = C(kxz),
+where kxz is the kernel correlation of x and z, as deﬁned
+From Eq. 15, we can compute the regression function for
+all candidate patches with
+f(z) = (Kz)T α.
+Notice that f(z) is a vector, containing the output for all
+cyclic shifts of z, i.e., the full detection response. To compute
+Eq. 21 efﬁciently, we diagonalize it to obtain
+ˆf(z) = ˆkxz ⊙ˆα.
+Intuitively, evaluating f(z) at all locations can be seen as
+a spatial ﬁltering operation over the kernel values kxz. Each
+f(z) is a linear combination of the neighboring kernel values
+from kxz, weighted by the learned coefﬁcients α. Since this
+is a ﬁltering operation, it can be formulated more efﬁciently
+in the Fourier domain.
+IEEE TRANSACTIONS ON PATTERN ANALYSIS AND MACHINE INTELLIGENCE
+FAST KERNEL CORRELATION
+Even though we have found faster algorithms for training
+and detection, they still rely on computing one kernel correlation each (kxx and kxz, respectively). Recall that kernel
+correlation consists of computing the kernel for all relative
+shifts of two input vectors. This represents the last standing
+computational bottleneck, as a naive evaluation of n kernels
+for signals of size n will have quadratic complexity. However, using the cyclic shift model will allow us to efﬁciently
+exploit the redundancies in this expensive computation.
+Dot-product and polynomial kernels
+Dot-product kernels have the form κ(x, x′) = g(xT x′), for
+some function g. Then, kxx′ has elements
+= κ(x′, P i−1x) = g
+ x′T P i−1x
+Let g also work element-wise on any input vector. This
+way we can write Eq. 23 in vector form
+kxx′ = g(C(x) x′) .
+This makes it an easy target for diagonalization, yielding
+ F−1 (ˆx∗⊙ˆx′)
+where F−1 denotes the Inverse DFT.
+In particular, for a polynomial kernel κ(x, x′)
+ xT x′ + a
+ F−1 (ˆx∗⊙ˆx′) + a
+Then, computing the kernel correlation for these particular kernels can be done using only a few DFT/IDFT and
+element-wise operations, in O (n log n) time.
+Radial Basis Function and Gaussian kernels
+RBF kernels have the form κ(x, x′) = h(∥x −x′∥2), for
+some function h. The elements of kxx′ are
+= κ(x′, P i−1x) = h
+x′ −P i−1x
+We will show (Eq. 29) that this is actually a special case
+of a dot-product kernel. We only have to expand the norm,
+∥x∥2 + ∥x′∥2 −2x′T P i−1x
+The permutation P i−1 does not affect the norm of x
+due to Parseval’s Theorem . Since ∥x∥2 and ∥x′∥2 are
+constant w.r.t. i, Eq. 28 has the same form as a dot-product
+kernel (Eq. 23). Leveraging the result from the previous
+∥x∥2 + ∥x′∥2 −2F−1 (ˆx∗⊙ˆx′)
+As a particularly useful special case, for a Gaussian
+kernel κ(x, x′) = exp
+σ2 ∥x −x′∥2
+kxx′ = exp
+∥x∥2 + ∥x′∥2 −2F−1 (ˆx∗⊙ˆx′)
+As before, we can compute the full kernel correlation in
+only O (n log n) time.
+Other kernels
+The approach from the preceding two sections depends on
+the kernel value being unchanged by unitary transformations, such as the DFT. This does not hold in general for
+other kernels, e.g. intersection kernel. We can still use the
+fast training and detection results (Sections 5.2 and 5.3), but
+kernel correlation must be evaluated by a more expensive
+sliding window method.
+MULTIPLE CHANNELS
+In this section, we will see that working in the dual has the
+advantage of allowing multiple channels (such as the orientation bins of a HOG descriptor ) by simply summing
+over them in the Fourier domain. This characteristic extends
+to the linear case, simplifying the recently-proposed multichannel correlation ﬁlters , , considerably, under
+speciﬁc conditions.
+General case
+To deal with multiple channels, in this section we will
+assume that a vector x concatenates the individual vectors
+for C channels (e.g. 31 gradient orientation bins for a HOG
+variant ), as x = [x1, . . . , xC].
+Notice that all kernels studied in Section 6 are based
+on either dot-products or norms of the arguments. A dotproduct can be computed by simply summing the individual dot-products for each channel. By linearity of the
+DFT, this allows us to sum the result for each channel in
+the Fourier domain. As a concrete example, we can apply
+this reasoning to the Gaussian kernel, obtaining the multichannel analogue of Eq. 30,
+kxx′ = exp
+∥x∥2 + ∥x′∥2 −2F−1 (P
+It is worth emphasizing that the integration of multiple channels does not result in a more difﬁcult inference
+problem – we merely have to sum over the channels when
+computing kernel correlation.
+Linear kernel
+For a linear kernel κ(x, x′) = xT x′, the multi-channel
+extension from the previous section simply yields
+kxx′ = F−1 (P
+We named it the Dual Correlation Filter (DCF). This ﬁlter
+is linear, but trained in the dual space α. We will discuss the
+advantages over other multi-channel ﬁlters shortly.
+A recent extension of linear correlation ﬁlters to multiple
+channels was discovered independently by three groups
+ , , . They allow much faster training times than
+unstructured algorithms, by decomposing the problem into
+one linear system for each DFT frequency, in the case of
+Ridge Regression. Henriques et al. additionally generalize the decomposition to other training algorithms.
+However, Eq. 32 suggests that, by working in the dual
+with a linear kernel, we can train a linear classiﬁer with
+multiple channels, but using only element-wise operations.
+IEEE TRANSACTIONS ON PATTERN ANALYSIS AND MACHINE INTELLIGENCE
+This may be unexpected at ﬁrst, since those works require
+more expensive matrix inversions , , .
+We resolve this discrepancy by pointing out that this
+is only possible because we only consider a single base
+sample x. In this case, the kernel matrix K = XXT is
+n × n, regardless of the number of features or channels.
+It relates the n cyclic shifts of the base sample, and can
+be diagonalized by the n basis of the DFT. Since K is
+fully diagonal we can use solely element-wise operations.
+However, if we consider two base samples, K becomes
+2n × 2n and the n DFT basis are no longer enough to
+fully diagonalize it. This incomplete diagonalization (blockdiagonalization) requires more expensive operations to deal
+with, which were proposed in those works.
+With an interestingly symmetric argument, training with
+multiple base samples and a single channel can be done in
+the primal, with only element-wise operations (Appendix
+A.6). This follows by applying the same reasoning to the
+non-centered covariance matrix XT X, instead of XXT . In
+this case we obtain the original MOSSE ﬁlter .
+In conclusion, for fast element-wise operations we can
+choose multiple channels (in the dual, obtaining the DCF) or
+multiple base samples (in the primal, obtaining the MOSSE),
+but not both at the same time. This has an important impact
+on time-critical applications, such as tracking. The general
+case is much more expensive and suitable mostly for
+ofﬂine training applications.
+EXPERIMENTS
+Tracking pipeline
+We implemented in Matlab two simple trackers based on
+the proposed Kernelized Correlation Filter (KCF), using a
+Gaussian kernel, and Dual Correlation Filter (DCF), using
+a linear kernel. We do not report results for a polynomial
+kernel as they are virtually identical to those for the Gaussian kernel, and require more parameters. We tested two
+further variants: one that works directly on the raw pixel
+values, and another that works on HOG descriptors with a
+cell size of 4 pixels, in particular Felzenszwalb’s variant ,
+ . Note that our linear DCF is equivalent to MOSSE 
+in the limiting case of a single channel (raw pixels), but it
+has the advantage of also supporting multiple channels (e.g.
+HOG). Our tracker requires few parameters, and we report
+the values that we used, ﬁxed for all videos, in Table 2.
+The bulk of the functionality of the KCF is presented
+as Matlab code in Algorithm 1. Unlike the earlier version
+of this work , it is prepared to deal with multiple
+channels, as the 3rd dimension of the input arrays. It implements 3 functions: train (Eq. 17), detect (Eq. 22), and
+kernel_correlation (Eq. 31), which is used by the ﬁrst
+two functions.
+The pipeline for the tracker is intentionally simple, and
+does not include any heuristics for failure detection or motion modeling. In the ﬁrst frame, we train a model with the
+image patch at the initial position of the target. This patch is
+larger than the target, to provide some context. For each new
+frame, we detect over the patch at the previous position,
+and the target position is updated to the one that yielded
+the maximum value. Finally, we train a new model at the
+new position, and linearly interpolate the obtained values of
+Algorithm 1 : Matlab code, with a Gaussian kernel.
+Multiple channels (third dimension of image patches) are supported. It is possible to further reduce the number of FFT calls.
+Implementation with GUI available at:
+ 
+• x: training image patch, m × n × c
+• y: regression target, Gaussian-shaped, m × n
+• z: test image patch, m × n × c
+• responses: detection score for each location, m × n
+function alphaf = train(x, y, sigma, lambda)
+k = kernel_correlation(x, x, sigma);
+alphaf = fft2(y) ./ (fft2(k) + lambda);
+function responses = detect(alphaf, x, z, sigma)
+k = kernel_correlation(z, x, sigma);
+responses = real(ifft2(alphaf .* fft2(k)));
+function k = kernel_correlation(x1, x2, sigma)
+c = ifft2(sum(conj(fft2(x1)) .* fft2(x2), 3));
+d = x1(:)’*x1(:) + x2(:)’*x2(:) - 2 * c;
+k = exp(-1 / sigma^2 * abs(d) / numel(d));
+α and x with the ones from the previous frame, to provide
+the tracker with some memory.
+Evaluation
+We put our tracker to the test by using a recent benchmark
+that includes 50 video sequences (see Fig. 1). This
+dataset collects many videos used in previous works, so we
+avoid the danger of overﬁtting to a small subset.
+For the performance criteria, we did not choose average
+location error or other measures that are averaged over
+frames, since they impose an arbitrary penalty on lost
+trackers that depends on chance factors (i.e., the position
+where the track was lost), making them not comparable. A
+similar alternative is bounding box overlap, which has the
+disadvantage of heavily penalizing trackers that do not track
+across scale, even if the target position is otherwise tracked
+perfectly.
+An increasingly popular alternative, which we chose for
+our evaluation, is the precision curve , , . A frame
+may be considered correctly tracked if the predicted target
+center is within a distance threshold of ground truth. Precision curves simply show the percentage of correctly tracked
+frames for a range of distance thresholds. Notice that by
+plotting the precision for all thresholds, no parameters are
+required. This makes the curves unambiguous and easy to
+interpret. A higher precision at low thresholds means the
+tracker is more accurate, while a lost target will prevent it
+from achieving perfect precision for a very large threshold
+range. When a representative precision score is needed, the
+chosen threshold is 20 pixels, as done in previous works
+ , , .
+IEEE TRANSACTIONS ON PATTERN ANALYSIS AND MACHINE INTELLIGENCE
+Location error threshold
+KCF on HOG [0.732]
+DCF on HOG [0.728]
+Struck [0.656]
+TLD [0.608]
+KCF on raw pixels [0.560]
+MIL [0.475]
+ORIA [0.457]
+DCF on raw pixels [0.451]
+MOSSE [0.431]
+CT [0.406]
+Figure 4: Precision plot for all 50 sequences. The proposed
+trackers (bold) outperform state-of-the-art systems, such as
+TLD and Struck, which are more complicated to implement
+and much slower (see Table 1). Best viewed in color.
+Experiments on the full dataset
+We start by summarizing the results over all videos in Table
+1 and Fig. 4. For comparison, we also report results for
+several other systems , , , , , , including
+some of the most resilient trackers available – namely, Struck
+and TLD. Unlike our simplistic implementation (Algorithm
+1), these trackers contain numerous engineering improvements. Struck operates on many different kinds of features
+and a growing pool of support vectors. TLD is speciﬁcally
+geared towards re-detection, using a set of structural rules
+with many parameters.
+Despite this asymmetry, our Kernelized Correlation Filter (KCF) can already reach competitive performance by
+operating on raw pixels alone, as can be seen in Fig. 4. In this
+setting, the rich implicit features induced by the Gaussian
+kernel yield a distinct advantage over the proposed Dual
+Correlation Filter (DCF).
+We remark that the DCF with single-channel features
+(raw pixels) is theoretically equivalent to a MOSSE ﬁlter
+ . For a direct comparison, we include the results for the
+authors’ MOSSE tracker in Fig. 4. The performance of
+both is very close, showing that any particular differences
+in their implementations do not seem to matter much.
+However, the kernelized algorithm we propose (KCF) does
+yield a noticeable increase in performance.
+Replacing pixels with HOG features allows the KCF and
+DCF to surpass even TLD and Struck, by a relatively large
+margin (Fig. 4). This suggests that the most crucial factor
+for high performance, compared to other trackers that use
+similar features, is the efﬁcient incorporation of thousands
+of negative samples from the target’s environment, which
+they do with very little overhead.
+Timing. As mentioned earlier, the overall complexity of our
+closed-form solutions is O (n log n), resulting in its high
+speed (Table 1). The speed of the tracker is directly related
+to the size of the tracked region. This is an important
+factor when comparing trackers based on correlation ﬁlters.
+algorithms
+Struck 
+Table 1: Summary of experimental results on the 50 videos
+dataset. The reported quantities are averaged over all videos.
+Reported speeds include feature computation (e.g. HOG).
+MOSSE tracks a region that has the same support as
+the target object, while our implementation tracks a region
+that is 2.5 times larger (116x170 on average). Reducing the
+tracked region would allow us to approach their FPS of 615
+(Table 1), but we found that it hurts performance, especially
+for the kernel variants. Another interesting observation from
+Table 1 is that operating on 31 HOG features per spatial cell
+can be slightly faster than operating on raw pixels, even
+though we take the overhead of computing HOG features
+into account. Since each 4x4 pixels cell is represented by
+a single HOG descriptor, the smaller-sized DFTs counterbalance the cost of iterating over feature channels. Taking
+advantage of all 4 cores of a desktop computer, KCF/DCF
+take less than 2 minutes to process all 50 videos (∼29,000
+Experiments with sequence attributes
+The videos in the benchmark dataset are annotated with
+attributes, which describe the challenges that a tracker will
+face in each sequence – e.g., illumination changes or occlusions. These attributes are useful for diagnosing and characterizing the behavior of trackers in such a large dataset,
+without having to analyze each individual video. We report
+results for 4 attributes in Figure 5: non-rigid deformations,
+occlusions, out-of-view target, and background clutter.
+The robustness of the HOG variants of our tracker
+regarding non-rigid deformations and occlusions is not
+surprising, since these features are known to be highly
+discriminative . However, the KCF on raw pixels alone
+still fares almost as well as Struck and TLD, with the kernel
+making up for the features’ shortcomings.
+One challenge for the system we implemented is an outof-view target, due to the lack of a failure recovery mechanism. TLD performs better than most other trackers in this
+case, which illustrates its focus on re-detection and failure
+recovery. Such engineering improvements could probably
+beneﬁt our trackers, but the fact that KCF/DCF can still
+outperform TLD shows that they are not a decisive factor.
+Background clutter severely affects almost all trackers,
+except for the proposed ones, and to a lesser degree, Struck.
+For our tracker variants, this is explained by the implicit inclusion of thousands of negative samples around the tracked
+object. Since in this case even the raw pixel variants of our
+IEEE TRANSACTIONS ON PATTERN ANALYSIS AND MACHINE INTELLIGENCE
+Location error threshold
+Deformation (19 sequences)
+KCF on HOG [0.740]
+DCF on HOG [0.740]
+Struck [0.521]
+TLD [0.512]
+KCF on raw pixels [0.480]
+MIL [0.455]
+CT [0.435]
+MOSSE [0.367]
+ORIA [0.355]
+DCF on raw pixels [0.350]
+Location error threshold
+Occlusion (29 sequences)
+KCF on HOG [0.749]
+DCF on HOG [0.726]
+Struck [0.564]
+TLD [0.563]
+KCF on raw pixels [0.505]
+ORIA [0.435]
+MIL [0.427]
+CT [0.412]
+DCF on raw pixels [0.410]
+MOSSE [0.397]
+Location error threshold
+Out of view (6 sequences)
+KCF on HOG [0.650]
+DCF on HOG [0.632]
+TLD [0.576]
+Struck [0.539]
+MIL [0.393]
+KCF on raw pixels [0.358]
+CT [0.336]
+ORIA [0.315]
+DCF on raw pixels [0.261]
+MOSSE [0.226]
+Location error threshold
+Background clutter (21 sequences)
+KCF on HOG [0.733]
+DCF on HOG [0.719]
+Struck [0.585]
+KCF on raw pixels [0.503]
+MIL [0.456]
+TLD [0.428]
+DCF on raw pixels [0.407]
+ORIA [0.389]
+CT [0.339]
+MOSSE [0.339]
+Figure 5: Precision plot for sequences with attributes: occlusion, non-rigid deformation, out-of-view target, and background
+clutter. The HOG variants of the proposed trackers (bold) are the most resilient to all of these nuisances. Best viewed in color.
+tracker have a performance very close to optimal, while
+TLD, CT, ORIA and MIL show degraded performance, we
+conjecture that this is caused by their undersampling of
+negatives.
+We also report results for other attributes in Fig. 7.
+Generally, the proposed trackers are the most robust to 6
+of the 7 challenges, except for low resolution, which affects
+equally all trackers but Struck.
+CONCLUSIONS AND FUTURE WORK
+In this work, we demonstrated that it is possible to analytically model natural image translations, showing that under
+some conditions the resulting data and kernel matrices become circulant. Their diagonalization by the DFT provides a
+general blueprint for creating fast algorithms that deal with
+translations. We have applied this blueprint to linear and
+kernel ridge regression, obtaining state-of-the-art trackers
+that run at hundreds of FPS and can be implemented with
+only a few lines of code. Extensions of our basic approach
+seem likely to be useful in other problems. Since the ﬁrst
+version of this work, circulant data has been exploited
+successfully for other algorithms in detection and video
+event retrieval . An interesting direction for further work
+is to relax the assumption of periodic boundaries, which
+may improve performance. Many useful algorithms may
+also be obtained from the study of other objective functions
+with circulant data, including classical ﬁlters such as SDF
+or MACE , , and more robust loss functions than the
+squared loss. We also hope to generalize this framework to
+other operators, such as afﬁne transformations or non-rigid
+deformations.
+ACKNOWLEDGMENT
+acknowledge
+PTDC/EEA-CRO/122812/2010,
+SFRH/BD75459/2010,
+SFRH/BD74152/2010,
+SFRH/BPD/90200/2012.
+APPENDIX A
+Implementation details
+As is standard with correlation ﬁlters, the input patches (either raw pixels or extracted feature channels) are weighted
+by a cosine window, which smoothly removes discontinuities at the image boundaries caused by the cyclic assumption , . The tracked region has 2.5 times the size of
+the target, to provide some context and additional negative
+Recall that the training samples consist of shifts of a base
+sample, so we must specify a regression target for each one
+in y. The regression targets y simply follow a Gaussian
+function, which takes a value of 1 for a centered target,
+and smoothly decays to 0 for any other shifts, according
+to the spatial bandwidth s. Gaussian targets are smoother
+IEEE TRANSACTIONS ON PATTERN ANALYSIS AND MACHINE INTELLIGENCE
+KCF/DCF parameters
+With raw pixels
+Feature bandwidth σ
+Adaptation rate
+Spatial bandwidth s
+Regularization λ
+Table 2: Parameters used in all experiments. In this table, n and
+m refer to the width and height of the target, measured in pixels
+or HOG cells.
+than binary labels, and have the beneﬁt of reducing ringing
+artifacts in the Fourier domain .
+A subtle issue is determining which element of y is the
+regression target for the centered sample, on which we will
+center the Gaussian function. Although intuitively it may
+seem to be the middle of the output plane (Fig. 6-a), it turns
+out that the correct choice is the top-left element (Fig. 6-b).
+The explanation is that, after computing a cross-correlation
+between two images in the Fourier domain and converting
+back to the spatial domain, it is the top-left element of the
+result that corresponds to a shift of zero . Of course, since
+we always deal with cyclic signals, the peak of the Gaussian
+function must wrap around from the top-left corner to the
+other corners, as can be seen in Fig. 6-b. Placing the Gaussian
+peak in the middle of the regression target is common
+in some ﬁlter implementations, and leads the correlation
+output to be unnecessarily shifted by half a window, which
+must be corrected post-hoc2.
+Another common source of error is the fact that most
+implementations of the Fast Fourier Transform3 do not
+compute the unitary DFT. This means that the L2 norm of
+the signals is not preserved, unless the output is corrected
+by a constant factor. With some abuse of notation, we can
+say that the unitary DFT may be computed as
+FU(x) = fft2(x) / sqrt(m ∗n),
+where the input x has size m × n, and similarly for the
+inverse DFT,
+U (x) = ifft2(x) ∗sqrt(m ∗n).
+Proof of Theorem 1
+assumption
+κ(Mx, Mx′), for any permutation matrix M, then
+Kij = κ(P ix, P jx)
+= κ(P −iP ix, P −iP jx).
+Using known properties of permutation matrices, this
+reduces to
+Kij = κ(x, P j−ix).
+By the cyclic nature of P, it repeats every nth power, i.e.
+P n = P 0. As such, Eq. 37 is equivalent to
+2. This is usually done by switching the quadrants of the output, e.g.
+with the Matlab built-in function fftshift. It has the same effect as
+shifting Fig. 6-b to look like Fig. 6-a.
+3. For example Matlab, NumPy, Octave and the FFTW library.
+Figure 6: Regression targets y, following a Gaussian function
+with spatial bandwidth s (white indicates a value of 1, black a
+value of 0). (a) Placing the peak in the middle will unnecessarily
+cause the detection output to be shifted by half a window
+(discussed in Section A.1). (b) Placing the peak at the top-left
+element (and wrapping around) correctly centers the detection
+Kij = κ(x, P (j−i) mod n x),
+where mod is the modulus operation (remainder of division
+We now use the fact the elements of a circulant matrix
+X = C(x) (Eq. 6) satisfy
+Xij = x((j−i) mod n)+1,
+that is, a matrix is circulant if its elements only depend
+on (j −i) mod n. It is easy to check that this condition is
+satisﬁed by Eq. 6, and in fact it is often used as the deﬁnition
+of a circulant matrix .
+Because Kij also depends on (j −i) mod n, we must
+conclude that K is circulant as well, ﬁnishing our proof.
+Kernel Ridge Regression with Circulant data
+This section shows a more detailed derivation of Eq. 17. We
+start by replacing K = C(kxx) in the formula for Kernel
+Ridge Regression, Eq. 16, and diagonalizing it
+α = (C(kxx) + λI)−1 y
+By simple linear algebra, and the unitarity of F (FF H =
+F H + λFIF H−1
+which is equivalent to
+F Hα = diag
+Since for any vector Fz = ˆz, we have
+Finally, because the product of a diagonal matrix and a
+vector is simply their element-wise product,
+IEEE TRANSACTIONS ON PATTERN ANALYSIS AND MACHINE INTELLIGENCE
+Derivation of fast detection formula
+To diagonalize Eq. 21, we use the same properties as in the
+previous section. We have
+f(z) = (C (kxz))T α
+which is equivalent to
+Ff(z) = diag
+Replicating the same ﬁnal steps from the previous section,
+ˆf(z) = ˆkxz ⊙ˆα.
+Linear Ridge Regression with Circulant data
+This is a more detailed version of the steps from Section 4.4.
+It is very similar to the kernel case. We begin by replacing
+Eq. 10 in the formula for Ridge Regression, Eq. 3.
+ Fdiag (ˆx∗⊙ˆx) F H + λI
+By simple algebra, and the unitarity of F, we have
+ Fdiag (ˆx∗⊙ˆx) F H + λF HIF
+Fdiag (ˆx∗⊙ˆx + λ)−1 F H
+= Fdiag (ˆx∗⊙ˆx + λ)−1 F HFdiag (ˆx) F Hy
+ˆx∗⊙ˆx + λ
+Then, this is equivalent to
+ˆx∗⊙ˆx + λ
+and since for any vector Fz = ˆz,
+ˆx∗⊙ˆx + λ
+We may go one step further, since the product of a
+diagonal matrix and a vector is just their element-wise
+ˆx∗⊙ˆx + λ
+MOSSE ﬁlter
+The only difference between Eq. 12 and the MOSSE ﬁlter 
+is that the latter minimizes the error over (cyclic shifts of)
+multiple base samples xi, while Eq. 12 is deﬁned for a single
+base sample x. This was done for clarity of presentation, and
+the general case is easily derived. Note also that MOSSE
+does not support multiple channels, which we do through
+our dual formulation.
+The cyclic shifts of each base sample xi can be expressed
+in a circulant matrix Xi. Then, replacing the data matrix
+in Eq. 3 results in
+by direct application of the rule for products of block matrices. Factoring the bracketed expression,
+Eq. 61 looks exactly like Eq. 3, except for the sums. It
+is then trivial to follow the same steps as in Section 4.4 to
+diagonalize it, and obtain the ﬁlter equation
+i ⊙ˆxi + λ.

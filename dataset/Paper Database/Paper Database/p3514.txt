@@ -1,0 +1,530 @@
+Quantization and Training of Neural Networks for Efﬁcient
+Integer-Arithmetic-Only Inference
+Benoit Jacob
+Skirmantas Kligys
+Menglong Zhu
+Matthew Tang
+Andrew Howard
+Hartwig Adam
+Dmitry Kalenichenko
+{benoitjacob,skligys,bochen,menglong,
+mttang,howarda,hadam,dkalenichenko}@google.com
+Google Inc.
+The rising popularity of intelligent mobile devices and
+the daunting computational cost of deep learning-based
+models call for efﬁcient and accurate on-device inference
+schemes. We propose a quantization scheme that allows
+inference to be carried out using integer-only arithmetic,
+which can be implemented more efﬁciently than ﬂoating
+point inference on commonly available integer-only hardware. We also co-design a training procedure to preserve
+end-to-end model accuracy post quantization. As a result,
+the proposed quantization scheme improves the tradeoff between accuracy and on-device latency. The improvements
+are signiﬁcant even on MobileNets, a model family known
+for run-time efﬁciency, and are demonstrated in ImageNet
+classiﬁcation and COCO detection on popular CPUs.
+1. Introduction
+Current state-of-the-art Convolutional Neural Networks
+(CNNs) are not well suited for use on mobile devices. Since
+the advent of AlexNet , modern CNNs have primarily
+been appraised according to classiﬁcation / detection accuracy. Thus network architectures have evolved without regard to model complexity and computational efﬁciency. On
+the other hand, successful deployment of CNNs on mobile
+platforms such as smartphones, AR/VR devices (HoloLens,
+Daydream), and drones require small model sizes to accommodate limited on-device memory, and low latency to maintain user engagement. This has led to a burgeoning ﬁeld of
+research that focuses on reducing the model size and inference time of CNNs with minimal accuracy losses.
+Approaches in this ﬁeld roughly fall into two categories. The ﬁrst category, exempliﬁed by MobileNet ,
+SqueezeNet , ShufﬂeNet , and DenseNet , designs novel network architectures that exploit computation
+/ memory efﬁcient operations. The second category quantizes the weights and / or activations of a CNN from 32
+bit ﬂoating point into lower bit-depth representations. This
+methodology, embraced by approaches such as Ternary
+weight networks (TWN ), Binary Neural Networks
+(BNN ), XNOR-net , and more , is the focus of our investigation. Despite their abundance, current quantization approaches are lacking in two
+respects when it comes to trading off latency with accuracy.
+First, prior approaches have not been evaluated on a
+reasonable baseline architecture. The most common baseline architectures, AlexNet , VGG and GoogleNet
+ , are all over-parameterized by design in order to extract
+marginal accuracy improvements. Therefore, it is easy to
+obtain sizable compression of these architectures, reducing
+quantization experiments on these architectures to proofof-concepts at best. Instead, a more meaningful challenge
+would be to quantize model architectures that are already ef-
+ﬁcient at trading off latency with accuracy, e.g. MobileNets.
+Second, many quantization approaches do not deliver
+veriﬁable efﬁciency improvements on real hardware. Approaches that quantize only the weights ( ) are
+primarily concerned with on-device storage and less with
+computational efﬁciency. Notable exceptions are binary,
+ternary and bit-shift networks .
+These latter
+approaches employ weights that are either 0 or powers of
+2, which allow multiplication to be implemented by bit
+shifts. However, while bit-shifts can be efﬁcient in custom hardware, they provide little beneﬁt on existing hardware with multiply-add instructions that, when properly
+used (i.e. pipelined), are not more expensive than additions alone. Moreover, multiplications are only expensive
+if the operands are wide, and the need to avoid multiplications diminishes with bit depth once both weights and activations are quantized. Notably, these approaches rarely provide on-device measurements to verify the promised timing
+improvements. More runtime-friendly approaches quantize
+both the weights and the activations into 1 bit representa-
+(a) Integer-arithmetic-only inference
+(b) Training with simulated quantization
+Latency (ms)
+Top 1 Accuracy
+(c) ImageNet latency-vs-accuracy tradeoff
+Figure 1.1: Integer-arithmetic-only quantization. a) Integer-arithmetic-only inference of a convolution layer. The input and output
+are represented as 8-bit integers according to equation 1. The convolution involves 8-bit integer operands and a 32-bit integer accumulator.
+The bias addition involves only 32-bit integers (section 2.4). The ReLU6 nonlinearity only involves 8-bit integer arithmetic. b) Training
+with simulated quantization of the convolution layer. All variables and computations are carried out using 32-bit ﬂoating-point arithmetic.
+Weight quantization (“wt quant”) and activation quantization (“act quant”) nodes are injected into the computation graph to simulate the
+effects of quantization of the variables (section 3). The resultant graph approximates the integer-arithmetic-only computation graph in panel
+a), while being trainable using conventional optimization algorithms for ﬂoating point models. c) Our quantization scheme beneﬁts from
+the fast integer-arithmetic circuits in common CPUs to deliver an improved latency-vs-accuracy tradeoff (section 4). The ﬁgure compares
+integer quantized MobileNets against ﬂoating point baselines on ImageNet using Qualcomm Snapdragon 835 LITTLE cores.
+tions . With these approaches, both multiplications and additions can be implemented by efﬁcient bit-shift
+and bit-count operations, which are showcased in custom
+GPU kernels (BNN ). However, 1 bit quantization often leads to substantial performance degradation, and may
+be overly stringent on model representation.
+In this paper we address the above issues by improving
+the latency-vs-accuracy tradeoffs of MobileNets on common mobile hardware. Our speciﬁc contributions are:
+• We provide a quantization scheme (section 2.1) that
+quantizesh both weights and activations as 8-bit integers,
+and just a few parameters (bias vectors) as 32-bit integers.
+• We provide a quantized inference framework that is ef-
+ﬁciently implementable on integer-arithmetic-only hardware such as the Qualcomm Hexagon (sections 2.2, 2.3),
+and we describe an efﬁcient, accurate implementation on
+ARM NEON (Appendix B).
+• We provide a quantized training framework (section 3)
+co-designed with our quantized inference to minimize the
+loss of accuracy from quantization on real models.
+• We apply our frameworks to efﬁcient classiﬁcation and
+detection systems based on MobileNets and provide
+benchmark results on popular ARM CPUs (section 4)
+that show signiﬁcant improvements in the latency-vsaccuracy tradeoffs for state-of-the-art MobileNet architectures, demonstrated in ImageNet classiﬁcation ,
+COCO object detection , and other tasks.
+Our work draws inspiration from , which leverages
+low-precision ﬁxed-point arithmetic to accelerate the training speed of CNNs, and from , which uses 8-bit ﬁxedpoint arithmetic to speed up inference on x86 CPUs. Our
+quantization scheme focuses instead on improving the inference speed vs accuracy tradeoff on mobile CPUs.
+2. Quantized Inference
+2.1. Quantization scheme
+In this section, we describe our general quantization
+scheme12, that is, the correspondence between the bitrepresentation of values (denoted q below, for “quantized
+value”) and their interpretation as mathematical real numbers (denoted r below, for “real value”). Our quantization
+scheme is implemented using integer-only arithmetic during inference and ﬂoating-point arithmetic during training,
+with both implementations maintaining a high degree of
+correspondence with each other. We achieve this by ﬁrst
+providing a mathematically rigorous deﬁnition of our quantization scheme, and separately adopting this scheme for
+both integer-arithmetic inference and ﬂoating-point training.
+1The quantization scheme described here is the one adopted in Tensor-
+Flow Lite and we will refer to speciﬁc parts of its code to illustrate
+aspects discussed below.
+2We had earlier described this quantization scheme in the documentation of gemmlowp . That page may still be useful as an alternate
+treatment of some of the topics developed in this section, and for its selfcontained example code.
+A basic requirement of our quantization scheme is that it
+permits efﬁcient implementation of all arithmetic using only
+integer arithmetic operations on the quantized values (we
+eschew implementations requiring lookup tables because
+these tend to perform poorly compared to pure arithmetic
+on SIMD hardware). This is equivalent to requiring that the
+quantization scheme be an afﬁne mapping of integers q to
+real numbers r, i.e. of the form
+r = S(q −Z)
+for some constants S and Z. Equation (1) is our quantization scheme and the constants S and Z are our quantization
+parameters. Our quantization scheme uses a single set of
+quantization parameters for all values within each activations array and within each weights array; separate arrays
+use separate quantization parameters.
+For 8-bit quantization, q is quantized as an 8-bit integer
+(for B-bit quantization, q is quantized as an B-bit integer).
+Some arrays, typically bias vectors, are quantized as 32-bit
+integers, see section 2.4.
+The constant S (for “scale”) is an arbitrary positive real
+number. It is typically represented in software as a ﬂoatingpoint quantity, like the real values r. Section 2.2 describes
+methods for avoiding the representation of such ﬂoatingpoint quantities in the inference workload.
+The constant Z (for “zero-point”) is of the same type
+as quantized values q, and is in fact the quantized value q
+corresponding to the real value 0. This allows us to automatically meet the requirement that the real value r = 0 be
+exactly representable by a quantized value. The motivation
+for this requirement is that efﬁcient implementation of neural network operators often requires zero-padding of arrays
+around boundaries.
+Our discussion so far is summarized in the following
+quantized buffer data structure3, with one instance of such a
+buffer existing for each activations array and weights array
+in a neural network. We use C++ syntax because it allows
+the unambiguous conveyance of types.
+template<typename QType>
+// e.g. QType=uint8
+struct QuantizedBuffer {
+vector<QType> q;
+// the quantized values
+// the scale
+// the zero-point
+2.2. Integer-arithmetic-only matrix multiplication
+We now turn to the question of how to perform inference
+using only integer arithmetic, i.e. how to use Equation (1)
+to translate real-numbers computation into quantized-values
+3The actual data structures in the TensorFlow Lite Converter are
+QuantizationParams and Array in this header ﬁle. As we discuss
+in the next subsection, this data structure, which still contains a ﬂoatingpoint quantity, does not appear in the actual quantized on-device inference
+computation, and how the latter can be designed to involve
+only integer arithmetic even though the scale values S are
+not integers.
+Consider the multiplication of two square N × N matrices of real numbers, r1 and r2, with their product represented by r3 = r1r2. We denote the entries of each of these
+matrices rα (α = 1, 2 or 3) as r(i,j)
+for 1 ⩽i, j ⩽N,
+and the quantization parameters with which they are quantized as (Sα, Zα). We denote the quantized entries by q(i,j)
+Equation (1) then becomes:
+= Sα(q(i,j)
+From the deﬁnition of matrix multiplication, we have
+−Z1)S2(q(j,k)
+which can be rewritten as
+−Z1)(q(j,k)
+where the multiplier M is deﬁned as
+In Equation (4), the only non-integer is the multiplier M.
+As a constant depending only on the quantization scales
+S1, S2, S3, it can be computed ofﬂine. We empirically ﬁnd
+it to always be in the interval (0, 1), and can therefore express it in the normalized form
+where M0 is in the interval [0.5, 1) and n is a non-negative
+integer. The normalized multiplier M0 now lends itself well
+to being expressed as a ﬁxed-point multiplier (e.g. int16 or
+int32 depending on hardware capability). For example, if
+int32 is used, the integer representing M0 is the int32 value
+nearest to 231M0. Since M0 ⩾0.5, this value is always at
+least 230 and will therefore always have at least 30 bits of
+relative accuracy. Multiplication by M0 can thus be implemented as a ﬁxed-point multiplication4. Meanwhile, multiplication by 2−n can be implemented with an efﬁcient bitshift, albeit one that needs to have correct round-to-nearest
+behavior, an issue that we return to in Appendix B.
+2.3. Efﬁcient handling of zero-points
+In order to efﬁciently implement the evaluation of Equation (4) without having to perform 2N 3 subtractions and
+4The computation discussed in this section is implemented in Tensor-
+Flow Lite reference code for a fully-connected layer.
+without having to expand the operands of the multiplication
+into 16-bit integers, we ﬁrst notice that by distributing the
+multiplication in Equation (4), we can rewrite it as
+NZ1Z2 −Z1a(k)
+1 takes only N additions to compute, so they
+collectively take only 2N 2 additions. The rest of the cost of
+the evaluation of (7) is almost entirely concentrated in the
+core integer matrix multiplication accumulation
+which takes 2N 3 arithmetic operations; indeed, everything
+else involved in (7) is O(N 2) with a small constant in the O.
+Thus, the expansion into the form (7) and the factored-out
+computation of a(k)
+enable low-overhead handling
+of arbitrary zero-points for anything but the smallest values
+of N, reducing the problem to the same core integer matrix
+multiplication accumulation (9) as we would have to compute in any other zero-points-free quantization scheme.
+2.4. Implementation of a typical fused layer
+We continue the discussion of section 2.3, but now explicitly deﬁne the data types of all quantities involved, and
+modify the quantized matrix multiplication (7) to merge
+the bias-addition and activation function evaluation directly
+into it. This fusing of whole layers into a single operation
+is not only an optimization. As we must reproduce in inference code the same arithmetic that is used in training,
+the granularity of fused operators in inference code (taking
+an 8-bit quantized input and producing an 8-bit quantized
+output) must match the placement of “fake quantization”
+operators in the training graph (section 3).
+For our implementation on ARM and x86 CPU architectures, we use the gemmlowp library , whose
+GemmWithOutputPipeline entry point provides supports the fused operations that we now describe5.
+5The discussion in this section is implemented in TensorFlow Lite 
+for e.g. a Convolutional operator (reference code is self-contained, optimized code calls into gemmlowp ).
+We take the q1 matrix to be the weights, and the q2 matrix
+to be the activations. Both the weights and activations are
+of type uint8 (we could have equivalently chosen int8, with
+suitably modiﬁed zero-points). Accumulating products of
+uint8 values requires a 32-bit accumulator, and we choose a
+signed type for the accumulator for a reason that will soon
+become clear. The sum in (9) is thus of the form:
+int32 += uint8 * uint8.
+In order to have the quantized bias-addition be the addition
+of an int32 bias into this int32 accumulator, the bias-vector
+is quantized such that: it uses int32 as its quantized data
+type; it uses 0 as its quantization zero-point Zbias; and its
+quantization scale Sbias is the same as that of the accumulators, which is the product of the scales of the weights and
+of the input activations. In the notation of section 2.3,
+Sbias = S1S2, Zbias = 0.
+Although the bias-vectors are quantized as 32-bit values,
+they account for only a tiny fraction of the parameters in a
+neural network. Furthermore, the use of higher precision
+for bias vectors meets a real need: as each bias-vector entry
+is added to many output activations, any quantization error
+in the bias-vector tends to act as an overall bias (i.e. an error
+term with nonzero mean), which must be avoided in order
+to preserve good end-to-end neural network accuracy6.
+With the ﬁnal value of the int32 accumulator, there remain three things left to do: scale down to the ﬁnal scale
+used by the 8-bit output activations, cast down to uint8 and
+apply the activation function to yield the ﬁnal 8-bit output
+activation.
+The down-scaling corresponds to multiplication by the
+multiplier M in equation (7). As explained in section 2.2, it
+is implemented as a ﬁxed-point multiplication by a normalized multiplier M0 and a rounding bit-shift. Afterwards, we
+perform a saturating cast to uint8, saturating to the range
+We focus on activation functions that are mere clamps,
+e.g. ReLU, ReLU6. Mathematical functions are discussed
+in appendix A.1 and we do not currently fuse them into such
+layers. Thus, the only thing that our fused activation functions need to do is to further clamp the uint8 value to some
+sub-interval of before storing the ﬁnal uint8 output
+activation. In practice, the quantized training process (section 3) tends to learn to make use of the whole output uint8
+ interval so that the activation function no longer
+does anything, its effect being subsumed in the clamping
+to implied in the saturating cast to uint8.
+6The quantization of bias-vectors discussed here is implemented here
+in the TensorFlow Lite Converter.
+3. Training with simulated quantization
+A common approach to training quantized networks is
+to train in ﬂoating point and then quantize the resulting
+weights (sometimes with additional post-quantization training for ﬁne-tuning). We found that this approach works
+sufﬁciently well for large models with considerable representational capacity, but leads to signiﬁcant accuracy drops
+for small models. Common failure modes for simple posttraining quantization include: 1) large differences (more
+than 100×) in ranges of weights for different output channels (section 2 mandates that all channels of the same layer
+be quantized to the same resolution, which causes weights
+in channels with smaller ranges to have much higher relative
+error) and 2) outlier weight values that make all remaining
+weights less precise after quantization.
+We propose an approach that simulates quantization effects in the forward pass of training. Backpropagation still
+happens as usual, and all weights and biases are stored in
+ﬂoating point so that they can be easily nudged by small
+The forward propagation pass however simulates quantized inference as it will happen in the inference
+engine, by implementing in ﬂoating-point arithmetic the
+rounding behavior of the quantization scheme that we introduced in section 2:
+• Weights are quantized before they are convolved with
+the input. If batch normalization (see ) is used for
+the layer, the batch normalization parameters are “folded
+into” the weights before quantization, see section 3.2.
+• Activations are quantized at points where they would be
+during inference, e.g. after the activation function is applied to a convolutional or fully connected layer’s output,
+or after a bypass connection adds or concatenates the outputs of several layers together such as in ResNets.
+For each layer, quantization is parameterized by the
+number of quantization levels and clamping range, and is
+performed by applying point-wise the quantization function
+q deﬁned as follows:
+clamp(r; a, b) := min (max(x, a), b)
+s(a, b, n) := b −a
+q(r; a, b, n) :=
+clamp(r; a, b) −a
+s(a, b, n)
+s(a, b, n) + a,
+where r is a real-valued number to be quantized, [a; b] is the
+quantization range, n is the number of quantization levels,
+and ⌊·⌉denotes rounding to the nearest integer. n is ﬁxed
+for all layers in our experiments, e.g. n = 28 = 256 for 8
+bit quantization.
+3.1. Learning quantization ranges
+Quantization ranges are treated differently for weight
+quantization vs. activation quantization:
+• For weights, the basic idea is simply to set a := min w,
+b := max w. We apply a minor tweak to this so that
+the weights, once quantized as int8 values, only range
+in [−127, 127] and never take the value −128, as this enables a substantial optimization opportunity (for more details, see Appendix B).
+• For activations, ranges depend on the inputs to the network. To estimate the ranges, we collect [a; b] ranges
+seen on activations during training and then aggregate
+them via exponential moving averages (EMA) with the
+smoothing parameter being close to 1 so that observed
+ranges are smoothed across thousands of training steps.
+Given signiﬁcant delay in the EMA updating activation
+ranges when the ranges shift rapidly, we found it useful
+to completely disable activation quantization at the start
+of training (say, for 50 thousand to 2 million steps). This
+allows the network to enter a more stable state where activation quantization ranges do not exclude a signiﬁcant
+fraction of values.
+In both cases, the boundaries [a; b] are nudged so that
+value 0.0 is exactly representable as an integer z(a, b, n)
+after quantization. As a result, the learned quantization parameters map to the scale S and zero-point Z in equation 1:
+S = s(a, b, n), Z = z(a, b, n)
+Below we depict simulated quantization assuming that
+the computations of a neural network are captured as a TensorFlow graph . A typical workﬂow is described in Algorithm 1. Optimization of the inference graph by fusing
+Algorithm 1 Quantized graph training and inference
+1: Create a training graph of the ﬂoating-point model.
+2: Insert fake quantization TensorFlow operations in locations where tensors will be downcasted to fewer bits
+during inference according to equation 12.
+3: Train in simulated quantized mode until convergence.
+4: Create and optimize the inference graph for running in
+a low bit inference engine.
+5: Run inference using the quantized inference graph.
+and removing operations is outside the scope of this paper. Source code for graph modiﬁcations (inserting fake
+quantization operations, creating and optimizing the inference graph) and a low bit inference engine has been opensourced with TensorFlow contributions in .
+Figure 1.1a and b illustrate TensorFlow graphs before
+and after quantization for a simple convolutional layer. Illustrations of the more complex convolution with a bypass
+connection in ﬁgure C.3 can be found in ﬁgure C.4.
+Note that the biases are not quantized because they are
+represented as 32-bit integers in the inference process, with
+a much higher range and precision compared to the 8 bit
+weights and activations. Furthermore, quantization parameters used for biases are inferred from the quantization parameters of the weights and activations. See section 2.4.
+Typical TensorFlow code illustrating use of follows:
+from tf.contrib.quantize \
+import quantize_graph as qg
+g = tf.Graph()
+with g.as_default():
+output = ...
+total_loss = ...
+optimizer = ...
+train_tensor = ...
+if is_training:
+quantized_graph = \
+qg.create_training_graph(g)
+quantized_graph = \
+qg.create_eval_graph(g)
+# Train or evaluate quantized_graph.
+3.2. Batch normalization folding
+For models that use batch normalization (see ), there
+is additional complexity: the training graph contains batch
+normalization as a separate block of operations, whereas
+the inference graph has batch normalization parameters
+“folded” into the convolutional or fully connected layer’s
+weights and biases, for efﬁciency. To accurately simulate
+quantization effects, we need to simulate this folding, and
+quantize weights after they have been scaled by the batch
+normalization parameters. We do so with the following:
+Here γ is the batch normalization’s scale parameter,
+B) is the moving average estimate of the variance
+of convolution results across the batch, and ε is just a small
+constant for numerical stability.
+After folding, the batch-normalized convolutional layer
+reduces to the simple convolutional layer depicted in ﬁgure 1.1a with the folded weights wfold and the corresponding folded biases. Therefore the same recipe in ﬁgure 1.1b
+applies. See the appendix for the training graph (ﬁgure C.5)
+for a batch-normalized convolutional layer, the corresponding inference graph (ﬁgure C.6), the training graph after
+batch-norm folding (ﬁgure C.7) and the training graph after both folding and quantization (ﬁgure C.8).
+ResNet depth
+Floating-point accuracy
+Integer-quantized accuracy
+Table 4.1: ResNet on ImageNet: Floating-point vs quantized network accuracy for various network depths.
+Weight bits
+Activation bits
+Table 4.2:
+ResNet on ImageNet:
+Accuracy under various quantization schemes, including binary weight networks (BWN ), ternary weight networks (TWN
+ ), incremental network quantization (INQ ) and
+ﬁne-grained quantization (FGQ )
+4. Experiments
+We conducted two set of experiments, one showcasing the effectiveness of quantized training (Section. 4.1),
+and the other illustrating the improved latency-vs-accuracy
+tradeoff of quantized models on common hardware (Section. 4.2). The most performance-critical part of the inference workload on the neural networks being benchmarked
+is matrix multiplication (GEMM). The 8-bit and 32-bit
+ﬂoating-point GEMM inference code uses the gemmlowp
+library for 8-bit quantized inference, and the Eigen library for 32-bit ﬂoating-point inference.
+4.1. Quantized training of Large Networks
+We apply quantized training to ResNets and InceptionV3 on the ImageNet dataset. These popular networks are too computationally intensive to be deployed on
+mobile devices, but are included for comparison purposes.
+Training protocols are discussed in Appendix D.1 and D.2.
+We compare ﬂoating-point vs integer-quantized ResNets
+for various depths in table 4.1. Accuracies of integer-only
+quantized networks are within 2% of their ﬂoating-point
+counterparts.
+We also list ResNet50 accuracies under different quantization schemes in table 4.2. As expected, integer-only
+quantization outperforms FGQ , which uses 2 bits for
+weight quantization. INQ (5-bit weight ﬂoating-point
+activation) achieves a similar accuracy as ours, but we provide additional run-time improvements (see section 4.2).
+Table 4.3: Inception v3 on ImageNet: Accuracy and recall
+5 comparison of ﬂoating point and quantized models.
+Inception v3 on ImageNet
+We compare the Inception v3 model quantized into 8 and 7
+bits, respectively. 7-bit quantization is obtained by setting
+the number of quantization levels in equation 12 to n = 27.
+We additionally probe the sensitivity of activation quantization by comparing networks with two activation nonlinearities, ReLU6 and ReLU. The training protocol is in Appendix D.2.
+Table 4.3 shows that 7-bit quantized training produces
+model accuracies close to that of 8-bit quantized training, and quantized models with ReLU6 have less accuracy
+degradation. The latter can be explained by noticing that
+ReLU6 introduces the interval as a natural range for
+activations, while ReLU allows activations to take values
+from a possibly larger interval, with different ranges in different channels. Values in a ﬁxed range are easier to quantize with high precision.
+4.2. Quantization of MobileNets
+MobileNets are a family of architectures that achieve a
+state-of-the-art tradeoff between on-device latency and ImageNet classiﬁcation accuracy. In this section we demonstrate how integer-only quantization can further improve the
+tradeoff on common hardware.
+We benchmarked the MobileNet architecture with varying depth-multipliers (DM) and resolutions on ImageNet
+on three types of Qualcomm cores, which represent three
+different micro-architectures: 1) Snapdragon 835 LITTLE
+core, (ﬁgure. 1.1c), a power-efﬁcient processor found in
+Google Pixel 2; 2) Snapdragon 835 big core (ﬁgure. 4.1), a
+high-performance core employed by Google Pixel 2; and 3)
+Snapdragon 821 big core (ﬁgure. 4.2), a high-performance
+core used in Google Pixel 1.
+Integer-only quantized MobileNets achieve higher accuracies than ﬂoating-point MobileNets given the same run-
+Latency (ms)
+Top 1 Accuracy
+Figure 4.1: ImageNet classiﬁer on Qualcomm Snapdragon
+835 big cores: Latency-vs-accuracy tradeoff of ﬂoatingpoint and integer-only MobileNets.
+Latency (ms)
+Top 1 Accuracy
+Figure 4.2: ImageNet classiﬁer on Qualcomm Snapdragon
+821: Latency-vs-accuracy tradeoff of ﬂoating-point and
+integer-only MobileNets.
+time budget. The accuracy gap is quite substantial (∼10%)
+for Snapdragon 835 LITTLE cores at the 33ms latency
+needed for real-time (30 fps) operation. While most of the
+quantization literature focuses on minimizing accuracy loss
+for a given architecture, we advocate for a more comprehensive latency-vs-accuracy tradeoff as a better measure.
+Note that this tradeoff depends critically on the relative
+speed of ﬂoating-point vs integer-only arithmetic in hardware. Floating-point computation is better optimized in the
+Snapdragon 821, for example, resulting in a less noticeable
+reduction in latency for quantized models.
+We evaluated quantization in the context of mobile real time
+object detection, comparing the performance of quantized
+8-bit and ﬂoat models of MobileNet SSD on the
+COCO dataset . We replaced all the regular convolutions in the SSD prediction layers with separable convolu-
+LITTLE (ms)
+Table 4.4: Object detection speed and accuracy on COCO
+dataset of ﬂoating point and integer-only quantized models.
+Latency (ms) is measured on Qualcomm Snapdragon 835
+big and LITTLE cores.
+tions (depthwise followed by 1 × 1 projection). This modi-
+ﬁcation is consistent with the overall design of MobileNets
+and makes them more computationally efﬁcient. We utilized the Open Source TensorFlow Object Detection API
+ to train and evaluate our models. The training protocol
+is described in Appendix D.3. We also delayed quantization for 500 thousand steps (see section 3.1), ﬁnding that it
+signiﬁcantly decreases the time to convergence.
+Table 4.4 shows the latency-vs-accuracy tradeoff between ﬂoating-point and integer-quantized models. Latency
+was measured on a single thread using Snapdragon 835
+cores (big and LITTLE). Quantized training and inference
+results in up to a 50% reduction in running time, with a
+minimal loss in accuracy (−1.8% relative).
+Face detection
+To better examine quantized MobileNet SSD on a smaller
+scale, we benchmarked face detection on the face attribute
+classiﬁcation dataset (a Flickr-based dataset used in ).
+We contacted the authors of to evaluate our quantized
+MobileNets on detection and face attributes following the
+same protocols (detailed in Appendix D.4).
+As indicated by tables 4.5 and 4.6, quantization provides
+close to a 2× latency reduction with a Qualcomm Snapdragon 835 big or LITTLE core at the cost of a ∼2% drop
+in the average precision. Notably, quantization allows the
+25% face detector to run in real-time (1K/28 ≈36 fps) on
+a single big core, whereas the ﬂoating-point model remains
+slower than real-time (1K/44 ≈23 fps).
+We additionally examine the effect of multi-threading on
+the latency of quantized models. Table 4.6 shows a 1.5 to
+2.2×) speedup when using 4 cores. The speedup ratios are
+comparable between the two cores, and are higher for larger
+models where the overhead of multi-threading occupies a
+smaller fraction of the total computation.
+Face attributes
+Figure 4.3 shows the latency-vs-accuracy tradeoff of face
+attribute classiﬁcation on the Qualcomm Snapdragon 821.
+Table 4.5: Face detection accuracy of ﬂoating point and
+integer-only quantized models.
+The reported precision
+/ recall is averaged over different precision / recall values where an IOU of x between the groundtruth and predicted windows is considered a correct detection, for x in
+{0.5, 0.55, . . ., 0.95}.
+LITTLE Cores
+Table 4.6: Face detection: latency of ﬂoating point and
+quantized models on Qualcomm Snapdragon 835 cores.
+Since quantized training results in little accuracy degradation, we see an improved tradeoff even though the Qualcomm Snapdragon 821 is highly optimized for ﬂoating
+point arithmetic (see Figure 4.2 for comparison).
+Latency (ms)
+Average precision
+Figure 4.3: Face attribute classiﬁer on Qualcomm Snapdragon 821: Latency-vs-accuracy tradeoff of ﬂoating-point
+and integer-only MobileNets.
+Ablation study To understand performance sensitivity
+to the quantization scheme, we further evaluate quantized
+Table 4.7: Face attributes: relative average category precision of integer-quantized MobileNets (varying weight and
+activation bit depths) compared with ﬂoating point.
+Table 4.8: Face attributes: Age precision at difference of
+5 years for quantized model (varying weight and activation
+bit depths) compared with ﬂoating point.
+training with varying weight and activation quantization bit
+depths. The degradation in average precision for binary attributes and age precision relative to the ﬂoating-point baseline are shown in Tables 4.7 and 4.8, respectively. The tables suggest that 1) weights are more sensitive to reduced
+quantization bit depth than activations, 2) 8 and 7-bit quantized models perform similarly to ﬂoating point models, and
+3) when the total bit-depths are equal, it is better to keep
+weight and activation bit depths the same.
+5. Discussion
+We propose a quantization scheme that relies only on
+integer arithmetic to approximate the ﬂoating-point computations in a neural network. Training that simulates the
+effect of quantization helps to restore model accuracy to
+near-identical levels as the original. In addition to the 4×
+reduction of model size, inference efﬁciency is improved
+via ARM NEON-based implementations.
+The improvement advances the state-of-the-art tradeoff between latency
+on common ARM CPUs and the accuracy of popular computer vision models. The synergy between our quantization scheme and efﬁcient architecture design suggests that
+integer-arithmetic-only inference could be a key enabler
+that propels visual recognition technologies into the realtime and low-end phone market.

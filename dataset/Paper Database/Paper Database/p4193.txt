@@ -1,0 +1,437 @@
+Proceedings of the Third Conference on Machine Translation (WMT), Volume 1: Research Papers, pages 1–9
+Belgium, Brussels, October 31 - Novermber 1, 2018. c⃝2018 Association for Computational Linguistics
+ 
+Scaling Neural Machine Translation
+Sergey Edunov△
+David Grangier▽∗
+Michael Auli△
+△Facebook AI Research, Menlo Park & New York.
+▽Google Brain, Mountain View.
+Sequence to sequence learning models still require several days to reach state of the art performance on large benchmark datasets using
+a single machine. This paper shows that reduced precision and large batch training can
+speedup training by nearly 5x on a single 8-
+GPU machine with careful tuning and implementation.1 On WMT’14 English-German
+translation, we match the accuracy of Vaswani
+et al. in under 5 hours when training on
+8 GPUs and we obtain a new state of the art
+of 29.3 BLEU after training for 85 minutes on
+128 GPUs. We further improve these results
+to 29.8 BLEU by training on the much larger
+Paracrawl dataset. On the WMT’14 English-
+French task, we obtain a state-of-the-art BLEU
+of 43.2 in 8.5 hours on 128 GPUs.
+Introduction
+Neural Machine Translation (NMT) has seen impressive progress in the recent years with the introduction of ever more efﬁcient architectures . Similar sequence-to-sequence models are also applied to other natural language
+processing tasks, such as abstractive summarization and
+dialog .
+Currently, training state-of-the-art models on
+large datasets is computationally intensive and can
+require several days on a machine with 8 highend graphics processing units (GPUs).
+training to multiple machines enables faster experimental turn-around but also introduces new challenges: How do we maintain efﬁciency in a distributed setup when some batches process faster
+*Work done while at Facebook AI Research.
+1Our implementation is available at:
+ 
+than others (i.e., in the presence of stragglers)?
+How do larger batch sizes affect optimization and
+generalization performance? While stragglers primarily affect multi-machine training, questions
+about the effectiveness of large batch training are
+relevant even for users of commodity hardware
+on a single machine, especially as such hardware
+continues to improve, enabling bigger models and
+batch sizes.
+In this paper, we ﬁrst explore approaches to improve training efﬁciency on a single machine. By
+training with reduced ﬂoating point precision we
+decrease training time by 65% with no effect on
+accuracy. Next, we assess the effect of dramatically increasing the batch size from 25k to over
+400k tokens, a necessary condition for large scale
+parallelization with synchronous training. We implement this on a single machine by accumulating
+gradients from several batches before each update.
+We ﬁnd that by training with large batches and by
+increasing the learning rate we can further reduce
+training time by 40% on a single machine. Finally, we parallelize training across 16 machines
+and ﬁnd that we can reduce training time by an
+additional 90% compared to a single machine.
+Our improvements enable training a Transformer model on the WMT’16 En-De dataset to
+the same accuracy as Vaswani et al. in just
+32 minutes on 128 GPUs and in under 5 hours on
+8 GPUs. This same model trained to full convergence achieves a new state of the art of 29.3 BLEU
+in 85 minutes.
+These scalability improvements
+additionally enable us to train models on much
+larger datasets. We show that we can reach 29.8
+BLEU on the same test set in less than 10 hours
+when trained on a combined corpus of WMT and
+Paracrawl data containing ∼150M sentence pairs
+(i.e., over 30x more training data). Similarly, on
+the WMT’14 En-Fr task we obtain a state of the
+art BLEU of 43.2 in 8.5 hours on 128 GPUs.
+opt. steps
+valid loss (NLL)
+valid loss (NLL)
+Figure 1: Validation loss for Transformer model trained with varying batch sizes (bsz) as a function of
+optimization steps (left) and epochs (right). Training with large batches is less data-efﬁcient, but can be
+parallelized. Batch sizes given in number of target tokens excluding padding. WMT En-De, newstest13.
+Related Work
+Previous research considered training and inference with reduced numerical precision for neural networks . Our work relies on
+half-precision ﬂoating point computation, following the guidelines of Micikevicius et al. to
+adjust the scale of the loss to avoid underﬂow or
+overﬂow errors in gradient computations.
+Distributed training of neural networks follows
+two main strategies:
+(i) model parallel evaluates different model layers on different workers and (ii) data parallel keeps a copy of the model on each worker
+but distributes different batches to different machines . We rely on the second
+scheme and follow synchronous SGD, which has
+recently been deemed more efﬁcient than asynchronous SGD . Synchronous
+SGD distributes the computation of gradients over
+multiple machines and then performs a synchronized update of the model weights. Large neural machine translation systems have been recently
+trained with this algorithm with success .
+Recent work by Puri et al. considers
+large-scale distributed training of language models (LM) achieving 109x scaling with 128 GPUs.
+Compared to NMT training, however, LM training does not face the same challenges of variable
+batch sizes. Moreover, we ﬁnd that large batch
+training requires warming up the learning rate,
+whereas their work begins training with a large
+learning rate.
+There has also been recent work
+on using lower precision for inference only .
+strategies
+for improving communication efﬁciency in distributed synchronous training setting by abandoning “stragglers,” in particular by introducing redundancy in how the data is distributed across
+workers .
+The idea rests on coding schemes that introduce
+this redundancy and enable for some workers to
+simply not return an answer. In contrast, we do
+not discard any computation done by workers.
+Experimental Setup
+Datasets and Evaluation
+We run experiments on two language pairs, English to German (En–De) and English to French
+For En–De we replicate the setup
+of Vaswani et al. which relies on the
+WMT’16 training data with 4.5M sentence pairs;
+we validate on newstest13 and test on newstest14.
+We use a vocabulary of 32K symbols based on a
+joint source and target byte pair encoding .
+For En–Fr, we train on
+WMT’14 and borrow the setup of Gehring et al.
+ with 36M training sentence pairs. We use
+newstest12+13 for validation and newstest14 for
+test. The 40K vocabulary is based on a joint source
+and target BPE factorization.
+We also experiment with scaling training beyond 36M sentence pairs by using data from
+the Paracrawl corpus .
+dataset is extremely large with more than 4.5B
+pairs for En–De and more than 4.2B pairs for
+We rely on the BPE vocabulary built
+on WMT data for each language pair and explore ﬁltering this noisy dataset in Section 4.5.
+We measure case-sensitive tokenized BLEU with
+multi-bleu.pl2 and de-tokenized BLEU with
+SacreBLEU3 . All results use beam
+search with a beam width of 4 and length penalty
+of 0.6, following Vaswani et al. 2017. Checkpoint
+averaging is not used, except where speciﬁed otherwise.
+Models and Hyperparameters
+Transformer
+et al., 2017) implemented in PyTorch in the
+fairseq-py toolkit . All
+experiments are based on the “big” transformer
+model with 6 blocks in the encoder and decoder
+Each encoder block contains a selfattention layer, followed by two fully connected
+feed-forward layers with a ReLU non-linearity
+between them. Each decoder block contains selfattention, followed by encoder-decoder attention,
+followed by two fully connected feed-forward
+layers with a ReLU between them. We include
+residual connections after each
+attention layer and after the combined feedforward layers, and apply layer normalization after each residual connection. We
+use word representations of size 1024, feedforward layers with inner dimension 4,096, and
+multi-headed attention with 16 attention heads.
+We apply dropout with
+probability 0.3 for En-De and 0.1 for En-Fr. In
+total this model has 210M parameters for the
+En-De dataset and 222M parameters for the En-Fr
+Models are optimized with Adam using β1 = 0.9, β2 = 0.98, and
+ϵ = 1e−8. We use the same learning rate schedule
+as Vaswani et al. , i.e., the learning rate increases linearly for 4,000 steps to 5e−4 (or 1e−3
+in experiments that specify 2x lr), after which
+it is decayed proportionally to the inverse square
+root of the number of steps. We use label smoothing with 0.1 weight for the uniform prior distribution over the vocabulary .
+All experiments are run on DGX-1 nodes
+with 8 NVIDIA c⃝V100 GPUs interconnected
+by Inﬁniband.
+We use the NCCL2 library and
+torch.distributed for inter-GPU communication.
+Experiments and Results
+In this section we present results for improving
+training efﬁciency via reduced precision ﬂoating
+point (Section 4.1), training with larger batches
+(Section 4.2), and training with multiple nodes in
+a distributed setting (Section 4.3).
+Half-Precision Training
+NVIDIA Volta GPUs introduce Tensor Cores that
+enable efﬁcient half precision ﬂoating point (FP)
+computations that are several times faster than
+full precision operations. However, half precision
+drastically reduces the range of ﬂoating point values that can be represented which can lead to numerical underﬂows and overﬂows . This can be mitigated by scaling values to ﬁt into the FP16 range.
+In particular, we perform all forward-backward
+computations as well as the all-reduce (gradient
+synchronization) between workers in FP16.
+contrast, the model weights are also available in
+full precision, and we compute the loss and optimization (e.g., momentum, weight updates) in
+FP32 as well. We scale the loss right after the forward pass to ﬁt into the FP16 range and perform
+the backward pass as usual. After the all-reduce
+of the FP16 version of the gradients with respect
+to the weights we convert the gradients into FP32
+and restore the original scale of the values before
+updating the weights.
+In the beginning stages of training, the loss
+needs to be scaled down to avoid numerical over-
+ﬂow, while at the end of training, when the loss
+is small, we need to scale it up in order to avoid
+numerical underﬂow. Dynamic loss scaling takes
+care of both. It automatically scales down the loss
+when overﬂow is detected and since it is not possible to detect underﬂow, it scales the loss up if no
+overﬂows have been detected over the past 2,000
+To evaluate training with lower precision, we
+ﬁrst compare a baseline transformer model trained
+on 8 GPUs with 32-bit ﬂoating point (Our reimplementation) to the same model trained with 16-
+Vaswani et al. 
+Our reimplementation
++ 5k tkn/gpu
+16 nodes (from +2x lr)
++ overlap comm+bwd
+Table 1: Training time (min) for reduced precision (16-bit), cumulating gradients over multiple backwards (cumul), increasing learning rate (2x lr) and computing each forward/backward with more
+data due to memory savings (5k tkn/gpu). Average time (excl. validation and saving models) over 3
+random seeds to reach validation perplexity of 4.32 (2.11 NLL). Cumul=16 means a weight update after
+accumulating gradients for 16 backward computations, simulating training on 16 nodes. WMT En-De,
+newstest13.
+Gradient sync.
+Forward/backward
+Sync after 1 backward
+Sync after 2 backwards
+Figure 2: Accumulating gradients over multiple
+forward/backward steps speeds up training by: (i)
+reducing communication between workers, and
+(ii) saving idle time by reducing variance in workload between GPUs.
+bit ﬂoating point (16-bit). Note, that we keep
+the batch size and other parameters equal. Table 1
+reports training speed of various setups to reach
+validation perplexity 4.32 and shows that 16-bit
+results in a 2.9x speedup.
+Training with Larger Batches
+Large batches are a prerequisite for distributed
+synchronous training, since it averages the gradients over all workers and thus the effective batch
+size is the sum of the sizes of all batches seen by
+the workers.
+Figure 1 shows that bigger batches result in
+slower initial convergence when measured in
+terms of epochs (i.e. passes over the training set).
+However, when looking at the number of weight
+updates (i.e. optimization steps) large batches converge faster . These results
+support parallelization since the number of steps
+deﬁne the number of synchronization points for
+synchronous training.
+Training with large batches is also possible on a
+single machine regardless of the number of GPUs
+or amount of available memory; one simply iterates over multiple batches and accumulates the resulting gradients before committing a weight update. This has the added beneﬁt of reducing communication and reducing the variance in workload
+between different workers (see Figure 2), leading
+to a 36% increase in tokens/sec (Table 1, cumul).
+We discuss the issue of workload variance in more
+depth in Section 5.
+Increased Learning Rate: Similar to Goyal
+et al. and Smith et al. we ﬁnd that
+training with large batches enables us to increase
+the learning rate, which further shortens training
+time even on a single node (2x lr).
+Memory Efﬁciency: Reduced precision also
+decreases memory consumption, allowing for
+larger sub-batches per GPU. We switch from a
+maximum of 3.5k tokens per GPU to a maximum
+of 5k tokens per GPU and obtain an additional 5%
+speedup (cf. Table 1; 2x lr vs. 5k tkn/gpu).
+Table 1 reports our speed improvements due to
+reduced precision, larger batches, learning rate increase and increased per-worker batch size. Overall, we reduce training time from 1, 429 min to 294
+min to reach the same perplexity on the same hardware (8x NVIDIA V100), i.e. a 4.9x speedup.
+Gradient sync.
+Sync after backward
+Overlap sync with backward
+Figure 3: Illustration of how the backward pass in
+back-propagation can be overlapped with gradient
+synchronization to improve training speed.
+Parallel Training
+While large batch training improves training time
+even on a single node, another beneﬁt of training with large batches is that it is easily parallelized across multiple nodes (machines). We run
+our previous 1-node experiment over 16 nodes of
+8 GPUs each (NVIDIA V100), interconnected by
+Inﬁniband. Table 1 shows that with a simple, synchronous parallelization strategy over 16 nodes we
+can further reduce training time from 311 minutes
+to just 37 minutes (cf. Table 1; 2x lr vs. 16
+However, the time spent communicating gradients across workers increases dramatically when
+training with multiple nodes.
+In particular, our
+models contain over 200M parameters, therefore
+multi-node training requires transferring 400MB
+gradient buffers between machines. Fortunately,
+the sequential nature of back-propagation allows
+us to further improve multi-node training performance by beginning this communication in the
+background, while gradients are still being computed for the mini-batch (see Figure 3).
+Backpropagation proceeds sequentially from the top of
+the network down to the inputs. When the gradient computation for a layer ﬁnishes, we add the
+result to a synchronization buffer. As soon as the
+size of the buffer reaches a predeﬁned threshold4
+we synchronize the buffered gradients in a background thread that runs concurrently with backpropagation down the rest of the network.
+Table 1 shows that by overlapping gradient communication with computation in the backwards pass,
+we can further reduce training time by 15%, from
+37 minutes to just 32 minutes (cf. Table 1; 16
+4We use a threshold of 150MB in this work.
+wall time (min)
+valid loss (NLL)
+1 node (25k bsz)
+1 node (402k bsz)
+16 nodes (402k bsz)
+Figure 4: Validation loss (negative log likelihood
+on newstest13) versus training time on 1 vs 16
+a. Gehring et al. 
+b. Vaswani et al. 
+c. Ahmed et al. 
+d. Shaw et al. 
+Our result
+16-node training time
+BLEU on newstest2014 for WMT
+English-German (En–De) and English-French
+(En–Fr). All results are based on WMT’14 training data, except for En–De (b), (c), (d) and our
+result which are trained on WMT’16.
+nodes vs. overlap comm+bwd).
+We illustrate the speedup achieved by large
+batches and parallel training in Figure 4.
+Results with WMT Training Data
+We report results on newstest14 for English-to-
+German (En-De) and English-to-French (En-Fr).
+For En-De, we train on the ﬁltered version of
+WMT’16 from Vaswani et al. .
+Fr, we follow the setup of Gehring et al. .
+In both cases, we train a “big” transformer on
+16 nodes and average model parameters from the
+last 10 checkpoints .
+Table 2 reports 29.3 BLEU for En-De in 1h 25min
+and 43.2 BLEU for En-Fr in 8h 32min.
+therefore establish a new state-of-the-art for both
+datasets, excluding settings with additional training data . In contrast to Table 1, Table 2 reports times to convergence, not
+times to a speciﬁc validation likelihood.
+detok. SacreBLEU
+16-node training time
+WMT + Paracrawl
+detok. SacreBLEU
+16-node training time
+Table 3: Test BLEU (newstest14) when training
+with WMT+Paracrawl data.
+Results with WMT & Paracrawl Training
+Fast parallel training lets us additionally explore
+training over larger datasets. In this section we
+consider Paracrawl , a recent
+dataset of more than 4B parallel sentences for each
+language pair (En-De and En-Fr).
+Previous work on Paracrawl considered training
+only on ﬁltered subsets of less than 30M pairs . We also ﬁlter Paracrawl by removing sentence-pairs with a source/target length
+ratio exceeding 1.5 and sentences with more than
+250 words. We also remove pairs for which the
+source and target are copies . On
+En–De, this brings the set from 4.6B to 700M.
+We then train a En–De model on a clean dataset
+(WMT’14 news commentary) to score the remaining 700M sentence pairs, and retain the 140M
+pairs with best average token log-likelihood. To
+train an En–Fr model, we ﬁlter the data to 129M
+pairs using the same procedure.
+Next, we explored different ways to weight the
+WMT and Paracrawl data. Figure 5 shows the validation loss for En-De models trained with different sampling ratios of WMT and ﬁltered Paracrawl
+data during training. The model with 1:1 ratio performs best on the validation set, outperforming the
+model trained on only WMT data. For En-Fr, we
+found a sampling ratio of 3:1 (WMT:Paracrawl)
+performed best.
+Test set results are given in Table 3. We ﬁnd that
+Paracrawl improves BLEU on En–De to 29.8 but
+it is not beneﬁcial for En–Fr, achieving just 42.1
+vs. 43.2 BLEU for our baseline.
+Analysis of Stragglers
+In a distributed training setup with synchronized
+SGD, workers may take different amounts of time
+to compute gradients. Slower workers, or stragglers, cause other workers to wait. There are sev-
+opt. steps
+valid loss (NLL)
+1:0 (WMT only)
+0:1 (Para only)
+Validation loss when training on
+Paracrawl+WMT with varying sampling ratios.
+1:4 means sampling 4 Paracrawl sentences for every WMT sentence. WMT En-De, newstest13.
+Time, seconds
+Percentage of sub-batches
+Full dataset
+23 ≤src len ≈
+tgt len ≤27
+Figure 6: Histogram of time to complete one forward and backward pass for each sub-batch in the
+WMT En-De training dataset. Sub-batches consist of a variable number of sentences of similar
+length, such that each sub-batch contains at most
+3.5k tokens.
+eral reasons for stragglers but here we focus on
+the different amounts of time it takes to process
+the data on each GPU.
+In particular, each GPU typically processes one
+sub-batch containing sentences of similar lengths,
+such that each sub-batch has at most N tokens
+(e.g., N = 3.5k tokens), with padding added as
+required. We refer to sub-batches as the data that
+is processed on each GPU worker whose combination is the entire batch. The sub-batches processed
+by a worker may therefore differ from other workers in the following three characteristics: the number of sentences, the maximum source sentence
+length, or the maximum target sentence length. To
+illustrate how these characteristics impact training
+speed, Figure 6 shows the amount of time required
+to process the 44K sub-batches in the En-De training data. There is large variability in the amount
+time to process sub-batches with different characteristics: the mean time to process a sub-batch is
+0.11 seconds, the slowest sub-batch takes 0.228
+seconds and the fastest 0.049 seconds. Notably,
+there is much less variability if we only consider
+batches of a similar shape (e.g., batches where
+23 ≤src len ≈tgt len ≤27).
+Unsurprisingly, constructing sub-batches based
+on a maximum token budget as just described exacerbates the impact of stragglers. In Section 4.2
+we observed that we could reduce the variance
+between workers by accumulating the gradients
+over multiple sub-batches on each worker before updating the weights (see illustration in Figure 2). A more direct, but na¨ıve solution is to assign all workers sub-batches with a similar shape.
+However, this increases the variance of the gradients across batches and adversely affects the ﬁnal
+model. Indeed, when we trained a model in this
+way, then it failed to converge to the target validation perplexity of 4.32 (cf. Table 1).
+As an alternative, we construct sub-batches
+so that each one takes approximately the same
+amount of processing time across all workers. We
+ﬁrst set a target for the amount of time a sub-batch
+should take to process (e.g., the 90th percentile
+in Figure 6) which we keep ﬁxed across training.
+Next, we build a table to estimate the processing
+time for a sub-batch based on the number of sentences and maximum source and target sentence
+lengths. Finally, we construct each worker’s subbatches by tuning the number of sentences until
+the estimated processing time reaches our target.
+This approach improves single-node throughput
+from 143k tokens-per-second to 150k tokens-persecond, reducing the training time to reach 4.32
+perplexity from 495 to 479 minutes (cf. Table 1,
+16-bit). Unfortunately, this is less effective than
+training with large batches, by accumulating gradients from multiple sub-batches on each worker
+(cf. Table 1, cumul, 447 minutes). Moreover,
+large batches additionally enable increasing the
+learning rate, which further improves training time
+(cf. Table 1, 2x lr, 311 minutes).
+Conclusions
+We explored how to train state-of-the-art NMT
+models on large scale parallel hardware. We investigated lower precision computation, very large
+batch sizes (up to 400k tokens), and larger learning rates. Our careful implementation speeds up
+the training of a big transformer model by nearly 5x on one machine with 8
+We improve the state-of-the-art for WMT’14
+En-Fr to 43.2 vs.
+41.5 for Shaw et al. ,
+training in less than 9 hours on 128 GPUs. On
+WMT’14 En-De test set, we report 29.3 BLEU
+vs. 29.2 for Shaw et al. on the same setup,
+training our model in 85 minutes on 128 GPUs.
+BLEU is further improved to 29.8 by scaling the
+training set with Paracrawl data.
+Overall, our work shows that future hardware
+will enable training times for large NMT systems that are comparable to phrase-based systems . We note that multi-node
+parallelization still incurs a signiﬁcant overhead:
+16-node training is only ∼10x faster than 1-node
+training. Future work may consider better batching and communication strategies.

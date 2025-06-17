@@ -1,0 +1,722 @@
+Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing, pages 6869–6882,
+November 16–20, 2020. c⃝2020 Association for Computational Linguistics
+Grounded Adaptation for Zero-shot Executable Semantic Parsing
+Victor Zhong
+University of Washington
+Seattle, WA
+ 
+Mike Lewis
+Facebook AI Research
+Seattle, WA
+ 
+Sida I. Wang
+Facebook AI Research
+Seattle, WA
+ 
+Luke Zettlemoyer
+University of Washington
+Facebook AI Research
+Seattle, WA
+ 
+We propose Grounded Adaptation for Zeroshot Executable Semantic Parsing (GAZP)
+to adapt an existing semantic parser to new
+environments (e.g. new database schemas).
+GAZP combines a forward semantic parser
+with a backward utterance generator to synthesize data (e.g. utterances and SQL queries)
+in the new environment, then selects cycleconsistent examples to adapt the parser. Unlike data-augmentation, which typically synthesizes unveriﬁed examples in the training environment, GAZP synthesizes examples in the new environment whose inputoutput consistency are veriﬁed. On the Spider,
+Sparc, and CoSQL zero-shot semantic parsing
+tasks, GAZP improves logical form and execution accuracy of the baseline parser.
+analyses show that GAZP outperforms dataaugmentation in the training environment, performance increases with the amount of GAZPsynthesized data, and cycle-consistency is central to successful adaptation.
+Introduction
+Semantic parsers build
+executable meaning representations for a range of
+tasks such as question-answering ,
+robotic control , and intelligent tutoring systems .
+However, they are usually engineered for each application environment. For example, a languageto-SQL parser trained on an university management database struggles when deployed to a sales
+database. How do we adapt a semantic parser to
+new environments where no training data exists?
+We propose Grounded Adaptation for Zero-shot
+Executable Semantic Parsing, which adapts existing semantic parsers to new environments by synthesizing new, cycle-consistent data. In the previous example, GAZP synthesizes high-quality sales
+questions and SQL queries using the new sales
+database, then adapts the parser using the synthesized data. This procedure is shown in Figure 1.
+GAZP is complementary to prior modeling work
+in that it can be applied to any model architecture, in any domain where one can enforce cycleconsistency by evaluating equivalence between
+logical forms. Compared to data-augmentation,
+which typically synthesizes unveriﬁed data in the
+training environment, GAZP instead synthesizes
+consistency-veriﬁed data in the new environment.
+GAZP synthesizes data for consistency-veriﬁed
+adaptation using a forward semantic parser and a
+backward utterance generator. Given a new environment (e.g. new database), we ﬁrst sample logical forms with respect to a grammar (e.g. SQL
+grammar conditioned on new database schema).
+Next, we generate utterances corresponding to
+these logical forms using the generator.
+we parse the generated utterances using the parser,
+keeping those whose parses are equivalent to the
+original sampled logical form (more in Section 2.4).
+Finally, we adapt the parser to the new environment
+by training on the combination of the original data
+and the synthesized cycle-consistent data.
+We evaluate GAZP on the Spider, Sparc, and
+CoSQL language-to-
+SQL zero-shot semantic parsing tasks which test
+on unseen databases. GAZP improves logical form
+and execution accuracy of the baseline parser on
+all tasks, successfully adapting the existing parser
+to new environments. In further analyses, we show
+that GAZP outperforms data augmentation in the
+training environment. Moreover, adaptation performance increases with the amount of GAZPsynthesized data.
+Finally, we show that cycleconsistency is critical to synthesizing high-quality
+examples in the new environment, which in turn
+allows for successful adaptation and performance
+New Inference Environment
+Table: sales
+Table: companies
+Synthesized
+utterances
+Synthesized
+consistency
+Train Environment
+Table: students
+Table: schools
+Cycleconsistent
+adaptation
+sample wrt
+Train model
+Train model
+Figure 1: Grounded Adaptation for Zero-shot Executable Semantic Parsing. GAZP adapts a parser to new inference
+environments. Data and models for training and inference environments are respectively shown in blue and purple.
+Output is shown in red. First, we train a parser and a utterance generator using training data. We then sample logical
+forms in the inference environment and generate corresponding utterances. We parse the generated utterances and
+check for cycle-consistency between the parse and the sampled logical form (see Section 2.4). Consistent pairs of
+utterance and logical form are used to adapt the parser to the inference environment.
+improvement.1
+Grounded Adaptation for Zero-shot
+Executable Semantic Parsing
+Semantic parsing involves producing a logical
+form q that corresponds to an input utterance u,
+such that executing q in the environment e produces the desired denotation EXE(q, e). In the
+context of language-to-SQL parsing, q and e correspond to SQL queries and databases.
+We propose GAZP for zero-shot semantic parsing, where inference environments have not been
+observed during training (e.g. producing SQL
+queries in new databases). GAZP consists of a
+forward semantic parser F(u, e) ! q, which
+produces a logical form q given an utterance u in
+environment e, and a backward utterance generator G(q, e) ! u. The models F and G condition
+on the environment by reading an environment description w, which consists of a set of documents
+d. In the context of SQL parsing, the description
+is the database schema, which consists of a set of
+table schemas (i.e. documents).
+We assume that the logical form consists of three
+types of tokens: syntax candidates cs from a ﬁxed
+syntax vocabulary (e.g. SQL syntax), environment candidates ce from the environment description (e.g. table names from database schema), and
+1We will open-source our code.
+utterance candidates cu from the utterance (e.g.
+values in SQL query). Finally, ce tokens have corresponding spans in the description d. For example,
+a SQL query q consists of columns ce that directly
+map to related column schema (e.g. table, name,
+type) in the database schema w.
+In GAZP , we ﬁrst train the forward semantic
+parser F and a backward utterance generator G in
+the training environment e. Given a new inference
+environment e0, we sample logical forms q from
+e0 using a grammar. For each q, we generate a
+corresponding utterance u0 = G(q, e0). We then
+parse the generated utterance into a logical form
+q0 = F(u0, e0). We combine cycle-consistent examples from the new environment, for which q0is
+equivalent to q, with the original labeled data to
+retrain and adapt the parser. Figure 1 illustrates the
+components of GAZP. We now detail the sampling
+procedure, forward parser, backward generator, and
+cycle-consistency.
+Query sampling
+To synthesize data for adaptation, we ﬁrst sample
+logical forms q with respect to a grammar. We
+begin by building an empirical distribution over
+q using the training data. For language-to-SQL
+parsing, we preprocess queries similar to Zhang
+et al. and further replace mentions of
+columns and values with typed slots to form coarse
+Algorithm 1 Query sampling procedure.
+1: d UNIFORMSAMPLE(AllDBs)
+3: for z 2 CoarseTemplates do
+if d.CANFILL(z) then Z.ADD(z) end if
+5: end for
+6: z0 SAMPLE(PZ)
+7: d0 d.RANDASSIGNCOLSTOSLOTS()
+8: for s 2 z0.COLSLOTS() do
+c d0.GETCOL(s)
+z0.REPLSLOTWITHCOL(s, c)
+11: end for
+12: for s 2 z0.VALSLOTS() do
+c d0.GETCOL(s)
+v c.UNIFORMSAMPLEVALS()
+z0.REPLSLOTWITHVAL(s, v)
+16: end for
+. Return z0
+templates Z.
+For example, the query SELECT
+T1.id, T2.name FROM Students AS T1 JOIN
+Schools AS T2 WHERE T1.school = T2.id
+AND T2.name = ’Highland Secondary’,
+processing,
+SELECT key1, text1
+WHERE text2 = val. Note that we remove JOINs
+which are later ﬁlled back deterministically after
+sampling the columns. Next, we build an empirical
+distribution PZ over these coarse templates by
+counting occurrences in the training data. The
+sampling procedure is shown in Algorithm 1 for
+the language-to-SQL example. Invalid queries and
+those that execute to the empty set are discarded.
+Given some coarse template z
+key1, text1 WHERE text2 = val, the function
+d.CANFILL(z) returns whether the database d
+contains sufﬁcient numbers of columns.
+this case, at the minimum, d should have a
+key column and two text columns.
+The function d.RANDASSIGNCOLSTOSLOTS() returns a
+database copy d0 such that each of its columns is
+mapped to some identiﬁer text1, key1 etc.
+Appendix A.1 quantiﬁes query coverage of the
+sampling procedure on the Spider task, and shows
+how to extend Algorithm 1 to multi-turn queries.
+Forward semantic parser
+The forward semantic parser F produces a logical
+form q = F(u, e) for an utterance u in the environment e. We begin by cross-encoding u with the
+environment description w to model coreferences.
+Since w may be very long (e.g. entire database
+schema), we instead cross-encode u with each document di in the description (e.g. each table schema)
+similar to Zhang et al. . We then combine
+each environment candidate ce,i across documents
+(e.g. table columns) using RNNs, such that the ﬁnal
+representations capture dependencies between ce
+from different documents. To produce the logical
+form q, we ﬁrst generate a logical form template
+ˆq whose utterance candidates cu (e.g. SQL values)
+are replaced by slots. We generate ˆq with a pointerdecoder that selects among syntax candidates cs
+(e.g. SQL keywords) and environment candidate
+ce (e.g. table columns). Then, we ﬁll in slots in ˆq
+with a separate decoder that selects among cu in
+the utterance to form q. Note that logical form template ˆq is distinct from coarse templates z described
+in sampling (Section 2.1). Figure 2 describes the
+forward semantic parser.
+Let u denote words in the utterance, and di denote words in the ith document in the environment
+description. Let [a; b] denote the concatenation of a
+and b. First, we cross-encode the utterance and the
+document using BERT , which
+has led to improvements on a number of NLP tasks.
+= BERT!([u; di])
+Next, we extract environment candidates in document i using self-attention. Let s, e denote the start
+and end positions of the jth environment candidate
+in the ith document. We compute an intermediate
+representation xij for each environment candidate:
+softmax(W[−!
+B is; ...−!
+B ie] + b)
+For ease of exposition, we abbreviate the above
+self-attention function as xij = selfattn(−!
+B i[s : e])
+Because xij do not model dependencies between
+different documents, we further process x with
+bidirectional LSTMs . We use one LSTM followed by selfattention to summarize each ith document:
+−!h enc,i = selfattn(BiLSTM([xi1; xi2; ...]))
+We use another LSTM to build representations for
+each environment candidate ce,i
+ce = BiLSTM([x11; x12; ...x21; x22...])
+We do not share weights between different LSTMs
+and between different self-attentions.
+Next, we use a pointer-decoder to produce the output logical form template
+User utterance u
+bZDJSgNBEIZr4hbjFpebl8YgeAozoujNgAc9JmAWSIbQ06lJ2vQsdPcIcgTePGgiFcfwJNP4s2jb2JnOWjiDw0f/19FV5UXC60bX9ZmYXFpeWV7GpubX1j
+cyu/vVNTUSIZVlkItnwqELBQ6xqrgU2Yok08ATWvf7lK/foVQ8Cm/0IEY3oN2Q+5xRbaxK0s4X7KI9FpkHZwqFi4/76v3vbTczn+2OhFLAgw1E1SpmPH
+2k2p1JwJHOZaicKYsj7tYtNgSANUbjoedEgOjdMhfiTNCzUZu787UhoNQg8UxlQ3VOz2cj8L2sm2j93Ux7GicaQT7yE0F0REZbkw6XyLQYGKBMcjMrYT0q
+KdPmNjlzBGd25XmoHRedk+JpxS6UbJgoC/twAEfgwBmU4BrKUAUGCA/wBM/WrfVovVivk9KMNe3ZhT+y3n4AsuQvQ=</latexit>u
+bZDJSgNBEIZr4hbjFpebl8YgeAozoujNgAc9JmAWSIbQ06lJ2vQsdPcIcgTePGgiFcfwJNP4s2jb2JnOWjiDw0f/19FV5UXC60bX9ZmYXFpeWV7GpubX1j
+cyu/vVNTUSIZVlkItnwqELBQ6xqrgU2Yok08ATWvf7lK/foVQ8Cm/0IEY3oN2Q+5xRbaxK0s4X7KI9FpkHZwqFi4/76v3vbTczn+2OhFLAgw1E1SpmPH
+2k2p1JwJHOZaicKYsj7tYtNgSANUbjoedEgOjdMhfiTNCzUZu787UhoNQg8UxlQ3VOz2cj8L2sm2j93Ux7GicaQT7yE0F0REZbkw6XyLQYGKBMcjMrYT0q
+KdPmNjlzBGd25XmoHRedk+JpxS6UbJgoC/twAEfgwBmU4BrKUAUGCA/wBM/WrfVovVivk9KMNe3ZhT+y3n4AsuQvQ=</latexit>
+How many students attended Highland
+Secondary?
+BERT input
+[CLS] How many … [TABLE] students
+[SEP] key : id [SEP] key : school [SEP]
+number: year [SEP] …
+[CLS] How many … [TABLE] schools
+[SEP] key : id [SEP] text : name [SEP]
+key : city [SEP] …
+students.id −!x 1,1
+students.id −!x 1,1
+students.school −!x 1,2
+students.school −!x 1,2
+schools.id −!x 2,1
+schools.id −!x 2,1
+schools.name −!x 2,2
+schools.name −!x 2,2
+Template pointer decoder
+Candidate phrase
+Fixed syntax vocabulary
+SELECT, FROM, WHERE, >, < …
+Output logical form
+Environment description w
+cyx/txzsHN1pcMqL6SA=">AB6HicbZDJSgNBEIZr4hbjFpebl8YgeAozou
+jNgAc9JmAWSIbQ06lJ2vQsdPcocgTePGgiFcfwJNP4s2jb2JnOWj0h4aP/6
++iq8qLBVfatj+tzNz8wuJSdjm3srq2vpHf3KqpKJEMqywSkWx4VKHgIVY1w
+IbsUQaeALrXv98lNdvUCoehVd6EKMb0G7Ifc6oNlbltp0v2EV7LPIXnCkUzt
+7vi7edtJyO/R6kQsCTDUTFClmo4dazelUnMmcJhrJQpjyvq0i02DIQ1Que
+l40CHZN06H+JE0L9Rk7P7sSGmg1CDwTGVAdU/NZiPzv6yZaP/UTXkYJxpDNv
+nITwTRERltTpcItNiYIAyc2shPWopEyb2+TMEZzZlf9C7bDoHBWPK3ahZM
+NEWdiFPTgAB06gBJdQhiowQLiHR3iyrq0H69l6mZRmrGnPNvyS9foNBdOQvw
+=</latexit>w
+cyx/txzsHN1pcMqL6SA=">AB6HicbZDJSgNBEIZr4hbjFpebl8YgeAozou
+jNgAc9JmAWSIbQ06lJ2vQsdPcocgTePGgiFcfwJNP4s2jb2JnOWj0h4aP/6
++iq8qLBVfatj+tzNz8wuJSdjm3srq2vpHf3KqpKJEMqywSkWx4VKHgIVY1w
+IbsUQaeALrXv98lNdvUCoehVd6EKMb0G7Ifc6oNlbltp0v2EV7LPIXnCkUzt
+7vi7edtJyO/R6kQsCTDUTFClmo4dazelUnMmcJhrJQpjyvq0i02DIQ1Que
+l40CHZN06H+JE0L9Rk7P7sSGmg1CDwTGVAdU/NZiPzv6yZaP/UTXkYJxpDNv
+nITwTRERltTpcItNiYIAyc2shPWopEyb2+TMEZzZlf9C7bDoHBWPK3ahZM
+NEWdiFPTgAB06gBJdQhiowQLiHR3iyrq0H69l6mZRmrGnPNvyS9foNBdOQvw
+=</latexit>
+Table: students
+Document d1
+ayGZbl/1Kh7EvHjD/4I=">AB6nicbVDLSgNBEOxNfMT4ionL4tB8BR2Rd
+FjwIvHiOYByRJmZ3uTIbOzy8ysEJZ8ghcPinj1R/wFD4InP0Unj4MmFjQUVd
+10d/kJZ0o7zqeVy8tr6wW1orG5tb26Wd3YaKU0mxTmMey5ZPFHImsK6Z5t
+hKJLI59j0B5djv3mHUrFY3Ophgl5EeoKFjBJtpJug63ZLZafiTGAvEndGyt
+X8x/fb/hfWuqX3ThDTNEKhKSdKtV0n0V5GpGaU46jYSRUmhA5ID9uGChKh8r
+LJqSP7yCiBHcbSlND2RP09kZFIqWHkm86I6L6a98bif1471eGFlzGRpBoFnS
+4KU27r2B7/bQdMItV8aAihkplbdonklBt0imaENz5lxdJ46TinlbOrk0aDk
+xRgAM4hGNw4RyqcAU1qAOFHtzDIzxZ3Hqwnq2XaWvOms3swR9Yrz+NU5Gw</
+latexit>d1
+ayGZbl/1Kh7EvHjD/4I=">AB6nicbVDLSgNBEOxNfMT4ionL4tB8BR2Rd
+FjwIvHiOYByRJmZ3uTIbOzy8ysEJZ8ghcPinj1R/wFD4InP0Unj4MmFjQUVd
+10d/kJZ0o7zqeVy8tr6wW1orG5tb26Wd3YaKU0mxTmMey5ZPFHImsK6Z5t
+hKJLI59j0B5djv3mHUrFY3Ophgl5EeoKFjBJtpJug63ZLZafiTGAvEndGyt
+X8x/fb/hfWuqX3ThDTNEKhKSdKtV0n0V5GpGaU46jYSRUmhA5ID9uGChKh8r
+LJqSP7yCiBHcbSlND2RP09kZFIqWHkm86I6L6a98bif1471eGFlzGRpBoFnS
+4KU27r2B7/bQdMItV8aAihkplbdonklBt0imaENz5lxdJ46TinlbOrk0aDk
+xRgAM4hGNw4RyqcAU1qAOFHtzDIzxZ3Hqwnq2XaWvOms3swR9Yrz+NU5Gw</
+Table: schools
+Document d2
+2khejsrLYyad+ZCrFA=">AB6nicbVDJSgNBEK1JXGLcouLJS2MQPIWZoO
+gx4MVjRLNAHEJPT03SpGehu0cIQz7BiwdFvPoj/oIHwZOfop3loIkPCh7vV
+FVz0sEV9q2P61cfml5ZbWwVlzf2NzaLu3sNlWcSoYNFotYtj2qUPAIG5prge
+1EIg09gS1vcDH2W3coFY+jGz1M0A1pL+IBZ1Qb6drvVrulsl2xJyCLxJmRci
+3/8f2/4X1bun91o9ZGmKkmaBKdRw70W5GpeZM4Kh4mypMKBvQHnYMjWiIys
+0mp47IkVF8EsTSVKTJRP09kdFQqWHomc6Q6r6a98bif14n1cG5m/EoSTVGbL
+oSAXRMRn/TXwukWkxNIQyc2thPWpEybdIomBGf+5UXSrFack8rplUnDhi
+kKcACHcAwOnENLqEODWDQg3t4hCdLWA/Ws/Uybc1Zs5k9+APr9QeO15Gx</
+latexit>d2
+2khejsrLYyad+ZCrFA=">AB6nicbVDJSgNBEK1JXGLcouLJS2MQPIWZoO
+gx4MVjRLNAHEJPT03SpGehu0cIQz7BiwdFvPoj/oIHwZOfop3loIkPCh7vV
+FVz0sEV9q2P61cfml5ZbWwVlzf2NzaLu3sNlWcSoYNFotYtj2qUPAIG5prge
+1EIg09gS1vcDH2W3coFY+jGz1M0A1pL+IBZ1Qb6drvVrulsl2xJyCLxJmRci
+3/8f2/4X1bun91o9ZGmKkmaBKdRw70W5GpeZM4Kh4mypMKBvQHnYMjWiIys
+0mp47IkVF8EsTSVKTJRP09kdFQqWHomc6Q6r6a98bif14n1cG5m/EoSTVGbL
+oSAXRMRn/TXwukWkxNIQyc2thPWpEybdIomBGf+5UXSrFack8rplUnDhi
+kKcACHcAwOnENLqEODWDQg3t4hCdLWA/Ws/Uybc1Zs5k9+APr9QeO15Gx</
+bVDLSgNBEOxNfMT4ionL4NB8BR2RdFjwIvHiOYByRJmJ73JkNnZWZWCGf4MWDIl79EX/Bg+DJT9HJ46CJBQ1FVTfdXUEiuDau+lkskvLK6u5tfz6xubW
+dmFnt6bjVDGsljEqhFQjYJLrBpuBDYShTQKBNaD/uXYr9+h0jyWt2aQoB/RruQhZ9RY6Ya1sV0ouiV3ArJIvBkplrMf32/7X1hpF95bnZilEUrDBNW6bmJ
+8YdUGc4EjvKtVGNCWZ92sWmpBFqfzg5dUSOrNIhYaxsSUMm6u+JIY20HkSB7Yyo6el5byz+5zVTE174Qy6T1KBk0VhKoiJyfhv0uEKmREDSyhT3N5KWI8q
+yoxNJ29D8OZfXiS1k5J3Wjq7tm4MEUODuAQjsGDcyjDFVSgCgy6cA+P8OQI58F5dl6mrRlnNrMHf+C8/gDanZHj</latexit>
+bVDLSsNAFJ1YH7W+ouJKF4NFcFUSUXRZcOygn1AE8JkOmGTjJhZqKU0I0bf8WNC0Xcir/gQnDlp+gk7UJbDwczrmXO+f4CaNSWdanMVeaX1hcKi9XVlbX
+1jfMza2W5KnApIk546LjI0kYjUlTUcVIJxERT4jbX9wnvtayIk5fGVGibEjVA/pgHFSGnJM/crm1B+6FCQvCbLBx5mSMiSGI8syqVbMKwFliT0i1Xvr4
+ftv5Ig3PfHd6HKcRiRVmSMqubSXKzZBQFDMyqjipJAnCA9QnXU1jFBHpZkWKETzQSg8GXOgXK1iovzcyFEk5jHw9GSEVymkvF/zuqkKztyMxkmq8lTFoSBl
+UHGYVwJ7VBCs2FAThAXVf4U4RAJhpYur6BLs6cizpHVUs49rJ5e6DQuMUQa7YB8cAhucgjq4A3QBjcgnvwCJ6MO+PBeDZexqNzxmRnG/yB8foDfXadkA=
+</latexit>
+bVDLSgNBEOxNfMT4ionL4NB8BR2RdFjwIvHiOYByRJmJ73JkNnZWZWCGf4MWDIl79EX/Bg+DJT9HJ46CJBQ1FVTfdXUEiuDau+lkskvLK6u5tfz6xubW
+dmFnt6bjVDGsljEqhFQjYJLrBpuBDYShTQKBNaD/uXYr9+h0jyWt2aQoB/RruQhZ9RY6Ya103ah6JbcCcgi8WakWM5+fL/tf2GlXhvdWKWRigNE1Trpucm
+xh9SZTgTOMq3Uo0JZX3axalkao/eHk1BE5skqHhLGyJQ2ZqL8nhjTSehAFtjOipqfnvbH4n9dMTXjhD7lMUoOSTReFqSAmJuO/SYcrZEYMLKFMcXsrYT2q
+KDM2nbwNwZt/eZHUTkreaens2qbhwhQ5OIBDOAYPzqEMV1CBKjDowj08wpMjnAfn2XmZtmac2cwe/IHz+gPy3ZHz</latexit>
+N5uxlYXGSU7H9xB5+mY=">AB6nicbVDLSgNBEOxNfMT4ionL4NB8BR2Rd
+FjwIvHiOYByRJmJ73JkNnZWZWCGf4MWDIl79EX/Bg+DJT9HJ46CJBQ1FVT
+fdXUEiuDau+lkskvLK6u5tfz6xubWdmFnt6bjVDGsljEqhFQjYJLrBpuBD
+YShTQKBNaD/uXYr9+h0jyWt2aQoB/RruQhZ9RY6Ya1dbtQdEvuBGSReDNSLG
+c/vt/2v7DSLry3OjFLI5SGCap103MT4w+pMpwJHOVbqcaEsj7tYtNSPU/n
+By6ogcWaVDwljZkoZM1N8TQxpPYgC2xlR09Pz3lj8z2umJrzwh1wmqUHJpo
+vCVBATk/HfpMVMiMGlCmuL2VsB5VlBmbTt6G4M2/vEhqJyXvtHR2bdNwY
+ocHMAhHIMH51CGK6hAFRh04R4e4ckRzoPz7LxMWzPObGYP/sB5/QHv1ZHx</
++c9KslkJ0QPebQuB5i8=">AB/XicbVC7SgNBFJ1NfMT4Wl+VzWAQrMKuKF
+oGbSwjmAckyzI7uUmGzO4sM7NKXIK/YmOhiK21v2AhWPkpOnkUmnjgwuGce7
+n3niDmTGnH+bQy2bn5hcXcUn5ZXVt3d7YrCqRSAoVKriQ9YAo4CyCimaQz
+2WQMKAQy3onQ/92jVIxUR0pfsxeCHpRKzNKNFG8u3tpjC2ZJ2uJlKm/Rs4L
+u+XCKzgh4lrgTUihlP7fdr6g7NvzZagSQiRpwo1XCdWHspkZpRDoN8M1
+EQE9ojHWgYGpEQlJeOrh/gfaO0cFtIU5HGI/X3REpCpfphYDpDortq2huK/3
+mNRLdPvZRFcaIhouNF7YRjLfAwCtxiEqjmfUMIlczcimXSEK1CSxvQnCnX5
+4l1cOie1Q8vjRpOGiMHNpFe+gAuegEldAFKqMKougW3aNH9GTdWQ/Ws/Uybs
+1Yk5kt9AfW6w+5DJnC</latexit>
+4Ir57ykn9Y85Yi/koVE=">AB/XicbVC7SgNBFJ01PmJ8ra/KZjEIVmE3KF
+oGbSwjmAckyzI7uUmGzM4sM7NKXIK/YmOhiK21v2AhWPkpOnkUmnjgwuGce7
+n3njBmVGnX/bTmMvMLi0vZ5dzK6tr6hr25VUikQqRDAh6yFWwCiHiqaQT
+2WgKOQS3snQ/92jVIRQW/0v0Y/Ah3OG1TgrWRAnunKYwtaersZTiJj0bBM
+XAzrsFdwRnlngTki9lPr7fdr+gHNjvzZYgSQRcE4aVanhurP0US0Jg0GumS
+iIMenhDjQM5TgC5aej6wfOgVFaTltIU1w7I/X3RIojpfpRaDojrLtq2huK/3
+mNRLdP/ZTyONHAyXhRO2GOFs4wCqdFJRDN+oZgIqm51SFdLDHRJrCcCcGbfn
+mWVIsF76hwfGnScNEYWbSH9tEh8tAJKqELVEYVRNAtukeP6Mm6sx6sZ+tl3D
+pnTWa20R9Yrz+6kJnD</latexit>
+Figure 2: Forward semantic parser. Model components are shown in purple, inputs in blue, and outputs in red. First,
+we cross-encode each environment description text and the utterance using BERT. We then extract document-level
+phrase representations for candidate phrases in each text, which we subsequently encode using LSTMs to form
+input and environment-level candidate phrase representations. A pointer-decoder attends over the input and selects
+among candidates to produce the output logical form.
+ˆq by selecting among a set of candidates that corresponds to the union of environment candidates
+ce and syntax candidates cs. Here, we represent a
+syntax token using its BERT word embedding. The
+representation for all candidate representations −!c
+is then obtained as
+−!c = [ce,1; ce,2; ...cs,1; cs,2; ...]
+At each step t of the decoder, we ﬁrst update the
+states of the decoder LSTM:
+hdec,t = LSTM(−!c ˆqt−1, hdec,t−1)
+Finally, we attend over the document representations given the current decoder state using dotproduct attention :
+softmax(hdec,t
+The score for the ith candidate −!c i is
+ˆW[hdec,t; vt] + ˆb
+argmax(st)
+Value-generation.
+The pervious template decoder produces logical form template ˆq, which is
+not executable because it does not include utterance candidates cu. To generate full-speciﬁed executable logical forms q, we use a separate value
+pointer-decoder that selects among utterance tokens. The attention input for this decoder is identical to that of the template decoder. The pointer
+candidates cu are obtained by running a separate
+BERT encoder on the utterance u. The produced
+values are inserted into each slot in ˆq to form q.
+Both template and value decoders are trained
+using cross-entropy loss with respect to the groundtruth sequence of candidates.
+Backward utterance generator
+The utterance generator G produces an utterance
+u = G(q, e) for the logical form q in the environment e. The alignment problem between q and
+the environment description w is simpler than that
+between u and w because environment candidates
+ce (e.g. column names) in q are described by corresponding spans in w (e.g. column schemas in
+database schema). To leverage this deterministic
+alignment, we augment ce in q with relevant spans
+from w, and encode this augmented logical form ˜q.
+The pointer-decoder selects among words cv from
+a ﬁxed vocabulary (e.g. when, where, who) and
+words c˜q from ˜q. Figure 3 illustrates the backward
+utterance generator.
+Logical form q
+icbVA9SwNBEJ2LX0n8ilraHAbBQsKdKFoGbCwTMB+QhLC3N5es2ds7d/eEcKSxsbCxUMTW3j9j56/RzUehiQ8GHu/NMDPizlT2nG+rMzS8srqWjaX
+X9/Y3Nou7OzWVZRIijUa8Ug2PaKQM4E1zTHZiyRhB7Hhje4HPuNO5SKReJaD2PshKQnWMAo0Uaq3nYLRafkTGAvEndGiuXcg/xfX9c6RY+235Ekx
+CFpwo1XKdWHdSIjWjHEf5dqIwJnRAetgyVJAQVSedHDqyD43i20EkTQltT9TfEykJlRqGnukMie6reW8s/ue1Eh1cdFIm4kSjoNFQcJtHdnjr2f
+SaSaDw0hVDJzq037RBKqTZ5E4I7/IiqZ+U3NPSWdWk4cAUWdiHAzgCF86hDFdQgRpQHiEZ3ixbqwn69V6m7ZmrNnMHvyB9f4DnqyQdQ=</late
+icbVA9SwNBEJ2LX0n8ilraHAbBQsKdKFoGbCwTMB+QhLC3N5es2ds7d/eEcKSxsbCxUMTW3j9j56/RzUehiQ8GHu/NMDPizlT2nG+rMzS8srqWjaX
+X9/Y3Nou7OzWVZRIijUa8Ug2PaKQM4E1zTHZiyRhB7Hhje4HPuNO5SKReJaD2PshKQnWMAo0Uaq3nYLRafkTGAvEndGiuXcg/xfX9c6RY+235Ekx
+CFpwo1XKdWHdSIjWjHEf5dqIwJnRAetgyVJAQVSedHDqyD43i20EkTQltT9TfEykJlRqGnukMie6reW8s/ue1Eh1cdFIm4kSjoNFQcJtHdnjr2f
+SaSaDw0hVDJzq037RBKqTZ5E4I7/IiqZ+U3NPSWdWk4cAUWdiHAzgCF86hDFdQgRpQHiEZ3ixbqwn69V6m7ZmrNnMHvyB9f4DnqyQdQ=</late
+SELECT COUNT ( *) FROM STUDENTS
+as t1 JOIN SCHOOLS as t2 ON
+t1.school = t2.id WHERE t2.name
+= “Highland Secondary”
+BERT input
+[CLS] select count students.* where
+( key : students.school ) = ( key :
+schools.id ) and ( text : school.name )
+= “Highland Secondary ”
+Pointer decoder
+Fixed vocabulary
+How, what, many, …
+icbVA9SwNBEN3zM8avGLGyWQyCVbgTg5YBG8sI5gOSI+zt7SVL9vYu3OBcFxrZa+FhUFs/TF2/hs3H4UmPh4vDfDzDwvFlyDbX9ba+sbm1vbuZ38
+7t7+wWHhqNjQUaIoq9NIRKrlEc0El6wOHARrxYqR0BOs6Q1up35zxJTmkXyAczckPQkDzglYCSXdtMOcOGzdJhl3ULJLtsz4FXiLEipWpw8vlROnm
+rdwlfHj2gSMglUEK3bjh2DmxIFnAqW5TuJZjGhA9JjbUMlCZl209nRGT43io+DSJmSgGfq74mUhFqPQ890hgT6etmbiv957QSCGzflMk6ASTpfFCQC
+Q4SnCWCfK0ZBjA0hVHFzK6Z9ogFk1PehOAsv7xKGpdl56pcuTdp2GiOHDpFZ+gCOegaVdEdqE6omiIntEbmlgj69V6tz7mrWvWYuY/YH1+QNflp
+Vm</latexit>
+icbVBNS8NAEJ20ftT6VRVPXoJF8FQSUfRY8OKxgmkLbSib7aRdutmE3U2hP4GLx4U8er/8C94EDz5U3T7cdDWBwOP92aYmRcknCntOJ9WLr+yurZe
+2Chubm3v7Jb29usqTiVFj8Y8ls2AKORMoKeZ5thMJIo4NgIBtcTvzFEqVgs7vQoQT8iPcFCRok2kc72XDcKZWdijOFvUzcOSlX8x/fb4dfWOuU3t
+vdmKYRCk05UarlOon2MyI1oxzHxXaqMCF0QHrYMlSQCJWfTY8d2ydG6dphLE0JbU/V3xMZiZQaRYHpjIjuq0VvIv7ntVIdXvkZE0mqUdDZojDlto7t
+yed2l0mkmo8MIVQyc6tN+0QSqk0+ROCu/jyMqmfVdzysWtScOBGQpwBMdwCi5cQhVuoAYeUGBwD4/wZAnrwXq2XmatOWs+cwB/YL3+ALkhkwA=</
+icbVC7SgNBFJ01PmJ8RcUqzWAQrMKuKFoGbCwjmAckS5id3E2GzO4sM7NKWFLY+Cs2ForYCv6ChWDlp+jsJoUmHhg4nHMvd87xIs6Utu1PayG3uLS8
+kl8trK1vbG4Vt3caSsSQp0KLmTLIwo4C6GumebQiSQwOPQ9Ibnqd+8BqmYCK/0KAI3IP2Q+YwSbaRusdQRxubgayKluEkG427SkQGkI67xbJdsT
+PgeJMSbma+/h+2/uCWrf43ukJGgcQasqJUm3HjrSbEKkZ5TAudGIFEaFD0oe2oSEJQLlJFmKMD4zSw76Q5oUaZ+rvjYQESo0Cz0wGRA/UrJeK/3nt
+WPtnbsLCKNZpquyQH3OsBU4bwT0mgWo+MoRQycxfMR0QSag2vRVMCc5s5HnSOKo4x5WTS9OGjSbIoxLaR4fIQaeoi5QDdURbfoHj2iJ+vOerCerZ
+fJ6I13dlFf2C9/gCd8Z0T</latexit>
+Environment description w
+icbZDJSgNBEIZr4hbjFpebl8YgeAozoujNgAc9JmAWSIbQ06lJ2vQsdPcocgTePGgiFcfwJNP4s2jb2JnOWj0h4aP/6+iq8qLBVfatj+tzNz8wuJS
+djm3srq2vpHf3KqpKJEMqywSkWx4VKHgIVY1wIbsUQaeALrXv98lNdvUCoehVd6EKMb0G7Ifc6oNlbltp0v2EV7LPIXnCkUzt7vi7edtJyO/R6k
+QsCTDUTFClmo4dazelUnMmcJhrJQpjyvq0i02DIQ1Quel40CHZN06H+JE0L9Rk7P7sSGmg1CDwTGVAdU/NZiPzv6yZaP/UTXkYJxpDNvnITwTRERlt
+TpcItNiYIAyc2shPWopEyb2+TMEZzZlf9C7bDoHBWPK3ahZMNEWdiFPTgAB06gBJdQhiowQLiHR3iyrq0H69l6mZRmrGnPNvyS9foNBdOQvw=</
+icbZDJSgNBEIZr4hbjFpebl8YgeAozoujNgAc9JmAWSIbQ06lJ2vQsdPcocgTePGgiFcfwJNP4s2jb2JnOWj0h4aP/6+iq8qLBVfatj+tzNz8wuJS
+djm3srq2vpHf3KqpKJEMqywSkWx4VKHgIVY1wIbsUQaeALrXv98lNdvUCoehVd6EKMb0G7Ifc6oNlbltp0v2EV7LPIXnCkUzt7vi7edtJyO/R6k
+QsCTDUTFClmo4dazelUnMmcJhrJQpjyvq0i02DIQ1Quel40CHZN06H+JE0L9Rk7P7sSGmg1CDwTGVAdU/NZiPzv6yZaP/UTXkYJxpDNvnITwTRERlt
+TpcItNiYIAyc2shPWopEyb2+TMEZzZlf9C7bDoHBWPK3ahZMNEWdiFPTgAB06gBJdQhiowQLiHR3iyrq0H69l6mZRmrGnPNvyS9foNBdOQvw=</
+Table: students
+Document d1
+cayGZbl/1Kh7EvHjD/4I=">AB6nicbVDLSgNBEOxNfMT4ionL4tB8B
+R2RdFjwIvHiOYByRJmZ3uTIbOzy8ysEJZ8ghcPinj1R/wFD4InP0Unj4M
+mFjQUVd10d/kJZ0o7zqeVy8tr6wW1orG5tb26Wd3YaKU0mxTmMey5ZP
+FHImsK6Z5thKJLI59j0B5djv3mHUrFY3Ophgl5EeoKFjBJtpJug63ZLZ
+afiTGAvEndGytX8x/fb/hfWuqX3ThDTNEKhKSdKtV0n0V5GpGaU46jYSR
+UmhA5ID9uGChKh8rLJqSP7yCiBHcbSlND2RP09kZFIqWHkm86I6L6a98b
+if1471eGFlzGRpBoFnS4KU27r2B7/bQdMItV8aAihkplbdonklBt0ima
+ENz5lxdJ46TinlbOrk0aDkxRgAM4hGNw4RyqcAU1qAOFHtzDIzxZ3Hqwn
+q2XaWvOms3swR9Yrz+NU5Gw</latexit>d1
+cayGZbl/1Kh7EvHjD/4I=">AB6nicbVDLSgNBEOxNfMT4ionL4tB8B
+R2RdFjwIvHiOYByRJmZ3uTIbOzy8ysEJZ8ghcPinj1R/wFD4InP0Unj4M
+mFjQUVd10d/kJZ0o7zqeVy8tr6wW1orG5tb26Wd3YaKU0mxTmMey5ZP
+FHImsK6Z5thKJLI59j0B5djv3mHUrFY3Ophgl5EeoKFjBJtpJug63ZLZ
+afiTGAvEndGytX8x/fb/hfWuqX3ThDTNEKhKSdKtV0n0V5GpGaU46jYSR
+UmhA5ID9uGChKh8rLJqSP7yCiBHcbSlND2RP09kZFIqWHkm86I6L6a98b
+if1471eGFlzGRpBoFnS4KU27r2B7/bQdMItV8aAihkplbdonklBt0ima
+ENz5lxdJ46TinlbOrk0aDkxRgAM4hGNw4RyqcAU1qAOFHtzDIzxZ3Hqwn
+q2XaWvOms3swR9Yrz+NU5Gw</latexit>
+Table: schools
+Document d2
+icbVDJSgNBEK1JXGLcouLJS2MQPIWZoOgx4MVjRLNAHEJPT03SpGehu0cIQz7BiwdFvPoj/oIHwZOfop3loIkPCh7vVFVz0sEV9q2P61cfml5ZbWw
+Vlzf2NzaLu3sNlWcSoYNFotYtj2qUPAIG5prge1EIg09gS1vcDH2W3coFY+jGz1M0A1pL+IBZ1Qb6drvVrulsl2xJyCLxJmRci3/8f2/4X1bun91o
+9ZGmKkmaBKdRw70W5GpeZM4Kh4mypMKBvQHnYMjWiIys0mp47IkVF8EsTSVKTJRP09kdFQqWHomc6Q6r6a98bif14n1cG5m/EoSTVGbLoSAXRMRn/
+TXwukWkxNIQyc2thPWpEybdIomBGf+5UXSrFack8rplUnDhikKcACHcAwOnENLqEODWDQg3t4hCdLWA/Ws/Uybc1Zs5k9+APr9QeO15Gx</late
+icbVDJSgNBEK1JXGLcouLJS2MQPIWZoOgx4MVjRLNAHEJPT03SpGehu0cIQz7BiwdFvPoj/oIHwZOfop3loIkPCh7vVFVz0sEV9q2P61cfml5ZbWw
+Vlzf2NzaLu3sNlWcSoYNFotYtj2qUPAIG5prge1EIg09gS1vcDH2W3coFY+jGz1M0A1pL+IBZ1Qb6drvVrulsl2xJyCLxJmRci3/8f2/4X1bun91o
+9ZGmKkmaBKdRw70W5GpeZM4Kh4mypMKBvQHnYMjWiIys0mp47IkVF8EsTSVKTJRP09kdFQqWHomc6Q6r6a98bif14n1cG5m/EoSTVGbLoSAXRMRn/
+TXwukWkxNIQyc2thPWpEybdIomBGf+5UXSrFack8rplUnDhikKcACHcAwOnENLqEODWDQg3t4hCdLWA/Ws/Uybc1Zs5k9+APr9QeO15Gx</late
+icbVDLSgNBEOz1GeNro968DAbBU9gVRW8GPegxgnlAsoTZyWwyZHZnmZk1xDWf4sWDIoKnfIk3j/6Jk8dBEwsaiqpurv8mDOlHefLWlhcWl5Zzaxl
+1zc2t7bt3E5FiUQSWiaC1nzsaKcRbSsmea0FkuKQ5/Tqt+9GvnVeyoVE9Gd7sfUC3E7YgEjWBupaecawticBhpLKXrp5aBp52CMwaJ+6U5C+GD9
+/XH3tpqWl/NlqCJCGNOFYqbrxNpLsdSMcDrINhJFY0y6uE3rhkY4pMpLx6cP0KFRWigQ0lSk0Vj9PZHiUKl+6JvOEOuOmvVG4n9ePdHBuZeyKE40
+jchkUZBwpAUa5YBaTFKied8QTCQztyLSwRITbdLKmhDc2ZfnSeW4J4UTm+dfNGBCTKwDwdwBC6cQRFuoARlINCDJ3iBV+vRerberPdJ64I1ndmFP7
+CGPyrdmE=</latexit>
+Figure 3: Backward utterance generator. Model components are shown in purple, inputs in blue, and outputs
+in red. First, we encode the input logical form along with environment description for each of its symbols. we
+subsequently encode using LSTMs to form the input and environment-level candidate token representations. A
+pointer-decoder attends over the input and selects among candidate representations to produce the output utterance.
+First, we encode the logical form using BERT.
+B = BERT (˜q)
+Next, we apply a bidirectional LSTM to obtain
+the input encoding −h enc and another bidirectional
+LSTM to obtain representations of tokens in the
+augmented logical form c˜q.
+To represent cv, we use word embeddings from
+BERT . Finally, we apply a pointer-decoder that
+attends over −h enc and selects among candidates
+−c = [c˜q; cv] to obtain the predicted utterance.
+Synthesizing cycle-consistent examples
+Having trained a forward semantic parser F and
+a backward utterance generator G in environment
+e, we can synthesize new examples with which to
+adapt the parser in the new environment e0. First,
+we sample a logical form q using a grammar (Algorithm 1 in Section 2.1). Next, we predict an
+utterance u0 = G(q, e0). Because G was trained
+only on e, many of its outputs are low-quality or do
+not correspond to its input q. On their own, these
+examples (u0, q) do not facilitate parser adaptation
+(see Section 3.1 for analyses).
+To ﬁlter out low-quality examples, we additionally predict a logical form q0 = F(u0, e0), and keep
+only examples that are cycle consistent — the synthesized logical form q0 is equivalent to the originally sampled logical form q in e0. In the case
+of SQL parsing, the example is cycle-consistent if
+executing the synthesized query EXE(q0, e0) results
+in the same denotation (i.e. same set of database
+records) as executing the original sampled query
+EXE(q, e0). Finally, we combine cycle-consistent
+examples synthesized in e0 with the original training data in e to retrain and adapt the parser.
+Experiments
+We evaluate performance on the Spider , Sparc , and CoSQL zero-shot semantic parsing tasks. Table 1 shows dataset statistics. Figure 4 shows examples from each dataset. For all three datasets, we
+use preprocessing steps from Zhang et al. 
+to preprocess SQL logical forms. Evaluation consists of exact match over logical form templates
+(EM) in which values are stripped out, as well
+as execution accuracy (EX). Ofﬁcial evaluations
+also recently incorporated fuzz-test accuracy (FX)
+as tighter variant of execution accuracy. In fuzztesting, the query is executed over randomized
+database content numerous times. Compared to
+an execution match, a fuzz-test execution match is
+less likely to be spurious (e.g. the predicted query
+coincidentally executes to the correct result). FX
+implementation is not public as of writing, hence
+we only report test FX.
+Spider is a collection of databaseutterance-SQL query triplets. The task involves
+producing the SQL query given the utterance and
+the database. Figure 2 and 3 show preprocessed
+input for the parser and generator.
+the user repeatedly asks
+questions that must be converted to SQL queries
+For each stadium, how many concerts are there?
+Logical form
+SELECT T2.name, COUNT(*) FROM concert AS T1 JOIN
+stadium AS T2 ON T1.stadium_id = T2.stadium_id GROUP
+BY T1.stadium_id
+(a) Example from Spider.
+Prev utterance
+How many dorms have a TV Lounge?
+Logical form
+SELECT SUM(T1.student_capacity) FROM dorm as T1 JOIN
+has_amenity AS T2 ON T1.dormid = T2.dormid JOIN
+dorm_amenity AS T3 on T2.amenid = T3.amenid WHERE
+T3.amenity_name = ‘TV Lounge’
+Prev logical form
+SELECT COUNT(*) FROM dorm as T1 JOIN has_amenity AS T2 ON
+T1.dormid = T2.dormid JOIN dorm_amenity AS T3 on T2.amenid
+= T3.amenid WHERE T3.amenity_name = ‘TV Lounge’
+What is the total capacity of these dorms?
+User dialogue act
+INFORM_SQL
+This shows the total capacity of each dorm.
+<result table with many entries>
+(b) Example from CoSQL.
+Figure 4: Examples from (a) Spider and (b) CoSQL. Context and output are respectively shown in purple and blue.
+We do not show Sparc because its data format is similar to CoSQL, but without user dialogue act prediction and
+without response generation. For our experiments, we produce the output logical form given the data, utterance,
+and the previous logical form if applicable. During evaluation, the previous logical form is the output of the model
+during the previous turn (i.e. no teacher forcing on ground-truth previous output).
+# database
+# utterances
+# logical forms
+multi-turn
+Table 1: Dataset statistics.
+by the system.
+Compared to Spider, Sparc
+additionally contains prior interactions from the
+same user session (e.g. database-utterance-queryprevious query quadruplets). For Sparc evaluation,
+we concatenate the previous system-produced
+query (if present) to each utterance. For example, suppose the system was previously asked
+“where is Tesla born?” and is now asked “how
+many people are born there?”, we produce the
+[PREV] SELECT birth place FROM
+people WHERE name = ’Tesla’ [UTT] how
+many people are born there ?
+For training
+and data synthesis, the ground-truth previous query
+is used as generation context for forward parsing
+and backward utterance generation.
+CoSQL is combines task-oriented dialogue and semantic parsing. It consists of a number of tasks, such as response generation, user act
+prediction, and state-tracking. We focus on statetracking, in which the user intent is mapped to a
+SQL query. Similar to Zhang et al. , we restrict the context to be the previous query and the
+current utterance. Hence, the input utterance and
+environment description are obtained in the same
+way as that used for Sparc.
+We primarily compare GAZP with the baseline
+forward semantic parser, because prior systems
+produce queries without values which are not executable. We include one such non-executable
+model, EditSQL , one of the
+top parsers on Spider at the time of writing, for
+reference. However, EditSQL EM is not directly
+comparable because of different outputs.
+Due to high variance from small datasets, we
+tune the forward parser and backward generator
+using cross-validation. We then retrain the model
+with early stopping on the development set using
+hyperparameters found via cross-validation. For
+each task, we synthesize 100k examples, of which
+⇠40k are kept after checking for cycle-consistency.
+The adapted parser is trained using the same hyperparameters as the baseline. Please see appendix A.2
+for hyperparameter settings. Appendix A.3 shows
+examples of synthesized adaptation examples and
+compares them to real examples.
+Table 2 shows that adaptation by GAZP results
+in consistent performance improvement across Spider, Sparc, and CoSQL in terms of EM, EX,
+and FX. We also examine the performance breakdown across query classes and turns (details in
+appendix A.4). First, we divide queries into difﬁculty classes based on the number of SQL components, selections, and conditions . For example, queries that contain more
+components such as GROUP, ORDER, INTERSECT,
+EditSQL 57.6 n/a
+56.8 55.4 52.1 49.8 51.1 46.4 44.0 45.9 43.5 42.8 39.3 36.6 37.2 34.9 33.8
+59.1 59.2 53.3 53.5 51.7 48.9 47.8 45.9 44.6 43.9 42.0 38.8 39.7 35.9 36.3
+Table 2: Development set evaluation results on Spider, Sparc, and CoSQL. EM is exact match accuracy of logical
+form templates without values. EX is execution accuracy of fully-speciﬁed logical forms with values. FX is execution accuracy from fuzz-testing with randomized databases. Baseline is the forward parser without adaptation.
+EditSQL is a state-of-the-art language-to-SQL parser that produces logical form templates that are not executable.
+EM consistency
+Table 3: Ablation performance on development sets. For each one, 100,000 examples are synthesized, out of which
+queries that do not execute or execute to the empty set are discarded. “nocycle” uses adaptation without cycleconsistency. “syntrain” uses data-augmentation on training environments. “EM consistency” enforces logical
+form instead of execution consistency.
+nested subqueries, column selections, and aggregators, etc are considered to be harder.
+Second, we divide multi-turn queries into how many
+turns into the interaction they occur for Sparc and
+CoSQL . We observe that the
+gains in GAZP are generally more pronounced in
+more difﬁcult queries and in turns later in the interaction. Finally, we answer the following questions
+regarding the effectiveness of cycle-consistency
+and grounded adaptation.
+Does adaptation on inference environment outperform data-augmentation on training environment?
+For this experiment, we synthesize
+data on training environments instead of inference
+environments. The resulting data is similar to data
+augmentation with veriﬁcation. As shown in the
+“syntrain” row of Table 3, retraining the model on
+the combination of this data and the supervised data
+leads to overﬁtting in the training environments. A
+method related to data-augmentation is jointly supervising the model using the training data in the
+reverse direction, for example by generating utterance from query . For Spider, we ﬁnd that this dual objective
+(57.2 EM) underperforms GAZP adaptation (59.1
+EM). Our results indicate that adaptation to the new
+environment signiﬁcantly outperforms augmentation in the training environment.
+How important is cycle-consistency?
+experiment, we do not check for cycle-consistency
+and instead keep all synthesized queries in the inference environments. As shown in the “nocycle”
+row of Table 3, the inclusion of cycle-consistency
+effectively prunes ⇠60% of synthesized examples,
+which otherwise signiﬁcantly degrade performance.
+This shows that enforcing cycle-consistency is crucial to successful adaptation.
+In another experiment, we keep examples that
+have consistent logical forms, as deemed by string
+match (e.g. q == q0), instead of consistent denotation from execution. The “EM consistency”
+row of Table 3 shows that this variant of cycleconsistency also improves performance. In particular, EM consistency performs similarly to execution
+consistency, albeit typically with lower execution
+How much GAZP synthesized data should one
+use for grounded adaptation?
+For this experiment, we vary the amount of cycle-consistent syn-
+Figure 5: Effect of amount of synthesized data on adaptation performance on the development set. EM and
+EX denote template exact match and logical form execution accuracy, respectively. The x-axis shows the
+number of cycle-consistent examples synthesized in the
+inference environments (e.g. all databases in the development set).
+thesized data used for adaptation. Figure 5 shows
+that that adaptation performance generally increases with the amount of synthesized data in the
+inference environment, with diminishing return after 30-40k examples.
+Related work
+Semantic parsing.
+Semantic parsers parse natural language utterances into executable logical
+forms with respect to an environment . In zero-shot semantic parsing, the model is required to generalize to environments (e.g. new domains, new database schemas)
+not seen during training . For languageto-SQL zero-shot semantic parsing, a variety of
+methods have been proposed to generalize to new
+databases by selecting from table schemas in the
+new database .
+Our method is complementary to these work — the
+synthesis, cycle-consistency, and adaptation steps
+in GAZP can be applied to any parser, so long as
+we can learn a backward utterance generator and
+evaluate logical-form equivalence.
+Data augmentation.
+Data augmentation transforms original training data to synthesize artiﬁcial training data. Krizhevsky et al. crop
+and rotate input images to improve object recognition. Dong et al. and Yu et al. respectively paraphrase and back-translate questions and
+documents to improve question-answering. Jia
+and Liang perform data-recombination in
+the training domain to improve semantic parsing.
+Hannun et al. superimpose noisy background tracks with input tracks to improve speech
+recognition.
+Our method is distinct from dataaugmentation in the following ways. First, we synthesize data on logical forms sampled from the new
+environment instead of the original environment,
+which allows for adaptation to the new environments. Second, we propose cycle-consistency to
+prune low-quality data and keep high-quality data
+for adaptation. Our analyses show that these core
+differences from data-augmentation are central to
+improving parsing performance.
+Cycle-consistent generative adversarial models
+(cycle-GANs).
+In cycle-GAN , a generator forms images
+that fools a discriminator while the discriminator
+tries distinguish generated images from naturally
+occurring images. The the adversarial objectives of
+the generator and the discriminator are optimized
+jointly. Our method is different from cycle-GANs
+in that we do not use adversarial objectives and
+instead rely on matching denotations from executing synthesized queries. This provides an exact
+signal compared to potentially incorrect outputs
+by the discriminator. Morevoer, cycle-GANs only
+synthesize the input and verify whether the input
+is synthesized (e.g. the utterance looks like a user
+request). In contrast, GAZP synthesizes both the
+input and the output, and veriﬁes consistency between the input and the output (e.g. the utterance
+matches the query).
+Conclusion and Future work
+We proposed GAZP to adapt an existing semantic parser to new environments by synthesizing
+cycle-consistent data. GAZP improved parsing performance on three zero-shot parsing tasks. Our
+analyses showed that GAZP outperforms data augmentation, performance improvement scales with
+the amount of GAZP-synthesized data, and cycleconsistency is central to successful adaptation.
+In principle, GAZP applies to any problems that
+lack annotated data and differ between training and
+inference environments. One such area is robotics,
+where one trains in simulation because it is prohibitively expensive to collect annotated trajectories in the real world. In future work, we will consider how to interpret environment speciﬁcations to
+facilitate grounded adaptation in these other areas.
+Acknowledgement
+This research was supported in part by the ARO
+(W911NF-16-1-0121) and the NSF (IIS-1252835,
+IIS-1562364). We thank Julian Michael for helpful
+discussions, and our reviewers for engaging and
+constructive feedback. We also thank Bo Pang
+and Tao Yu for helping us with running the ofﬁcial
+evaluations.

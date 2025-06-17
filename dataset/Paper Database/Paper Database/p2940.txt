@@ -1,0 +1,545 @@
+Making Sense of Vision and Touch: Self-Supervised Learning of
+Multimodal Representations for Contact-Rich Tasks
+Michelle A. Lee∗, Yuke Zhu∗, Krishnan Srinivasan, Parth Shah,
+Silvio Savarese, Li Fei-Fei, Animesh Garg, Jeannette Bohg
+Abstract— Contact-rich manipulation tasks in unstructured
+environments often require both haptic and visual feedback.
+However, it is non-trivial to manually design a robot controller
+that combines modalities with very different characteristics.
+While deep reinforcement learning has shown success in
+learning control policies for high-dimensional inputs, these
+algorithms are generally intractable to deploy on real robots
+due to sample complexity. We use self-supervision to learn a
+compact and multimodal representation of our sensory inputs,
+which can then be used to improve the sample efﬁciency of our
+policy learning. We evaluate our method on a peg insertion
+task, generalizing over different geometry, conﬁgurations, and
+clearances, while being robust to external perturbations. We
+present results in simulation and on a real robot.
+I. INTRODUCTION
+Even in routine tasks such as inserting a car key into the
+ignition, humans effortlessly combine the senses of vision
+and touch to complete the task. Visual feedback provides semantic and geometric object properties for accurate reaching
+or grasp pre-shaping. Haptic feedback provides observations
+of current contact conditions between object and environment
+for accurate localization and control under occlusions. These
+two feedback modalities are complementary and concurrent
+during contact-rich manipulation . Yet, there are few
+algorithms that endow robots with a similar ability. While
+the utility of multimodal data has frequently been shown in
+robotics , the proposed manipulation strategies
+are often task-speciﬁc. While learning-based methods do not
+require manual task speciﬁcation, the majority of learned
+manipulation policies close the control loop around a single
+modality, often vision .
+In this work, we equip a robot with a policy that leverages
+multimodal feedback from vision and touch, two modalities
+with very different dimensions, frequencies, and characteristics. This policy is learned through self-supervision and
+generalizes over variations of the same contact-rich manipulation task in geometry, conﬁgurations, and clearances. It
+is also robust to external perturbations. Our approach starts
+with using neural networks to learn a shared representation
+∗Authors have contributed equally and names are in alphabetical order.
+Department
+Stanford University. [mishlee,yukez,krshna,pshah9,ssilvio,feifeili,
+animeshg,bohg]@stanford.edu. A. Garg is also at Nvidia, USA.
+This work has been partially supported by JD.com American Technologies Corporation (“JD”) under the SAIL-JD AI Research Initiative and
+by the Toyota Research Institute ("TRI"). This article solely reﬂects the
+opinions and conclusions of its authors and not of JD, any entity associated
+with JD.com, TRI, or any entity associated with Toyota. We are grateful to
+Oussama Khatib for lending the Kuka IIWA, as well as to Shameek Ganguly
+and Mikael Jorda for insightful research discussions.
+Fig. 1: Force sensor readings in the z-axis (height) and visual
+observations are shown with corresponding stages of a peg insertion
+task. The force reading transitions from (1) the arm moving in free
+space to (2) making contact with the box. While aligning the peg,
+the forces capture the sliding contact dynamics on the box surface
+(3, 4). Finally, in the insertion stage, the forces peak as the robot
+attempts to insert the peg at the edge of the hole (5), and decrease
+when the peg slides into the hole (6).
+of haptic and visual sensory data, as well as proprioceptive data. Using a self-supervised learning objective, this
+network is trained to predict optical ﬂow, whether contact
+will be made in the next control cycle, and concurrency of
+visual and haptic data. The training is action-conditional to
+encourage the encoding of action-related information. The
+resulting compact representation of the high-dimensional and
+heterogeneous data is the input to a policy for contact-rich
+manipulation tasks using deep reinforcement learning. The
+proposed decoupling of state estimation and control achieves
+practical sample efﬁciency for learning both representation
+and policy on a real robot. Our primary contributions are:
+1) A model for multimodal representation learning from
+which a contact-rich manipulation policy can be learned.
+2) Demonstration of insertion tasks that effectively utilize
+both haptic and visual feedback for hole search, peg alignment, and insertion (see Fig 1). Ablative studies compare
+the effects of each modality on task performance.
+3) Evaluation of generalization to tasks with different peg
+geometry and of robustness to perturbation and sensor noise.
+II. RELATED WORK AND BACKGROUND
+A. Contact-Rich Manipulation
+Contact-rich tasks, such as peg insertion, block packing,
+and edge following, have been studied for decades due
+ 
+to their relevance in manufacturing. Manipulation policies
+often rely entirely on haptic feedback and force control,
+and assume sufﬁciently accurate state estimation . They
+typically generalize over certain task variations, for instance,
+peg-in-chamfered-hole insertion policies that work independently of peg diameter . However, entirely new policies
+are required for new geometries. For chamferless holes,
+manually deﬁning a small set of viable contact conﬁgurations
+has been successful but cannot accommodate the vast
+range of real-world variations. combines visual and
+haptic data for inserting two planar pegs with more complex
+cross sections, but assumes known peg geometry.
+Reinforcement learning approaches have recently been
+proposed to address variations in geometry and conﬁguration
+for manipulation. trained neural network policies
+using RGB images and proprioceptive feedback. Their approach works well in a wide range of tasks, but the large
+object clearances compared to automation tasks may explain
+the sufﬁciency of RGB data. A series of learning-based
+approaches have relied on haptic feedback for manipulation.
+Many of them are concerned with estimating the stability of
+a grasp before lifting an object , even suggesting a
+regrasp . Only a few approaches learn entire manipulation policies through reinforcement only given haptic feedback . While relies on raw force-torque
+feedback, learn a low-dimensional representation of
+high-dimensional tactile data before learning a policy. Even
+fewer approaches exploit the complementary nature of vision
+and touch. Some of them extend their previous work on grasp
+stability estimation . Others perform full manipulation
+tasks based on multiple input modalities but require a
+pre-speciﬁed manipulation graph and demonstrate only on
+a single task, or require human demonstration and object
+CAD models . There have been promising works that
+train manipulation policy in simulation and transfer them to a
+real robot . However, only few works focused on
+contact-rich tasks and none relied on haptic feedback
+in simulation, most likely because of the lack of ﬁdelity
+of contact simulation and collision modeling for articulated
+rigid-body systems .
+B. Multimodal Representation Learning
+complementary
+heterogeneous
+modalities has previously been explored for inference and
+decision making. The diverse set of modalities includes
+vision, range, audio, haptic and proprioceptive data as well
+as language. This heterogeneous data makes the application
+of hand-designed features and sensor fusion extremely challenging. That is why learning-based methods have been on
+the forefront. are examples of fusing visual
+and haptic data for grasp stability assessment, manipulation,
+material recognition, or object categorization. fuse
+vision and range sensing and adds language labels.
+While many of these multimodal approaches are trained
+through a classiﬁcation objective , in this
+paper we are interested in multimodal representation learning
+for control. A popular representation learning objective is
+reconstruction of the raw sensory input .
+This unsupervised objective beneﬁts learning stability and
+speed, but it is also data intensive and prone to over-
+ﬁtting . When learning for control, action-conditional
+predictive representations can encourage the state representations to capture action-relevant information . Studies
+attempted to predict full images when pushing objects with
+benign success . In these cases either the underlying
+dynamics is deterministic , or the control runs at a low
+frequency . In contrast, we operate with haptic feedback
+at 1kHz and send Cartesian control commands at 20Hz. We
+use an action-conditional surrogate objective for predicting
+optical ﬂow and contact events with self-supervision.
+There is compelling evidence that the interdependence and
+concurrency of different sensory streams aid perception and
+manipulation . However, few studies have explicitly exploited this concurrency in representation learning.
+Examples include for visual prediction tasks and for audio-visual coupling. Following , we propose a
+self-supervised objective to fuse visual and haptic data.
+III. PROBLEM STATEMENT AND METHOD OVERVIEW
+Our goal is to learn a policy on a robot for performing contact-rich manipulation tasks. We want to evaluate
+the value of combining multisensory information and the
+ability to transfer multimodal representations across tasks.
+For sample efﬁciency, we ﬁrst learn a neural network-based
+feature representation of the multisensory data. The resulting
+compact feature vector serves as input to a policy that is
+learned through reinforcement learning.
+We model the manipulation task as a ﬁnite-horizon, discounted Markov Decision Process (MDP) M, with a state
+space S, an action space A, state transition dynamics T :
+S ×A →S, an initial state distribution ρ0, a reward function
+r : S ×A →R, horizon T, and discount factor γ ∈(0,1]. To
+determine the optimal stochastic policy π : S →P(A), we
+want to maximize the expected discounted reward
+We represent the policy by a neural network with parameters
+θπ that are learned as described in Sec. V. S is deﬁned
+by the low-dimensional representation learned from highdimensional visual and haptic sensory data. This representation is a neural network parameterized by θs and is trained as
+described in Sec. IV. A is deﬁned over continuously-valued,
+3D displacements ∆x in Cartesian space. The controller
+design is detailed in Sec. V.
+IV. MULTI-MODAL REPRESENTATION MODEL
+Deep networks are powerful tools to learn representations
+from high-dimensional data but require a substantial
+amount of training data. Here, we address the challenge of
+seeking sources of supervision that do not rely on laborious
+human annotation. We design a set of predictive tasks that
+are suitable for learning visual and haptic representations
+for contact-rich manipulation tasks, where supervision can
+“are these sensory
+inputs time-aligned?”
+force encoder
+Proprioception
+RGB Camera
+Force-Torque Sensor
+image encoder
+proprioception encoder
+flow predictor
+action-conditional
+optical flow
+action encoder
+multimodal
+multimodal
+representation
+contact predictor
+skip connections
+“will it make contact
+in the next step?”
+alignment predictor
+Fig. 2: Neural network architecture for multimodal representation learning with self-supervision. The network takes data from three
+different sensors as input: RGB images, F/T readings over a 32ms window, and end-effector position and velocity. It encodes and fuses
+this data into a multimodal representation based on which controllers for contact-rich manipulation can be learned. This representation
+learning network is trained end-to-end through self-supervision.
+be obtained via automatic procedures rather than manual
+labeling. Fig. 2 visualizes our representation learning model.
+A. Modality Encoders
+Our model encodes three types of sensory data available
+to the robot: RGB images from a ﬁxed camera, haptic
+feedback from a wrist-mounted force-torque (F/T) sensor,
+and proprioceptive data from the joint encoders of the robot
+arm. The heterogeneous nature of this data requires domainspeciﬁc encoders to capture the unique characteristics of each
+modality. For visual feedback, we use a 6-layer convolutional
+neural network (CNN) similar to FlowNet to encode
+128×128×3 RGB images. We add a fully-connected layer
+to transform the ﬁnal activation maps into a 128-d feature
+vector. For haptic feedback, we take the last 32 readings
+from the six-axis F/T sensor as a 32 × 6 time series and
+perform 5-layer causal convolutions with stride 2 to
+transform the force readings into a 64-d feature vector. For
+proprioception, we encode the current position and velocity
+of the end-effector with a 2-layer multilayer perceptron
+(MLP) to produce a 32-d feature vector. The resulting three
+feature vectors are concatenated into one vector and passed
+through the multimodal fusion module (2-layer MLP) to
+produce the ﬁnal 128-d multimodal representation.
+B. Self-Supervised Predictions
+The modality encoders have nearly half a million learnable
+parameters and require a large amount of labeled training
+data. To avoid manual annotation, we design training objectives for which labels can be automatically generated
+through self-supervision. Furthermore, representations for
+control should encode the action-related information. To
+achieve this, we design two action-conditional representation
+learning objectives. Given the next robot action and the
+compact representation of the current sensory data, the model
+has to predict (i) the optical ﬂow generated by the action and
+(ii) whether the end-effector will make contact with the environment in the next control cycle. Ground-truth optical ﬂow
+annotations are automatically generated given proprioception
+and known robot kinematics and geometry . Groundtruth annotations of binary contact states are generated by
+applying simple heuristics on the F/T readings.
+The next action, i.e. the end-effector motion, is encoded by
+a 2-layer MLP. Together with the multimodal representation
+it forms the input to the ﬂow and contact predictor. The
+ﬂow predictor uses a 6-layer convolutional decoder with
+upsampling to produce a ﬂow map of size 128 × 128 × 2.
+Following , we use 4 skip connections. The contact
+predictor is a 2-layer MLP and performs binary classiﬁcation.
+As discussed in Sec. II-B, there is concurrency between the
+different sensory streams leading to correlations and redundancy, e.g., seeing the peg, touching the box, and feeling the
+force. We exploit this by introducing a third representation
+learning objective that predicts whether two sensor streams
+are temporally aligned . During training, we sample a
+mix of time-aligned multimodal data and randomly shifted
+ones. The alignment predictor (a 2-layer MLP) takes the
+low-dimensional representation as input and performs binary
+classiﬁcation of whether the input was aligned or not.
+We train the action-conditional optical ﬂow with endpoint
+error (EPE) loss averaged over all pixels , and both
+the contact prediction and the alignment prediction with
+cross-entropy loss. During training, we minimize a sum of
+the three losses end-to-end with stochastic gradient descent
+on a dataset of rolled-out trajectories. Once trained, this
+network produces a 128-d feature vector that compactly
+represents multimodal data. This vector from the input to
+the manipulation policy learned via reinforcement learning.
+V. POLICY LEARNING AND CONTROLLER DESIGN
+Our ﬁnal goal is to equip a robot with a policy for performing contact-rich manipulation tasks that leverage multimodal
+feedback. Though it is possible to engineer controllers for
+speciﬁc instances of these tasks , this effort is difﬁcult
+to scale to the large variability of real-world tasks. Therefore,
+Trajectory
+Impedance PD
+Controller
+Operational Space
+Controller
+Multimodal Representation
+Fig. 3: Our controller takes end-effector position displacements
+from the policy at 20Hz and outputs robot torque commands at
+200Hz. The trajectory generator interpolates high-bandwidth robot
+trajectories from low-bandwidth policy actions. The impedance PD
+controller tracks the interpolated trajectory. The operational space
+controller uses the robot dynamics model to transform Cartesianspace accelerations into commanded joint torques. The resulting
+controller is compliant and reactive.
+it is desirable to enable a robot to supervise itself where
+the learning process is applicable to a broad range of tasks.
+Given its recent success in continuous control , deep
+reinforcement learning lends itself well to learning policies
+that map high-dimensional features to control commands.
+Policy Learning. Modeling contact interactions and multicontact planning still result in complex optimization problems that remain sensitive to inaccurate actuation
+and state estimation. We formulate contact-rich manipulation
+as a model-free reinforcement learning problem to investigate
+its performance when relying on multimodal feedback and
+when acting under uncertainty in geometry, clearance and
+conﬁguration. By choosing model-free, we also eliminate the
+need for an accurate dynamics model, which is typically dif-
+ﬁcult to obtain in the presence of rich contacts. Speciﬁcally,
+we choose trust-region policy optimization (TRPO) .
+TRPO imposes a bound of KL-divergence for each policy
+update by solving a constrained optimization problem, which
+prevents the policy from moving too far away from the
+previous step. The policy network is a 2-layer MLP that takes
+as input the 128-d multimodal representation and produces
+a 3D displacement ∆x of the robot end-effector. To train
+the policy efﬁciently, we freeze the representation model
+parameters during policy learning, such that it reduces the
+number of learnable parameters to 3% of the entire model
+and substantially improves the sample efﬁciency.
+Controller Design. Our controller takes as input Cartesian
+end-effector displacements ∆x from the policy at 20Hz,
+and outputs direct torque commands τu to the robot at
+200Hz. Its architecture can be split into three parts: trajectory
+generation, impedance control and operational space control
+(see Fig 3). Our policy outputs Cartesian control commands
+instead of joint-space commands, so it does not need to
+implicitly learn the non-linear and redundant mapping between 7-DoF joint space and 3-DoF Cartesian space. We
+use direct torque control as it gives our robot compliance
+during contact, which makes the robot safer to itself, its
+environment, and any nearby human operator. In addition,
+compliance makes the peg insertion task easier to accomplish
+under position uncertainty, as the robot can slide on the
+surface of the box while pushing downwards .
+The trajectory generator bridges low-bandwidth output of
+the policy (limited by the forward pass of our representation
+model), and the high-bandwidth torque control of the robot.
+Given ∆x from the policy and the current end-effector position xt, we calculate the desired end-effector position xdes.
+The trajectory generator interpolates between xt and xdes to
+yield a trajectory ξt = {xk,vk,ak}t+T
+k=t of end-effector position,
+velocity and acceleration at 200Hz. This forms the input to a
+PD impedance controller to compute a task space acceleration command: au = ades −kp(x−xdes)−kv(v−vdes), where
+kp and kv are manually tuned gains.
+By leveraging known kinematic and dynamics models of
+the robot, we can calculate joint torques from Cartesian space
+accelerations with the dynamically-consistent operational
+space formulation . We compute the force at the endeffector with F = Λau, where Λ is the inertial matrix in the
+end-effector frame that decouples the end-effector motions.
+Finally, we map from F to joint torque commands with the
+end-effector Jacobian J, which is a function of joint angle
+q: τu = JT(q)F.
+VI. EXPERIMENTS: DESIGN AND SETUP
+The primary goal of our experiments is to examine the
+effectiveness of the multimodal representations in contactrich manipulation tasks. In particular, we design the experiments to answer the following three questions: 1) What is
+the value of using all instead of a subset of modalities? 2)
+Is policy learning on the real robot practical with a learned
+representation? 3) Does the learned representation generalize
+over task variations and recover from perturbations?
+Task Setup. We design a set of peg insertion tasks where task
+success requires joint reasoning over visual and haptic feedback. We use ﬁve different types of pegs and holes fabricated
+with a 3D printer: round peg, square peg, triangular peg,
+semicircular peg, and hexagonal peg, each with a nominal
+clearance of around 2mm as shown in Fig. 5a.
+Robot Environment Setup. For both simulation and real
+robot experiments, we use the Kuka LBR IIWA robot, a
+7-DoF torque-controlled robot. Three sensor modalities are
+available in both simulation and real hardware, including
+proprioception, an RGB camera, and a force-torque sensor.
+The proprioceptive feature is the end-effector pose as well as
+linear and angular velocity. They are computed using forward
+kinematics. RGB images are recorded from a ﬁxed camera
+pointed at the robot. Input images to our model are downsampled to 128×128. On the real robot, we use the Kinect v2
+camera. In simulation, we use CHAI3D for rendering.
+The force sensor provides a 6-axis feedback on the forces
+and moments along the x, y , z axes. On the real robot, we
+mount an OptoForce sensor between the last joint and the
+peg. In simulation, the contact between the peg and the box is
+modeled with SAI 2.0 , a real-time physics simulator for
+rigid articulated bodies with high ﬁdelity contact resolution.
+Number of training episodes
+Average episode return
+Full model
+No haptics
+No vision & No haptics
+(a) Training curves of reinforcement learning
+(b) Policy evaluation statistics
+Fig. 4: Simulated Peg Insertion: Ablative study of representations trained on different combinations of sensory modalities. We compare
+our full model, trained with a combination of visual and haptic feedback and proprioception, with baselines that are trained without vision,
+or haptics, or either. (b) The graph shows partial task completion rates with different feedback modalities, and we note that both the visual
+and haptic modalities play an integral role for contact-rich tasks.
+Reward Design. We use the following staged reward function to guide the reinforcement learning algorithm through
+the different sub-tasks, simplifying the challenge of exploration and improving learning efﬁciency:
+2 (tanhλ∥s∥+tanhλ∥sxy∥)
+(reaching)
+2−ca∥sxy∥2
+if ∥sxy∥2 ≤ε1
+(alignment)
+(insertion)
+if hd −|sz| ≤ε2
+(completion),
+where s = (sx,sy,sz) and sxy = (sx,sy) use the peg’s current
+position, λ is a constant factor to scale the input to the tanh
+function. The target peg position is (0,0,−hd) with hd as the
+height of the hole, and cr and ca are constant scale factors.
+Evaluation Metrics. We report the quantitative performance
+of the policies using the sum of rewards achieved in an
+episode, normalized by the highest attainable reward. We
+also provide the statistics of the stages of the peg insertion
+task that each policy can achieve, and report the percentage
+of evaluation episodes in the following four categories:
+1) completed insertion: the peg reaches bottom of the hole;
+2) inserted into hole: the peg goes into the hole but has not
+reached the bottom;
+3) touched the box: the peg only makes contact with the box;
+4) failed: the peg fails to reach the box.
+Implementation Details. To train each representation model,
+we collect a multimodal dataset of 100k states and generate
+the self-supervised annotations. We roll out a random policy
+as well as a heuristic policy while collecting the data, which
+encourages the peg to make contact with the box. As the
+policy runs at 20 Hz, it takes 90 to 120 minutes to collect
+the data. The representation models are trained for 20 epochs
+on a Titan V GPU before starting policy learning.
+VII. EXPERIMENTS: RESULTS
+We ﬁrst conduct an ablative study in simulation to investigate the contributions of individual sensory modalities
+to learning the multimodal representation and manipulation
+policy. We then apply our full multimodal model to a real
+robot, and train reinforcement learning policies for the peg
+insertion tasks from the learned representations with high
+sample efﬁciency. Furthermore, we visualize the representations and provide a detailed analysis of robustness with
+respect to shape and clearance variations.
+A. Simulation Experiments
+Three modalities are encoded and fused by our representation model: RGB images, force readings, and proprioception
+(see Fig. 2). To investigate the importance of each modality
+for contact-rich manipulation tasks, we perform an ablative
+study in simulation, where we learn the multimodal representations with different combinations of modalities. These
+learned representations are subsequently fed to the TRPO
+policies to train on a task of inserting a square peg. We
+randomize the conﬁguration of the box position and the arm’s
+initial position at the beginning of each episode to enhance
+the robustness and generalization of the model.
+We illustrate the training curves of the TRPO agents in
+Fig. 4a. We train all policies with 1.2k episodes, each lasting
+500 steps. We evaluate 10 trials with the stochastic policy
+every 10 training episodes and report the mean and standard
+deviation of the episode rewards. Our Full model corresponds to the multimodal representation model introduced
+in Section IV, which takes all three modalities as input. We
+compare it with three baselines: No vision masks out
+the visual input to the network, No haptics masks out
+the haptic input, and No vision No haptics leaves
+only proprioceptive input. From Fig. 4a we observe that
+the absence of either the visual or force modality negatively
+affects task completion, with No vision No haptics
+performing the worst. None of the three baselines has
+reached the same level of performance as the ﬁnal model.
+Among these three baselines, we see that the No haptics
+baseline achieved the highest rewards. We hypothesize that
+vision locates the box and the hole, which facilitates the
+ﬁrst steps of robot reaching and peg alignment, while haptic
+feedback is uninformative until after contact is made.
+The Full model achieves the highest success rate with
+nearly 80% completion rate, while all baseline methods
+have a completion rate below 5%. It is followed by the
+semicircular
+triangular
+(a) Peg variations
+current frame
+(with next action)
+ground-truth
+optical flow
+optical flow
+EPE: 0.036
+EPE: 0.024
+(b) Optical ﬂow prediction examples
+Fig. 5: (a) 3D printed pegs used in the real robot experiments
+and their box clearances. (b) Qualitative predictions: We visualize
+examples of optical ﬂow predictions from our representation model
+(using color scheme in ). The model predicts different ﬂow
+maps on the same image conditioned on different next actions
+indicated by projected arrows.
+No haptics baseline, which relies solely on the visual
+feedback. We see that it is able to localize the hole and
+perform insertion half of the time from only the visual inputs;
+however, few episodes have completed the full insertion.
+It implies that the haptic feedback plays a more crucial
+role in determining the actions when the peg is placed in
+the hole. The remaining two baselines can often reach the
+box through random exploration, but are unable to exhibit
+consistent insertion behaviors.
+B. Real Robot Experiments
+We evaluate our Full model on the real hardware
+with round, triangular, and semicircular pegs. In contrast to
+simulation, the difﬁculty of sensor synchronization, variable
+delays from sensing to control, and complex real-world dynamics introduce additional challenges on the real robot. We
+make the task tractable on a real robot by training a shallow
+neural network controller while freezing the multimodal
+representation model that can generate action-conditional
+ﬂows with low endpoint errors (see Fig. 5b).
+We train the TRPO policies for 300 episodes, each lasting
+1000 steps, roughly 5 hours of wall-clock time. We evaluate
+each policy for 100 episodes in Fig. 6. The ﬁrst three bars
+correspond to the set of experiments where we train a speciﬁc
+representation model and policy for each type of peg. The
+robot achieves a level of success similar to that in simulation.
+A common strategy that the robot learns is to reach the box,
+search for the hole by sliding over the surface, align the peg
+with the hole, and ﬁnally perform insertion. More qualitative
+behaviors can be found in the supplementary video.
+We further examine the potential of transferring the
+learned policies and representations to two novel shapes
+previously unseen in representation and policy training, the
+hexagonal peg and the square peg. For policy transfer, we
+take the representation model and the policy trained for the
+triangular peg, and execute with the new pegs. From the
+4th and 5th bars in Fig. 6, we see that the policy achieves
+over 60% success rate on both pegs without any further
+policy training on them. A better transfer performance can
+be achieved by taking the representation model trained on
+Representation
+transferring
+transferring
+representations
+Fig. 6: Real Robot Peg Insertion: We evaluate our Full Model
+on the real hardware with different peg shapes, indicated on the
+x-axis. The learned policies achieve the tasks with a high success
+rate. We also study transferring the policies and representations
+from trained pegs to novel peg shapes (last four bars). The robot
+effectively re-uses previously trained models to solve new tasks.
+the triangular peg, and training a new policy for the new
+pegs. As shown in the last two bars in Fig. 6, the resulting
+performance increases 19% for the hexagonal peg and 30%
+for the square peg. Our transfer learning results indicate
+that the multimodal representations from visual and haptic
+feedback generalize well across variations of our contact-rich
+manipulation tasks.
+Finally, we study the robustness of our policy in the
+presence of sensory noise and external perturbations to the
+arm by periodically occluding the camera and pushing the
+robot arm during trajectory roll-out. The policy is able to
+recover from both the occlusion and perturbations. Qualitative results can be found in our supplementary video
+on our website: 
+visionandtouch.
+VIII. DISCUSSION AND CONCLUSION
+We examined the value of jointly reasoning over timealigned multisensory data for contact-rich manipulation
+tasks. To enable efﬁcient real robot training, we proposed
+a novel model to encode heterogeneous sensory inputs into
+a compact multimodal representation. Once trained, the representation remained ﬁxed when being used as input to a
+shallow neural network policy for reinforcement learning.
+We trained the representation model with self-supervision,
+eliminating the need for manual annotation. Our experiments
+with tight clearance peg insertion tasks indicated that they
+require the multimodal feedback from both vision and touch.
+We further demonstrated that the multimodal representations
+transfer well to new task instances of peg insertion. For
+future work, we plan to extend our method to other contactrich tasks, which require a full 6-DoF controller of position
+and orientation. We would also like to explore the value of
+incorporating richer modalities, such as depth and sound, into
+our representation learning pipeline, as well as new sources
+of self-supervision.

@@ -1,0 +1,385 @@
+Published as a conference paper at ICLR 2016
+ACTOR-MIMIC
+DEEP MULTITASK AND TRANSFER REINFORCEMENT
+Emilio Parisotto, Jimmy Ba, Ruslan Salakhutdinov
+Department of Computer Science
+University of Toronto
+Toronto, Ontario, Canada
+{eparisotto,jimmy,rsalakhu}@cs.toronto.edu
+The ability to act in multiple environments and transfer previous knowledge to
+new situations can be considered a critical aspect of any intelligent agent. Towards this goal, we deﬁne a novel method of multitask and transfer learning that
+enables an autonomous agent to learn how to behave in multiple tasks simultaneously, and then generalize its knowledge to new domains. This method, termed
+“Actor-Mimic”, exploits the use of deep reinforcement learning and model compression techniques to train a single policy network that learns how to act in a set
+of distinct tasks by using the guidance of several expert teachers. We then show
+that the representations learnt by the deep policy network are capable of generalizing to new tasks with no prior expert guidance, speeding up learning in novel
+environments. Although our method can in general be applied to a wide range
+of problems, we use Atari games as a testing environment to demonstrate these
+INTRODUCTION
+Deep Reinforcement Learning (DRL), the combination of reinforcement learning methods and
+deep neural network function approximators, has recently shown considerable success in highdimensional challenging tasks, such as robotic manipulation and arcade games . These methods exploit the ability of deep networks
+to learn salient descriptions of raw state input, allowing the agent designer to essentially bypass the
+lengthy process of feature engineering. In addition, these automatically learnt descriptions often signiﬁcantly outperform hand-crafted feature representations that require extensive domain knowledge.
+One such DRL approach, the Deep Q-Network (DQN) , has achieved state-ofthe-art results on the Arcade Learning Environment (ALE) , a benchmark of
+Atari 2600 arcade games. The DQN uses a deep convolutional neural network over pixel inputs to
+parameterize a state-action value function. The DQN is trained using Q-learning combined with several tricks that stabilize the training of the network, such as a replay memory to store past transitions
+and target networks to deﬁne a more consistent temporal difference error.
+Although the DQN maintains the same network architecture and hyperparameters for all games, the
+approach is limited in the fact that each network only learns how to play a single game at a time,
+despite the existence of similarities between games. For example, the tennis-like game of pong
+and the squash-like game of breakout are both similar in that each game consists of trying to hit a
+moving ball with a rectangular paddle. A network trained to play multiple games would be able to
+generalize its knowledge between the games, achieving a single compact state representation as the
+inter-task similarities are exploited by the network. Having been trained on enough source tasks,
+the multitask network can also exhibit transfer to new target tasks, which can speed up learning.
+Training DRL agents can be extremely computationally intensive and therefore reducing training
+time is a signiﬁcant practical beneﬁt.
+ 
+Published as a conference paper at ICLR 2016
+The contribution of this paper is to develop and evaluate methods that enable multitask and transfer learning for DRL agents, using the ALE as a test environment. To ﬁrst accomplish multitask
+learning, we design a method called “Actor-Mimic” that leverages techniques from model compression to train a single multitask network using guidance from a set of game-speciﬁc expert networks.
+The particular form of guidance can vary, and several different approaches are explored and tested
+empirically. To then achieve transfer learning, we treat a multitask network as being a DQN which
+was pre-trained on a set of source tasks. We show experimentally that this multitask pre-training
+can result in a DQN that learns a target task signiﬁcantly faster than a DQN starting from a random
+initialization, effectively demonstrating that the source task representations generalize to the target
+BACKGROUND: DEEP REINFORCEMENT LEARNING
+A Markov Decision Process (MDP) is deﬁned as a tuple (S, A, T , R, γ) where S is a set of
+states, A is a set of actions, T (s′|s, a) is the transition probability of ending up in state s′ when
+executing action a in state s, R is the reward function mapping states in S to rewards in R, and γ is
+a discount factor. An agent’s behaviour in an MDP is represented as a policy π(a|s) which deﬁnes
+the probability of executing action a in state s. For a given policy, we can further deﬁne the Q-value
+function Qπ(s, a) = E[PH
+t=0 γtrt|s0 = s, a0 = a] where H is the step when the game ends. The
+Q-function represents the expected future discounted reward when starting in a state s, executing
+a, and then following policy π until a terminating state is reached. There always exists at least one
+optimal state-action value function, Q∗(s, a), such that ∀s ∈S, a ∈A, Q∗(s, a) = maxπ Qπ(s, a)
+ . The optimal Q-function can be rewritten as a Bellman equation:
+Q∗(s, a) =
+s′∼T (·|s,a)
+r + γ · max
+a′∈A Q∗(s′, a′)
+An optimal policy can be constructed from the optimal Q-function by choosing, for a given state, the
+action with highest Q-value. Q-learning, a reinforcement learning algorithm, uses iterative backups
+of the Q-function to converge towards the optimal Q-function. Using a tabular representation of the
+Q-function, this is equivalent to setting Q(n+1)(s, a) = Es′∼T (·|s,a)[r + γ · maxa′∈A Q(n)(s′, a′)]
+for the (n+1)th update step . Because the state space in the ALE is too large
+to tractably store a tabular representation of the Q-function, the Deep Q-Network (DQN) approach
+uses a deep function approximator to represent the state-action value function .
+To train a DQN on the (n+1)th step, we set the network’s loss to
+L(n+1)(θ(n+1)) =
+s,a,r,s′∼M(·)
+r + γ · max
+a′∈A Q(s′, a′; θ(n)) −Q(s, a; θ(n+1))
+where M(·) is a uniform probability distribution over a replay memory, which is a set of the m
+previous (s, a, r, s′) transition tuples seen during play, where m is the size of the memory. The
+replay memory is used to reduce correlations between adjacent states and is shown to have large
+effect on the stability of training the network in some games.
+ACTOR-MIMIC
+POLICY REGRESSION OBJECTIVE
+Given a set of source games S1, ..., SN, our ﬁrst goal is to obtain a single multitask policy network
+that can play any source game at as near an expert level as possible. To train this multitask policy
+network, we use guidance from a set of expert DQN networks E1, ..., EN, where Ei is an expert
+specialized in source task Si. One possible deﬁnition of “guidance” would be to deﬁne a squared
+loss that would match Q-values between the student network and the experts. As the range of the
+expert value functions could vary widely between games, we found it difﬁcult to directly distill
+knowledge from the expert value functions. The alternative we develop here is to instead match
+policies by ﬁrst transforming Q-values using a softmax. Using the softmax gives us outputs which
+Published as a conference paper at ICLR 2016
+are bounded in the unit interval and so the effects of the different scales of each expert’s Q-function
+are diminished, achieving higher stability during learning. Intuitively, we can view using the softmax
+from the perspective of forcing the student to focus more on mimicking the action chosen by the
+guiding expert at each state, where the exact values of the state are less important. We call this
+method “Actor-Mimic” as it is an actor, i.e. policy, that mimics the decisions of a set of experts. In
+particular, our technique ﬁrst transforms each expert DQN into a policy network by a Boltzmann
+distribution deﬁned over the Q-value outputs,
+πEi(a|s) =
+eτ −1QEi(s,a)
+eτ −1QEi(s,a′) ,
+where τ is a temperature parameter and AEi is the action space used by the expert Ei, AEi ⊆A.
+Given a state s from source task Si, we then deﬁne the policy objective over the multitask network
+as the cross-entropy between the expert network’s policy and the current multitask policy:
+policy(θ) =
+πEi(a|s) log πAMN(a|s; θ),
+where πAMN(a|s; θ) is the multitask Actor-Mimic Network (AMN) policy, parameterized by θ. In
+contrast to the Q-learning objective which recursively relies on itself as a target value, we now have
+a stable supervised training signal (the expert network output) to guide the multitask network.
+To acquire training data, we can sample either the expert network or the AMN action outputs to
+generate the trajectories used in the loss. Empirically we have observed that sampling from the
+AMN while it is learning gives the best results. We later prove that in either case of sampling from
+the expert or AMN as it is learning, the AMN will converge to the expert policy using the policy
+regression loss, at least in the case when the AMN is a linear function approximator. We use an
+ϵ-greedy policy no matter which network we sample actions from, which with probability ϵ picks a
+random action uniformly and with probability 1 −ϵ chooses an action from the network.
+FEATURE REGRESSION OBJECTIVE
+We can obtain further guidance from the expert networks in the following way. Let hAMN(s) and
+hEi(s) be the hidden activations in the feature (pre-output) layer of the AMN and i’th expert network computed from the input state s, respectively. Note that the dimension of hAMN(s) does not
+necessarily need to be equal to hEi(s), and this is the case in some of our experiments. We deﬁne
+a feature regression network fi(hAMN(s)) that, for a given state s, attempts to predict the features
+hEi(s) from hAMN(s). The architecture of the mapping fi can be deﬁned arbitrarily, and fi can be
+trained using the following feature regression loss:
+F eatureRegression(θ, θfi) = ∥fi(hAMN(s; θ); θfi) −hEi(s)∥2
+where θ and θfi are the parameters of the AMN and ith feature regression network, respectively.
+When training this objective, the error is fully back-propagated from the feature regression network
+output through the layers of the AMN. In this way, the feature regression objective provides pressure
+on the AMN to compute features that can predict an expert’s features. A justiﬁcation for this objective is that if we have a perfect regression from multitask to expert features, all the information in
+the expert features is contained in the multitask features. The use of the separate feature prediction
+network fi for each task enables the multitask network to have a different feature dimension than
+the experts as well as prevent issues with identiﬁability. Empirically we have found that the feature
+regression objective’s primary beneﬁt is that it can increase the performance of transfer learning in
+some target tasks.
+ACTOR-MIMIC OBJECTIVE
+Combining both regression objectives, the Actor-Mimic objective is thus deﬁned as
+ActorMimic(θ, θfi) = Li
+policy(θ) + β ∗Li
+F eatureRegression(θ, θfi),
+where β is a scaling parameter which controls the relative weighting of the two objectives. Intuitively, we can think of the policy regression objective as a teacher (expert network) telling a student
+(AMN) how they should act (mimic expert’s actions), while the feature regression objective is analogous to a teacher telling a student why it should act that way (mimic expert’s thinking process).
+Published as a conference paper at ICLR 2016
+TRANSFERING KNOWLEDGE: ACTOR-MIMIC AS PRETRAINING
+Now that we have a method of training a network that is an expert at all source tasks, we can proceed
+to the task of transferring source task knowledge to a novel but related target task. To enable transfer
+to a new task, we ﬁrst remove the ﬁnal softmax layer of the AMN. We then use the weights of
+AMN as an instantiation for a DQN that will be trained on the new target task. The pretrained DQN
+is then trained using the same training procedure as the one used with a standard DQN. Multitask
+pretraining can be seen as initializing the DQN with a set of features that are effective at deﬁning
+policies in related tasks. If the source and target tasks share similarities, it is probable that some of
+these pretrained features will also be effective at the target task (perhaps after slight ﬁne-tuning).
+CONVERGENCE PROPERTIES OF ACTOR-MIMIC
+We further study the convergence properties of the proposed Actor-Mimic under a framework similar
+to . The analysis mainly focuses on L2-regularized policy regression without feature regression. Without losing generality, the following analysis focuses on learning from a
+single game expert softmax policy πE. The analysis can be readily extended to consider multiple
+experts on multiple games by absorbing different games into the same state space. Let Dπ(s) be the
+stationary distribution of the Markov decision process under policy π over states s ∈S. The policy
+regression objective function can be rewritten using expectation under the stationary distribution of
+the Markov decision process:
+s∼DπAMN,ϵ-greedy(·)
+πE(a|s), πAMN(a|s; θ)
+where H(·) is the cross-entropy measure and λ is the coefﬁcient of weight decay that is necessary
+in the following analysis of the policy regression. Under Actor-Mimic, the learning agent interacts
+with the environment by following an ϵ-greedy strategy of some Q function. The mapping from a
+Q function to an ϵ-greedy policy πϵ-greedy is denoted by an operator Γ, where πϵ-greedy = Γ(Q). To
+avoid confusion onwards, we use notation p(a|s; θ) for the softmax policies in the policy regression
+objective.
+Assume each state in a Markov decision process is represented by a compact K-dimensional feature
+representation φ(s) ∈RK. Consider a linear function approximator for Q values with parameter
+matrix θ ∈RK×|A|, ˆQ(s, a; θ) = φ(s)T θa, where θa is the ath column of θ. The corresponding
+softmax policy of the linear approximator is deﬁned by p(a|s; θ) ∝exp{ ˆQ(s, a; θ)}.
+STOCHASTIC STATIONARY POLICY
+For any stationary policy π∗, the stationary point of the objective function Eq. (7) can be found
+by setting its gradient w.r.t. θ to zero. Let Pθ be a |S| × |A| matrix where its ith row jth column
+element is the softmax policy prediction p(aj|si; θ) from the linear approximator. Similarly, let ΠE
+be a |S| × |A| matrix for the softmax policy prediction from the expert model. Additionally, let
+Dπ be a diagonal matrix whose entries are Dπ(s). A simple gradient following algorithm on the
+objective function Eq. (7) has the following expected update rule using a learning rate αt > 0 at the
+tth iteration:
+ΦT Dπ(Pθt−1 −ΠE) + λθt−1
+Lemma 1. Under a ﬁxed policy π∗and a learning rate schedule that satisﬁes P∞
+t=1 αt = ∞,
+t < ∞, the parameters θ, updated by the stochastic gradient descent learning algorithm
+described above, asymptotically almost surely converge to a unique solution θ∗.
+When the policy π∗is ﬁxed, the objective function Eq. (7) is convex and is the same as a multinomial
+logistic regression problem with a bounded Lipschitz constant due to its compact input features.
+Hence there is a unique stationary point θ∗such that ∆θ∗= 0. The proof of Lemma 1 follows the
+stochastic approximation argument .
+STOCHASTIC ADAPTIVE POLICY
+Consider the following learning scheme to adapt the agent’s policy. The learning agent interacts
+with the environment and samples states by following a ﬁxed ϵ-greedy policy π′. Given the samples
+Published as a conference paper at ICLR 2016
+#10 4 CRAZY CLIMBER
+SPACE INVADERS
+Figure 1: The Actor-Mimic and expert DQN training curves for 100 training epochs for each of the 8 games.
+A training epoch is 250,000 frames and for each training epoch we evaluate the networks with a testing epoch
+that lasts 125,000 frames. We report AMN and expert DQN test reward for each testing epoch and the mean
+and max of DQN performance. The max is calculated over all testing epochs that the DQN experienced until
+convergence while the mean is calculated over the last ten epochs before the DQN training was stopped. In the
+testing epoch we use ϵ = 0.05 in the ϵ-greedy policy. The y-axis is the average unscaled episode reward during
+a testing epoch. The AMN results are averaged over 2 separately trained networks.
+and the expert prediction, the linear function approximator parameters are updated using Eq. (8) to
+a unique stationary point θ′. The new parameters θ′ are then used to establish a new ϵ-greedy policy
+π′′ = Γ( ˆQθ′) through the Γ operator over the linear function ˆQθ′. The agent under the new policy
+π′′ subsequently samples a new set of states and actions from the Markov decision process to update
+its parameters. The learning agent therefore generates a sequence of policies {π1, π2, π3, ...}. The
+proof for the following theorem is given in Appendix A.
+Theorem 1. Assume the Markov decision process is irreducible and aperiodic for any policy π
+induced by the Γ operator and Γ is Lipschitz continuous with a constant cϵ, then the sequence of
+policies and model parameters generated by the iterative algorithm above converges almost surely
+to a unique solution π∗and θ∗.
+PERFORMANCE GUARANTEE
+The convergence theorem implies the Actor-Mimic learning algorithm also belongs to the family of
+no-regret algorithms in the online learning framework, see Ross et al. for more details. Their
+theoretical analysis can be directly applied to Actor-Mimic and results in a performance guarantee
+bound on how well the Actor-Mimic model performs with respect to the guiding expert.
+t (s, π) be the t-step reward of executing π in the initial state s and then following policy
+π′. The cost-to-go for a policy π after T-steps is deﬁned as JT (π) = −T Es∼D(·) [R(s, a)], where
+R(s, a) is the reward after executing action a in state s.
+Proposition 1. For the iterative algorithm described in Section (4.2), if the loss function in Eq. (7)
+converges to ϵ with the solution πAMN and Zπ∗
+T −t+1(s, π∗)−Zπ∗
+T −t+1(s, a) ≥u for all actions a ∈A
+and t ∈{1, · · · , T}, then the cost-to-go of Actor-Mimic JT (πAMN) grows linearly after executing T
+actions: JT (πAMN) ≤JT (πE) + uTϵ/ log 2.
+The above linear growth rate of the cost-to-go is achieved through sampling from AMN action output
+πAMN, while the cost grows quadratically if the algorithm only samples from the expert action output.
+Our empirical observations conﬁrm this theoretical prediction.
+EXPERIMENTS
+In the following experiments, we validate the Actor-Mimic method by demonstrating its effectiveness at both multitask and transfer learning in the Arcade Learning Environment (ALE). For our
+experiments, we use subsets of a collection of 20 Atari games. 19 games of this set were among the
+29 games that the DQN method performed at a super-human level. We additionally chose 1 game,
+the game of Seaquest, on which the DQN had performed poorly when compared to a human expert.
+Details on the training procedure are described in Appendix B.
+To ﬁrst evaluate the actor-mimic objective on multitask learning, we demonstrate the effectiveness
+of training an AMN over multiple games simultaneously. In this particular case, since our focus is
+Published as a conference paper at ICLR 2016
+Crazy Climber
+Space Invaders
+100% × AMN
+Table 1: Actor-Mimic results on a set of eight Atari games. We compare the AMN performance to that of the
+expert DQNs trained separately on each game. The expert DQNs were trained until convergence and the AMN
+was trained for 100 training epochs, which is equivalent to 25 million input frames per source game. For the
+AMN, we report maximum test reward ever achieved in epochs 1-100 and mean test reward in epochs 91-100.
+For the DQN, we report maximum test reward ever achieved until convergence and mean test reward in the last
+10 epochs of DQN training. Additionally, at the last row of the table we report the percentage ratio of the AMN
+reward to the expert DQN reward for every game for both mean and max rewards. These percentage ratios are
+plotted in Figure 6. The AMN results are averaged over 2 separately trained networks.
+on multitask learning and not transfer learning, we disregard the feature regression objective and set
+β to 0. Figure 1 and Table 1 show the results of an AMN trained on 8 games simultaneously with
+the policy regression objective, compared to an expert DQN trained separately for each game. The
+AMN and every individual expert DQN in this case had the exact same network architecture. We
+can see that the AMN quickly reaches close-to-expert performance on 7 games out of 8, only taking
+around 20 epochs or 5 million training frames to settle to a stable behaviour. This is in comparison
+to the expert networks, which were trained for up to 50 million frames.
+One result that was observed during training is that the AMN often becomes more consistent in
+its behaviour than the expert DQN, with a noticeably lower reward variance in every game except
+Atlantis and Pong. Another surprising result is that the AMN achieves a signiﬁcantly higher mean
+reward in the game of Atlantis and relatively higher mean reward in the games of Breakout and
+Enduro. This is despite the fact that the AMN is not being optimized to improve reward over the
+expert but just replicate the expert’s behaviour. We also observed this increase in source task performance again when we later on increased the AMN model complexity for the transfer experiments
+(see Atlantis experiments in Appendix D). The AMN had the worst performance on the game of
+Seaquest, which was a game on which the expert DQN itself did not do very well. It is possible
+that a low quality expert policy has difﬁculty teaching the AMN to even replicate its own (poor)
+behaviour. We compare the performance of our AMN against a baseline of two different multitask
+DQN architectures in Appendix C.
+We have found that although a small AMN can learn how to behave at a close-to-expert level on
+multiple source tasks, a larger AMN can more easily transfer knowledge to target tasks after being trained on the source tasks. For the transfer experiments, we therefore signiﬁcantly increased
+the AMN model complexity relative to that of an expert. Using a larger network architecture also
+allowed us to scale up to playing 13 source games at once (see Appendix D for source task performance using the larger AMNs). We additionally found that using an AMN trained for too long on
+the source tasks hurt transfer, as it is likely overﬁtting. Therefore for the transfer experiments, we
+train the AMN on only 4 million frames for each of the source games.
+To evaluate the Actor-Mimic objective on transfer learning, the previously described large AMNs
+will be used as a weight initialization for DQNs which are each trained on a different target task. We
+additionally independently evaluate the beneﬁt of the feature regression objective during transfer
+by having one AMN trained with only the policy regression objective (AMN-policy) and another
+trained using both feature and policy regression (AMN-feature). The results are then compared to
+the baseline of a DQN that was initialized with random weights.
+The performance on a set of 7 target games is detailed in Table 2 (learning curves are plotted in
+Figure 7). We can see that the AMN pretraining provides a deﬁnite increase in learning speed for
+the 3 games of Breakout, Star Gunner and Video Pinball. The results in Breakout and Video Pinball
+demonstrate that the policy regression objective alone provides signiﬁcant positive transfer in some
+target tasks. The reason for this large positive transfer might be due to the source game Pong having
+very similar mechanics to both Video Pinball and Breakout, where one must use a paddle to prevent
+a ball from falling off screen. The machinery used to detect the ball in Pong would likely be useful
+in detecting the ball for these two target tasks, given some ﬁne-tuning. Additionally, the feature
+regression objective causes a signiﬁcant speed-up in the game of Star Gunner compared to both the
+random initialization and the network trained solely with policy regression. Therefore even though
+the feature regression objective can slightly hurt transfer in some source games, it can provide large
+Published as a conference paper at ICLR 2016
+AMN-policy
+AMN-feature
+AMN-policy
+AMN-feature
+AMN-policy
+AMN-feature
+Road Runner
+AMN-policy
+AMN-feature
+AMN-policy
+AMN-feature
+Star Gunner
+AMN-policy
+AMN-feature
+Video Pinball
+AMN-policy
+AMN-feature
+Table 2: Actor-Mimic transfer results for a set of 7 games. The 3 networks are trained as DQNs on the target
+task, with the only difference being the weight initialization. “Random” means random initial weights, “AMNpolicy” means a weight initialization with an AMN trained using policy regression and “AMN-feature” means
+a weight initialization with an AMN trained using both policy and feature regression (see text for more details).
+We report the average test reward every 4 training epochs (equivalent to 1 million training frames), where the
+average is over 4 testing epochs that are evaluated immediately after each training epoch. For each game, we
+bold out the network results that have the highest average testing reward for that particular column.
+beneﬁts in others. The positive transfer in Breakout, Star Gunner and Video Pinball saves at least up
+to 5 million frames of training time in each game. Processing 5 million frames with the large model
+is equivalent to around 4 days of compute time on a NVIDIA GTX Titan.
+On the other hand, for the games of Krull and Road Runner (although the multitask pretraining does
+help learning at the start) the effect is not very pronounced. When running Krull we observed that the
+policy learnt by any DQN regardless of the initialization was a sort of unexpected local maximum.
+In Krull, the objective is to move between a set of varied minigames and complete each one. One of
+the minigames, where the player must traverse a spiderweb, gives extremely high reward by simply
+jumping quickly in a mostly random fashion. What the DQN does is it kills itself on purpose in the
+initial minigame, runs to the high reward spiderweb minigame, and then simply jumps in the corner
+of the spiderweb until it is terminated by the spider. Because it is relatively easy to get stuck in this
+local maximum, and very hard to get out of it (jumping in the minigame gives unproportionally high
+reward compared to the other minigames), transfer does not really help learning.
+For the games of Gopher and Robotank, we can see that the multitask pretraining does not have
+any signiﬁcant positive effect. In particular, multitask pretraining for Robotank even seems to slow
+down learning, providing an example of negative transfer. The task in Robotank is to control a tank
+turret in a 3D environment to destroy other tanks, so it’s possible that this game is so signiﬁcantly
+different from any source task (being the only ﬁrst-person 3D game) that the multitask pretraining
+does not provide any useful prior knowledge.
+RELATED WORK
+The idea of using expert networks to guide a single mimic network has been studied in the context
+of supervised learning, where it is known as model compression. The goal of model compression is
+to reduce the computational complexity of a large model (or ensemble of large models) to a single
+smaller mimic network while maintaining as high an accuracy as possible. To obtain high accuracy,
+the mimic network is trained using rich output targets provided by the experts. These output targets
+are either the ﬁnal layer logits or the high-temperature softmax outputs of the
+experts . Our approach is most similar to the technique of 
+Published as a conference paper at ICLR 2016
+which matches the high-temperature outputs of the mimic network with that of the expert network.
+In addition, we also tried an objective that provides expert guidance at the feature level instead of
+only at the output level. A similar idea was also explored in the model compression case , where a deep and thin mimic network used a larger expert network’s intermediate
+features as guiding hints during training. In contrast to these model compression techniques, our
+method is not concerned with decreasing test time computation but instead using experts to provide
+otherwise unavailable supervision to a mimic network on several distinct tasks.
+Actor-Mimic can also be considered as part of the larger Imitation Learning class of methods, which
+use expert guidance to teach an agent how to act. One such method, called DAGGER , is similar to our approach in that it trains a policy to directly mimic an expert’s behaviour
+while sampling actions from the mimic agent. Actor-Mimic can be considered as an extension of
+this work to the multitask case. In addition, using a deep neural network to parameterize the policy
+provides us with several advantages over the more general Imitation Learning framework. First, we
+can exploit the automatic feature construction ability of deep networks to transfer knowledge to new
+tasks, as long as the raw data between tasks is in the same form, i.e. pixel data with the same dimensions. Second, we can deﬁne objectives which take into account intermediate representations of the
+state and not just the policy outputs, for example the feature regression objective which provides a
+richer training signal to the mimic network than just samples of the expert’s action output.
+Recent work has explored combining expert-guided Imitation Learning and deep neural networks in
+the single-task case. Guo et al. use DAGGER with expert guidance provided by Monte-Carlo
+Tree Search (MCTS) policies to train a deep neural network that improves on the original DQN’s
+performance. Some disadvantages of using MCTS experts as guidance are that they require both
+access to the (hidden) RAM state of the emulator as well as an environment model. Another related method is that of guided policy search , which combines a regularized
+importance-sampled policy gradient with guiding trajectory samples generated using differential dynamic programming. The goal in that work was to learn continuous control policies which improved
+upon the basic policy gradient method, which is prone to poor local minima.
+A wide variety of methods have also been studied in the context of RL transfer learning for a more comprehensive review). One related approach is to use a dual state
+representation with a set of task-speciﬁc and task-independent features known as “problem-space”
+and “agent-space” descriptors, respectively. For each source task, a task-speciﬁc value function is
+learnt on the problem-space descriptors and then these learnt value functions are transferred to a
+single value function over the agent-space descriptors. Because the agent-space value function is
+deﬁned over features which maintain constant semantics across all tasks, this value function can be
+directly transferred to new tasks. Banerjee & Stone constructed agent-space features by ﬁrst
+generating a ﬁxed-depth game tree of the current state, classifying each future state in the tree as
+either {win, lose, draw, nonterminal} and then coalescing all states which have the same class or
+subtree. To transfer the source tasks value functions to agent-space, they use a simple weighted average of the source task value functions, where the weight is proportional to the number of times that
+a speciﬁc agent-space descriptor has been seen during play in that source task. In a related method,
+Konidaris & Barto transfer the value function to agent-space by using regression to predict
+every source tasks problem-space value function from the agent-space descriptors. A drawback of
+these methods is that the agent- and problem-space descriptors are either hand-engineered or generated from a perfect environment model, thus requiring a signiﬁcant amount of domain knowledge.
+DISCUSSION
+In this paper we deﬁned Actor-Mimic, a novel method for training a single deep policy network
+over a set of related source tasks. We have shown that a network trained using Actor-Mimic is
+capable of reaching expert performance on many games simultaneously, while having the same
+model complexity as a single expert. In addition, using Actor-Mimic as a multitask pretraining
+phase can signiﬁcantly improve learning speed in a set of target tasks. This demonstrates that the
+features learnt over the source tasks can generalize to new target tasks, given a sufﬁcient level of
+similarity between source and target tasks. A direction of future work is to develop methods that
+can enable a targeted knowledge transfer from source tasks by identifying related source tasks for
+the given target task. Using targeted knowledge transfer can potentially help in cases of negative
+transfer observed in our experiments.
+Acknowledgments: This work was supported by Samsung and NSERC.
+Published as a conference paper at ICLR 2016

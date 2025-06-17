@@ -1,0 +1,470 @@
+HAL Id: hal-03953007
+ 
+Submitted on 23 Jan 2023
+HAL is a multi-disciplinary open access
+archive for the deposit and dissemination of scientific research documents, whether they are published or not.
+The documents may come from
+teaching and research institutions in France or
+abroad, or from public or private research centers.
+L’archive ouverte pluridisciplinaire HAL, est
+destinée au dépôt et à la diffusion de documents
+scientifiques de niveau recherche, publiés ou non,
+émanant des établissements d’enseignement et de
+recherche français ou étrangers, des laboratoires
+publics ou privés.
+Distributed under a Creative Commons Attribution - NonCommercial 4.0 International License
+LightGBM: A Highly Eﬀicient Gradient Boosting
+Decision Tree
+Guolin Ke, Qi Meng, Thomas Finley, Taifeng Wang, Wei Chen, Weidong Ma,
+Qiwei Ye, Tie-Yan Liu
+To cite this version:
+Guolin Ke, Qi Meng, Thomas Finley, Taifeng Wang, Wei Chen, et al.. LightGBM: A Highly Eﬀicient
+Gradient Boosting Decision Tree. 31st International Conference on Neural Information Processing
+Systems, Dec 2017, Long Beach, United States. ￿hal-03953007￿
+LightGBM: A Highly Efﬁcient Gradient Boosting
+Decision Tree
+Guolin Ke1, Qi Meng2, Thomas Finley3, Taifeng Wang1,
+Wei Chen1, Weidong Ma1, Qiwei Ye1, Tie-Yan Liu1
+1Microsoft Research
+2Peking University
+3 Microsoft Redmond
+1{guolin.ke, taifengw, wche, weima, qiwye, tie-yan.liu}@microsoft.com;
+ ;
+ ;
+Gradient Boosting Decision Tree (GBDT) is a popular machine learning algorithm, and has quite a few effective implementations such as XGBoost and pGBRT.
+Although many engineering optimizations have been adopted in these implementations, the efﬁciency and scalability are still unsatisfactory when the feature
+dimension is high and data size is large. A major reason is that for each feature,
+they need to scan all the data instances to estimate the information gain of all
+possible split points, which is very time consuming. To tackle this problem, we
+propose two novel techniques: Gradient-based One-Side Sampling (GOSS) and
+Exclusive Feature Bundling (EFB). With GOSS, we exclude a signiﬁcant proportion of data instances with small gradients, and only use the rest to estimate the
+information gain. We prove that, since the data instances with larger gradients play
+a more important role in the computation of information gain, GOSS can obtain
+quite accurate estimation of the information gain with a much smaller data size.
+With EFB, we bundle mutually exclusive features (i.e., they rarely take nonzero
+values simultaneously), to reduce the number of features. We prove that ﬁnding
+the optimal bundling of exclusive features is NP-hard, but a greedy algorithm
+can achieve quite good approximation ratio (and thus can effectively reduce the
+number of features without hurting the accuracy of split point determination by
+much). We call our new GBDT implementation with GOSS and EFB LightGBM.
+Our experiments on multiple public datasets show that, LightGBM speeds up the
+training process of conventional GBDT by up to over 20 times while achieving
+almost the same accuracy.
+Introduction
+Gradient boosting decision tree (GBDT) is a widely-used machine learning algorithm, due to
+its efﬁciency, accuracy, and interpretability. GBDT achieves state-of-the-art performances in many
+machine learning tasks, such as multi-class classiﬁcation , click prediction , and learning to
+rank . In recent years, with the emergence of big data (in terms of both the number of features
+and the number of instances), GBDT is facing new challenges, especially in the tradeoff between
+accuracy and efﬁciency. Conventional implementations of GBDT need to, for every feature, scan all
+the data instances to estimate the information gain of all the possible split points. Therefore, their
+computational complexities will be proportional to both the number of features and the number of
+instances. This makes these implementations very time consuming when handling big data.
+To tackle this challenge, a straightforward idea is to reduce the number of data instances and the
+number of features. However, this turns out to be highly non-trivial. For example, it is unclear how to
+perform data sampling for GBDT. While there are some works that sample data according to their
+weights to speed up the training process of boosting , they cannot be directly applied to GBDT
+since there is no sample weight in GBDT at all. In this paper, we propose two novel techniques
+towards this goal, as elaborated below.
+Gradient-based One-Side Sampling (GOSS). While there is no native weight for data instance in
+GBDT, we notice that data instances with different gradients play different roles in the computation
+of information gain. In particular, according to the deﬁnition of information gain, those instances
+with larger gradients1 (i.e., under-trained instances) will contribute more to the information gain.
+Therefore, when down sampling the data instances, in order to retain the accuracy of information gain
+estimation, we should better keep those instances with large gradients (e.g., larger than a pre-deﬁned
+threshold, or among the top percentiles), and only randomly drop those instances with small gradients.
+We prove that such a treatment can lead to a more accurate gain estimation than uniformly random
+sampling, with the same target sampling rate, especially when the value of information gain has a
+large range.
+Exclusive Feature Bundling (EFB). Usually in real applications, although there are a large number
+of features, the feature space is quite sparse, which provides us a possibility of designing a nearly
+lossless approach to reduce the number of effective features. Speciﬁcally, in a sparse feature space,
+many features are (almost) exclusive, i.e., they rarely take nonzero values simultaneously. Examples
+include the one-hot features (e.g., one-hot word representation in text mining). We can safely bundle
+such exclusive features. To this end, we design an efﬁcient algorithm by reducing the optimal
+bundling problem to a graph coloring problem (by taking features as vertices and adding edges for
+every two features if they are not mutually exclusive), and solving it by a greedy algorithm with a
+constant approximation ratio.
+We call the new GBDT algorithm with GOSS and EFB LightGBM2. Our experiments on multiple
+public datasets show that LightGBM can accelerate the training process by up to over 20 times while
+achieving almost the same accuracy.
+The remaining of this paper is organized as follows. At ﬁrst, we review GBDT algorithms and related
+work in Sec. 2. Then, we introduce the details of GOSS in Sec. 3 and EFB in Sec. 4. Our experiments
+for LightGBM on public datasets are presented in Sec. 5. Finally, we conclude the paper in Sec. 6.
+Preliminaries
+GBDT and Its Complexity Analysis
+GBDT is an ensemble model of decision trees, which are trained in sequence . In each iteration,
+GBDT learns the decision trees by ﬁtting the negative gradients (also known as residual errors).
+The main cost in GBDT lies in learning the decision trees, and the most time-consuming part in
+learning a decision tree is to ﬁnd the best split points. One of the most popular algorithms to ﬁnd split
+points is the pre-sorted algorithm , which enumerates all possible split points on the pre-sorted
+feature values. This algorithm is simple and can ﬁnd the optimal split points, however, it is inefﬁcient
+in both training speed and memory consumption. Another popular algorithm is the histogram-based
+algorithm , as shown in Alg. 13. Instead of ﬁnding the split points on the sorted feature
+values, histogram-based algorithm buckets continuous feature values into discrete bins and uses these
+bins to construct feature histograms during training. Since the histogram-based algorithm is more
+efﬁcient in both memory consumption and training speed, we will develop our work on its basis.
+As shown in Alg. 1, the histogram-based algorithm ﬁnds the best split points based on the feature
+histograms. It costs O(#data × #feature) for histogram building and O(#bin × #feature) for
+split point ﬁnding. Since #bin is usually much smaller than #data, histogram building will dominate
+the computational complexity. If we can reduce #data or #feature, we will be able to substantially
+speed up the training of GBDT.
+Related Work
+There have been quite a few implementations of GBDT in the literature, including XGBoost ,
+pGBRT , scikit-learn , and gbm in R 4. Scikit-learn and gbm in R implements the presorted algorithm, and pGBRT implements the histogram-based algorithm. XGBoost supports both
+1When we say larger or smaller gradients in this paper, we refer to their absolute values.
+2The code is available at GitHub: 
+3Due to space restriction, high level pseudo code is used. The details could be found in our open-source code.
+4There are some other works speed up GBDT training via GPU , or parallel training . However,
+they are out of the scope of this paper.
+the pre-sorted algorithm and histogram-based algorithm. As shown in , XGBoost outperforms
+the other tools. So, we use XGBoost as our baseline in the experiment section.
+To reduce the size of the training data, a common approach is to down sample the data instances. For
+example, in , data instances are ﬁltered if their weights are smaller than a ﬁxed threshold. SGB
+ uses a random subset to train the weak learners in every iteration. In , the sampling ratio are
+dynamically adjusted in the training progress. However, all these works except SGB are based
+on AdaBoost , and cannot be directly applied to GBDT since there are no native weights for data
+instances in GBDT. Though SGB can be applied to GBDT, it usually hurts accuracy and thus it is not
+a desirable choice.
+Similarly, to reduce the number of features, it is natural to ﬁlter weak features . This
+is usually done by principle component analysis or projection pursuit. However, these approaches
+highly rely on the assumption that features contain signiﬁcant redundancy, which might not always
+be true in practice (features are usually designed with their unique contributions and removing any of
+them may affect the training accuracy to some degree).
+The large-scale datasets used in real applications are usually quite sparse. GBDT with the pre-sorted
+algorithm can reduce the training cost by ignoring the features with zero values . However,
+GBDT with the histogram-based algorithm does not have efﬁcient sparse optimization solutions. The
+reason is that the histogram-based algorithm needs to retrieve feature bin values (refer to Alg. 1) for
+each data instance no matter the feature value is zero or not. It is highly preferred that GBDT with
+the histogram-based algorithm can effectively leverage such sparse property.
+To address the limitations of previous works, we propose two new novel techniques called Gradientbased One-Side Sampling (GOSS) and Exclusive Feature Bundling (EFB). More details will be
+introduced in the next sections.
+Algorithm 1: Histogram-based Algorithm
+Input: I: training data, d: max depth
+Input: m: feature dimension
+nodeSet ←{0} ⊲tree nodes in current level
+rowSet ←{{0, 1, 2, ...}} ⊲data indices in tree nodes
+for i = 1 to d do
+for node in nodeSet do
+usedRows ←rowSet[node]
+for k = 1 to m do
+H ←new Histogram()
+⊲Build histogram
+for j in usedRows do
+bin ←I.f[k][j].bin
+H[bin].y ←H[bin].y + I.y[j]
+H[bin].n ←H[bin].n + 1
+Find the best split on histogram H.
+Update rowSet and nodeSet according to the best
+split points.
+Algorithm 2: Gradient-based One-Side Sampling
+Input: I: training data, d: iterations
+Input: a: sampling ratio of large gradient data
+Input: b: sampling ratio of small gradient data
+Input: loss: loss function, L: weak learner
+models ←{}, fact ←1−a
+topN ←a × len(I) , randN ←b × len(I)
+for i = 1 to d do
+preds ←models.predict(I)
+g ←loss(I, preds), w ←{1,1,...}
+sorted ←GetSortedIndices(abs(g))
+topSet ←sorted[1:topN]
+randSet ←RandomPick(sorted[topN:len(I)],
+usedSet ←topSet + randSet
+w[randSet] × = fact ⊲Assign weight fact to the
+small gradient data.
+newModel ←L(I[usedSet], −g[usedSet],
+w[usedSet])
+models.append(newModel)
+Gradient-based One-Side Sampling
+In this section, we propose a novel sampling method for GBDT that can achieve a good balance
+between reducing the number of data instances and keeping the accuracy for learned decision trees.
+Algorithm Description
+In AdaBoost, the sample weight serves as a good indicator for the importance of data instances.
+However, in GBDT, there are no native sample weights, and thus the sampling methods proposed for
+AdaBoost cannot be directly applied. Fortunately, we notice that the gradient for each data instance
+in GBDT provides us with useful information for data sampling. That is, if an instance is associated
+with a small gradient, the training error for this instance is small and it is already well-trained.
+A straightforward idea is to discard those data instances with small gradients. However, the data
+distribution will be changed by doing so, which will hurt the accuracy of the learned model. To avoid
+this problem, we propose a new method called Gradient-based One-Side Sampling (GOSS).
+GOSS keeps all the instances with large gradients and performs random sampling on the instances
+with small gradients. In order to compensate the inﬂuence to the data distribution, when computing the
+information gain, GOSS introduces a constant multiplier for the data instances with small gradients
+(see Alg. 2). Speciﬁcally, GOSS ﬁrstly sorts the data instances according to the absolute value of their
+gradients and selects the top a × 100% instances. Then it randomly samples b × 100% instances from
+the rest of the data. After that, GOSS ampliﬁes the sampled data with small gradients by a constant
+when calculating the information gain. By doing so, we put more focus on the under-trained
+instances without changing the original data distribution by much.
+Theoretical Analysis
+GBDT uses decision trees to learn a function from the input space X s to the gradient space G .
+Suppose that we have a training set with n i.i.d. instances {x1, · · · , xn}, where each xi is a vector
+with dimension s in space X s. In each iteration of gradient boosting, the negative gradients of the
+loss function with respect to the output of the model are denoted as {g1, · · · , gn}. The decision tree
+model splits each node at the most informative feature (with the largest information gain). For GBDT,
+the information gain is usually measured by the variance after splitting, which is deﬁned as below.
+Deﬁnition 3.1 Let O be the training dataset on a ﬁxed node of the decision tree. The variance gain
+of splitting feature j at point d for this node is deﬁned as
+{xi∈O:xij≤d} gi)2
+{xi∈O:xij>d} gi)2
+where nO = P I[xi ∈O], nj
+l|O(d) = P I[xi ∈O : xij ≤d] and nj
+r|O(d) = P I[xi ∈O : xij > d].
+For feature j, the decision tree algorithm selects d∗
+j = argmaxdVj(d) and calculates the largest gain
+j). 5 Then, the data are split according feature j∗at point dj∗into the left and right child nodes.
+In our proposed GOSS method, ﬁrst, we rank the training instances according to their absolute values
+of their gradients in the descending order; second, we keep the top-a × 100% instances with the larger
+gradients and get an instance subset A; then, for the remaining set Ac consisting (1 −a) × 100%
+instances with smaller gradients, we further randomly sample a subset B with size b × |Ac|; ﬁnally,
+we split the instances according to the estimated variance gain ˜Vj(d) over the subset A ∪B, i.e.,
+˜Vj(d) = 1
+xi∈Al gi + 1−a
+xi∈Bl gi)2
+xi∈Ar gi + 1−a
+xi∈Br gi)2
+where Al = {xi ∈A : xij ≤d},Ar = {xi ∈A : xij > d},Bl = {xi ∈B : xij ≤d},Br = {xi ∈B :
+xij > d}, and the coefﬁcient 1−a
+is used to normalize the sum of the gradients over B back to the
+size of Ac.
+Thus, in GOSS, we use the estimated ˜Vj(d) over a smaller instance subset, instead of the accurate
+Vj(d) over all the instances to determine the split point, and the computation cost can be largely
+reduced. More importantly, the following theorem indicates that GOSS will not lose much training
+accuracy and will outperform random sampling. Due to space restrictions, we leave the proof of the
+theorem to the supplementary materials.
+Theorem 3.2 We denote the approximation error in GOSS as E(d) = | ˜Vj(d) −Vj(d)| and ¯gj
+xi∈(A∪Ac)l |gi|
+xi∈(A∪Ac)r |gi|
+. With probability at least 1 −δ, we have
+a,b ln 1/δ · max
+where Ca,b = 1−a
+b maxxi∈Ac |gi|, and D = max(¯gj
+l (d), ¯gj
+According to the theorem, we have the following discussions: (1) The asymptotic approximation ratio
+of GOSS is O
+. If the split is not too unbalanced (i.e., nj
+l (d) ≥O(√n) and
+r(d) ≥O(√n)), the approximation error will be dominated by the second term of Ineq.(2) which
+5Our following analysis holds for arbitrary node. For simplicity and without confusion, we omit the sub-index
+O in all the notations.
+decreases to 0 in O(√n) with n →∞. That means when number of data is large, the approximation
+is quite accurate. (2) Random sampling is a special case of GOSS with a = 0. In many cases,
+GOSS could outperform random sampling, under the condition C0,β > Ca,β−a, which is equivalent
+√β−a with αa = maxxi∈A∪Ac |gi|/ maxxi∈Ac |gi|.
+Next, we analyze the generalization performance in GOSS. We consider the generalization error in
+GOSS EGOSS
+(d) = | ˜Vj(d) −V∗(d)|, which is the gap between the variance gain calculated by the
+sampled training instances in GOSS and the true variance gain for the underlying distribution. We
+have EGOSS
+(d) ≤| ˜Vj(d) −Vj(d)| + |Vj(d) −V∗(d)|
+∆= EGOSS(d) + Egen(d). Thus, the generalization
+error with GOSS will be close to that calculated by using the full data instances if the GOSS
+approximation is accurate. On the other hand, sampling will increase the diversity of the base learners,
+which potentially help to improve the generalization performance .
+Exclusive Feature Bundling
+In this section, we propose a novel method to effectively reduce the number of features.
+Algorithm 3: Greedy Bundling
+Input: F: features, K: max conﬂict count
+Construct graph G
+searchOrder ←G.sortByDegree()
+bundles ←{}, bundlesConﬂict ←{}
+for i in searchOrder do
+needNew ←True
+for j = 1 to len(bundles) do
+cnt ←ConﬂictCnt(bundles[j],F[i])
+if cnt + bundlesConﬂict[i] ≤K then
+bundles[j].add(F[i]), needNew ←False
+if needNew then
+Add F[i] as a new bundle to bundles
+Output: bundles
+Algorithm 4: Merge Exclusive Features
+Input: numData: number of data
+Input: F: One bundle of exclusive features
+binRanges ←{0}, totalBin ←0
+for f in F do
+totalBin += f.numBin
+binRanges.append(totalBin)
+newBin ←new Bin(numData)
+for i = 1 to numData do
+newBin[i] ←0
+for j = 1 to len(F) do
+if F[j].bin[i] ̸= 0 then
+newBin[i] ←F[j].bin[i] + binRanges[j]
+Output: newBin, binRanges
+High-dimensional data are usually very sparse. The sparsity of the feature space provides us a
+possibility of designing a nearly lossless approach to reduce the number of features. Speciﬁcally, in
+a sparse feature space, many features are mutually exclusive, i.e., they never take nonzero values
+simultaneously. We can safely bundle exclusive features into a single feature (which we call an
+exclusive feature bundle). By a carefully designed feature scanning algorithm, we can build the
+same feature histograms from the feature bundles as those from individual features. In this way, the
+complexity of histogram building changes from O(#data × #feature) to O(#data × #bundle),
+while #bundle << #feature. Then we can signiﬁcantly speed up the training of GBDT without
+hurting the accuracy. In the following, we will show how to achieve this in detail.
+There are two issues to be addressed. The ﬁrst one is to determine which features should be bundled
+together. The second is how to construct the bundle.
+Theorem 4.1 The problem of partitioning features into a smallest number of exclusive bundles is
+Proof: We will reduce the graph coloring problem to our problem. Since graph coloring problem
+is NP-hard, we can then deduce our conclusion.
+Given any instance G = (V, E) of the graph coloring problem. We construct an instance of our
+problem as follows. Take each row of the incidence matrix of G as a feature, and get an instance of
+our problem with |V | features. It is easy to see that an exclusive bundle of features in our problem
+corresponds to a set of vertices with the same color, and vice versa. □
+For the ﬁrst issue, we prove in Theorem 4.1 that it is NP-Hard to ﬁnd the optimal bundling strategy,
+which indicates that it is impossible to ﬁnd an exact solution within polynomial time. In order to
+ﬁnd a good approximation algorithm, we ﬁrst reduce the optimal bundling problem to the graph
+coloring problem by taking features as vertices and adding edges for every two features if they are
+not mutually exclusive, then we use a greedy algorithm which can produce reasonably good results
+(with a constant approximation ratio) for graph coloring to produce the bundles. Furthermore, we
+notice that there are usually quite a few features, although not 100% mutually exclusive, also rarely
+take nonzero values simultaneously. If our algorithm can allow a small fraction of conﬂicts, we can
+get an even smaller number of feature bundles and further improve the computational efﬁciency.
+By simple calculation, random polluting a small fraction of feature values will affect the training
+accuracy by at most O([(1 −γ)n]−2/3)(See Proposition 2.1 in the supplementary materials), where
+γ is the maximal conﬂict rate in each bundle. So, if we choose a relatively small γ, we will be able to
+achieve a good balance between accuracy and efﬁciency.
+Based on the above discussions, we design an algorithm for exclusive feature bundling as shown
+in Alg. 3. First, we construct a graph with weighted edges, whose weights correspond to the total
+conﬂicts between features. Second, we sort the features by their degrees in the graph in the descending
+order. Finally, we check each feature in the ordered list, and either assign it to an existing bundle
+with a small conﬂict (controlled by γ), or create a new bundle. The time complexity of Alg. 3 is
+O(#feature2) and it is processed only once before training. This complexity is acceptable when the
+number of features is not very large, but may still suffer if there are millions of features. To further
+improve the efﬁciency, we propose a more efﬁcient ordering strategy without building the graph:
+ordering by the count of nonzero values, which is similar to ordering by degrees since more nonzero
+values usually leads to higher probability of conﬂicts. Since we only alter the ordering strategies in
+Alg. 3, the details of the new algorithm are omitted to avoid duplication.
+For the second issues, we need a good way of merging the features in the same bundle in order to
+reduce the corresponding training complexity. The key is to ensure that the values of the original
+features can be identiﬁed from the feature bundles. Since the histogram-based algorithm stores
+discrete bins instead of continuous values of the features, we can construct a feature bundle by letting
+exclusive features reside in different bins. This can be done by adding offsets to the original values of
+the features. For example, suppose we have two features in a feature bundle. Originally, feature A
+takes value from [0, 10) and feature B takes value [0, 20). We then add an offset of 10 to the values of
+feature B so that the reﬁned feature takes values from [10, 30). After that, it is safe to merge features
+A and B, and use a feature bundle with range to replace the original features A and B. The
+detailed algorithm is shown in Alg. 4.
+EFB algorithm can bundle many exclusive features to the much fewer dense features, which can
+effectively avoid unnecessary computation for zero feature values. Actually, we can also optimize
+the basic histogram-based algorithm towards ignoring the zero feature values by using a table for
+each feature to record the data with nonzero values. By scanning the data in this table, the cost of
+histogram building for a feature will change from O(#data) to O(#non_zero_data). However,
+this method needs additional memory and computation cost to maintain these per-feature tables in the
+whole tree growth process. We implement this optimization in LightGBM as a basic function. Note,
+this optimization does not conﬂict with EFB since we can still use it when the bundles are sparse.
+Experiments
+In this section, we report the experimental results regarding our proposed LightGBM algorithm. We
+use ﬁve different datasets which are all publicly available. The details of these datasets are listed
+in Table 1. Among them, the Microsoft Learning to Rank (LETOR) dataset contains 30K web
+search queries. The features used in this dataset are mostly dense numerical features. The Allstate
+Insurance Claim and the Flight Delay datasets both contain a lot of one-hot coding features.
+And the last two datasets are from KDD CUP 2010 and KDD CUP 2012. We directly use the features
+used by the winning solution from NTU , which contains both dense and sparse features,
+and these two datasets are very large. These datasets are large, include both sparse and dense features,
+and cover many real-world tasks. Thus, we can use them to test our algorithm thoroughly.
+Our experimental environment is a Linux server with two E5-2670 v3 CPUs (in total 24 cores) and
+256GB memories. All experiments run with multi-threading and the number of threads is ﬁxed to 16.
+Overall Comparison
+We present the overall comparisons in this subsection. XGBoost and LightGBM without GOSS
+and EFB (called lgb_baselline) are used as baselines. For XGBoost, we used two versions, xgb_exa
+(pre-sorted algorithm) and xgb_his (histogram-based algorithm). For xgb_his, lgb_baseline, and
+LightGBM, we used the leaf-wise tree growth strategy . For xgb_exa, since it only supports
+layer-wise growth strategy, we tuned the parameters for xgb_exa to let it grow similar trees like other
+Table 1: Datasets used in the experiments.
+Description
+Binary classiﬁcation
+Flight Delay
+Binary classiﬁcation
+Binary classiﬁcation
+Binary classiﬁcation
+Table 2: Overall training time cost comparison. LightGBM is lgb_baseline with GOSS and EFB.
+EFB_only is lgb_baseline with EFB. The values in the table are the average time cost (seconds) for
+training one iteration.
+lgb_baseline
+Flight Delay
+Table 3: Overall accuracy comparison on test datasets.
+Use AUC for classiﬁcation task and
+NDCG@10 for ranking task. SGB is lgb_baseline with Stochastic Gradient Boosting, and its
+sampling ratio is the same as LightGBM.
+lgb_baseline
+0.6064 ± 7e-4
+0.6093 ± 9e-5
+Flight Delay
+0.7780 ± 8e-4
+0.7846 ± 4e-5
+0.5239 ± 6e-4
+0.5275 ± 5e-4
+0.7759 ± 3e-4
+0.78732 ± 1e-4
+0.6989 ± 8e-4
+0.7051 ± 5e-5
+methods. And we also tuned the parameters for all datasets towards a better balancing between speed
+and accuracy. We set a = 0.05, b = 0.05 for Allstate, KDD10 and KDD12, and set a = 0.1, b = 0.1
+for Flight Delay and LETOR. We set γ = 0 in EFB. All algorithms are run for ﬁxed iterations, and
+we get the accuracy results from the iteration with the best score.6
+lgb_baseline
+Figure 1: Time-AUC curve on Flight Delay.
+lgb_baseline
+Figure 2: Time-NDCG curve on LETOR.
+The training time and test accuracy are summarized in Table 2 and Table 3 respectively. From these
+results, we can see that LightGBM is the fastest while maintaining almost the same accuracy as
+baselines. The xgb_exa is based on the pre-sorted algorithm, which is quite slow comparing with
+histogram-base algorithms. By comparing with lgb_baseline, LightGBM speed up 21x, 6x, 1.6x,
+14x and 13x respectively on the Allstate, Flight Delay, LETOR, KDD10 and KDD12 datasets. Since
+xgb_his is quite memory consuming, it cannot run successfully on KDD10 and KDD12 datasets
+due to out-of-memory. On the remaining datasets, LightGBM are all faster, up to 9x speed-up is
+achieved on the Allstate dataset. The speed-up is calculated based on training time per iteration since
+all algorithms converge after similar number of iterations. To demonstrate the overall training process,
+we also show the training curves based on wall clock time on Flight Delay and LETOR in the Fig. 1
+6Due to space restrictions, we leave the details of parameter settings to the supplementary material.
+Table 4: Accuracy comparison on LETOR dataset for GOSS and SGB under different sampling ratios.
+We ensure all experiments reach the convergence points by using large iterations with early stopping.
+The standard deviations on different settings are small. The settings of a and b for GOSS can be
+found in the supplementary materials.
+Sampling ratio
+and Fig. 2, respectively. To save space, we put the remaining training curves of the other datasets in
+the supplementary material.
+On all datasets, LightGBM can achieve almost the same test accuracy as the baselines. This indicates
+that both GOSS and EFB will not hurt accuracy while bringing signiﬁcant speed-up. It is consistent
+with our theoretical analysis in Sec. 3.2 and Sec. 4.
+LightGBM achieves quite different speed-up ratios on these datasets. The overall speed-up comes
+from the combination of GOSS and EFB, we will break down the contribution and discuss the
+effectiveness of GOSS and EFB separately in the next sections.
+Analysis on GOSS
+First, we study the speed-up ability of GOSS. From the comparison of LightGBM and EFB_only
+(LightGBM without GOSS) in Table 2, we can see that GOSS can bring nearly 2x speed-up by its
+own with using 10% - 20% data. GOSS can learn trees by only using the sampled data. However, it
+retains some computations on the full dataset, such as conducting the predictions and computing the
+gradients. Thus, we can ﬁnd that the overall speed-up is not linearly correlated with the percentage of
+sampled data. However, the speed-up brought by GOSS is still very signiﬁcant and the technique is
+universally applicable to different datasets.
+Second, we evaluate the accuracy of GOSS by comparing with Stochastic Gradient Boosting (SGB)
+ . Without loss of generality, we use the LETOR dataset for the test. We tune the sampling ratio
+by choosing different a and b in GOSS, and use the same overall sampling ratio for SGB. We run
+these settings until convergence by using early stopping. The results are shown in Table 4. We can
+see the accuracy of GOSS is always better than SGB when using the same sampling ratio. These
+results are consistent with our discussions in Sec. 3.2. All the experiments demonstrate that GOSS is
+a more effective sampling method than stochastic sampling.
+Analysis on EFB
+We check the contribution of EFB to the speed-up by comparing lgb_baseline with EFB_only. The
+results are shown in Table 2. Here we do not allow the conﬂiction in the bundle ﬁnding process (i.e.,
+γ = 0).7 We ﬁnd that EFB can help achieve signiﬁcant speed-up on those large-scale datasets.
+Please note lgb_baseline has been optimized for the sparse features, and EFB can still speed up
+the training by a large factor. It is because EFB merges many sparse features (both the one-hot
+coding features and implicitly exclusive features) into much fewer features. The basic sparse feature
+optimization is included in the bundling process. However, the EFB does not have the additional cost
+on maintaining nonzero data table for each feature in the tree learning process. What is more, since
+many previously isolated features are bundled together, it can increase spatial locality and improve
+cache hit rate signiﬁcantly. Therefore, the overall improvement on efﬁciency is dramatic. With
+above analysis, EFB is a very effective algorithm to leverage sparse property in the histogram-based
+algorithm, and it can bring a signiﬁcant speed-up for GBDT training process.
+Conclusion
+In this paper, we have proposed a novel GBDT algorithm called LightGBM, which contains two
+novel techniques: Gradient-based One-Side Sampling and Exclusive Feature Bundling to deal with
+large number of data instances and large number of features respectively. We have performed both
+theoretical analysis and experimental studies on these two techniques. The experimental results are
+consistent with the theory and show that with the help of GOSS and EFB, LightGBM can signiﬁcantly
+outperform XGBoost and SGB in terms of computational speed and memory consumption. For the
+future work, we will study the optimal selection of a and b in Gradient-based One-Side Sampling
+and continue improving the performance of Exclusive Feature Bundling to deal with large number of
+features no matter they are sparse or not.
+7We put our detailed study on γ tuning in the supplementary materials.

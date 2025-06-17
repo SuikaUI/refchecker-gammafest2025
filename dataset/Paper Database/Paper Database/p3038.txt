@@ -1,0 +1,491 @@
+STREAMING END-TO-END SPEECH RECOGNITION FOR MOBILE DEVICES
+Yanzhang He*, Tara N. Sainath∗, Rohit Prabhavalkar, Ian McGraw, Raziel Alvarez, Ding Zhao,
+David Rybach, Anjuli Kannan, Yonghui Wu, Ruoming Pang, Qiao Liang, Deepti Bhatia, Yuan Shangguan,
+Bo Li, Golan Pundak, Khe Chai Sim, Tom Bagby, Shuo-yiin Chang, Kanishka Rao, Alexander Gruenstein
+Google, Inc., USA
+{yanzhanghe, tsainath}@google.com
+End-to-end (E2E) models, which directly predict output character sequences given input speech, are good candidates for on-device speech
+recognition. E2E models, however, present numerous challenges: In
+order to be truly useful, such models must decode speech utterances
+in a streaming fashion, in real time; they must be robust to the long
+tail of use cases; they must be able to leverage user-speciﬁc context
+(e.g., contact lists); and above all, they must be extremely accurate.
+In this work, we describe our efforts at building an E2E speech recognizer using a recurrent neural network transducer. In experimental
+evaluations, we ﬁnd that the proposed approach can outperform a
+conventional CTC-based model in terms of both latency and accuracy
+in a number of evaluation categories.
+1. INTRODUCTION
+The last decade has seen tremendous advances in automatic speech
+recognition (ASR) technologies fueled by research in deep neural
+networks . Coupled with the tremendous growth and adoption
+of smartphones, tablets and other consumer devices, these improvements have resulted in speech becoming one of the primary modes
+of interaction with such devices . The dominant paradigm for
+recognizing speech on mobile devices is to stream audio from the
+device to the server, while streaming decoded results back to the user.
+Replacing such a server-based system with one that can run entirely
+on-device has important implications from a reliability, latency, and
+privacy perspective, and has become an active area of research. Prominent examples include wakeword detection (i.e., recognizing speciﬁc
+words or phrases) , as well as large vocabulary continuous
+speech recognition (LVCSR) .
+Previous attempts at building on-device LVCSR systems have
+typically consisted of shrinking traditional components of the overall
+system (acoustic (AM), pronunciation (PM), and language (LM)
+models) to satisfy computational and memory constraints. While
+this has enabled parity in accuracy for narrow domains such as voice
+commands and dictation , performance is signiﬁcantly worse than
+a large server-based system on challenging tasks such as voice search.
+In contrast to previous approaches, we instead focus on building a streaming system based on the recent advances in end-to-end
+(E2E) models . Such models replace the traditional
+components of an ASR system with a single, end-to-end trained, allneural model which directly predicts character sequences, thus greatly
+simplifying training and inference. E2E models are thus extremely
+attractive for on-device applications.
+∗Equal contribution
+Early E2E work examined connectionist temporal classiﬁcation (CTC) with grapheme or word targets .
+More recent work has demonstrated that performance can be improved further using either the recurrent neural network transducer
+(RNN-T) model or attention-based encoder-decoder models . When trained on sufﬁciently large amounts of
+acoustic training data (10, 000+ hours), E2E models can outperform
+conventional hybrid RNN-HMM systems . Most E2E research has focused on systems which process the full input utterance
+before producing a hypothesis; models such as RNN-T or
+streaming attention-based models (e.g., MoChA ) are suitable if
+streaming recognition is desired. Therefore, in this work, we build a
+streaming E2E recognizer based on the RNN-T model.
+Running an end-to-end model on device in a production environment presents a number of challenges: ﬁrst, the model needs to
+be at least as accurate as a conventional system, without increasing latency (i.e., the delay between the user speaking and the text
+appearing on the screen), thus running at or faster than real-time
+on mobile devices; second, the model should be able to leverage
+on-device user context (e.g., lists of contacts, song names, etc.) to
+improve recognition accuracy ; ﬁnally, the system must be able
+to correctly recognize the ‘long tail’ of possible utterances, which is
+a challenge for an E2E system trained to produce text directly in the
+written domain (e.g., call two double four triple six
+five →call 244-6665).
+In order to achieve these goals, we explore a number of improvements to the basic RNN-T model: using layer normalization 
+to stabilize training; using large batch size ; using word-piece
+targets ; using a time-reduction layer to speed up training and
+inference; and quantizing network parameters to reduce memory
+footprint and speed up computation . In order to enable contextualized recognition, we use a shallow-fusion approach 
+to bias towards user-speciﬁc context, which we ﬁnd is on-par with
+conventional models . Finally, we characterize a fundamental
+limitation of vanilla E2E models: their inability to accurately model
+the normalization of spoken numeric sequences in the correct written
+form when exposed to unseen examples. We address this issue by
+training the model on synthetic data generated using a text-to-speech
+(TTS) system , which improves performance on numeric sets by
+18–36% relative. When taken together, these innovations allow us
+to decode speech twice as fast as real time on a Google Pixel phone,
+which improves word error rate (WER) by more than 20% relative to
+a conventional CTC embedded model on voice search and dictation
+ 
+Fig. 1: A schematic representation of CTC and RNNT.
+2. RECURRENT NEURAL NETWORK TRANSDUCER
+Before describing the RNN-T model in detail, we begin by introducing our notation. We denote the parameterized input acoustic frames
+as x = (x1 . . . xT ), where xt ∈Rd are 80-dimensional log-mel
+ﬁlterbank energies in this work (d = 80) and T denotes the number
+of frames in x. We denote the ground-truth label sequence of length
+U as y = (y1, . . . , yU), where yu ∈Z and where Z corresponds to
+context-independent (CI) phonemes, graphemes or word-pieces ,
+in this work. We sometimes also use a special symbol, y0 = ⟨sos⟩,
+which indicates the start of the sentence.
+We describe the RNN-T model by contrasting it to a
+CTC model. CTC computes the distribution of interest, P(y|x),
+by augmenting Z with an additional blank symbol, ⟨b⟩, and deﬁning:
+ˆy∈ACTC(x,y)
+P(ˆyt|x1, · · · , xt)
+where ˆy = (ˆy1, . . . , ˆyT ) ∈ACTC(x, y) ⊂{Z ∪⟨b⟩}T correspond
+to frame-level alignments of length T such that removing blanks and
+repeated symbols from ˆy yields y. CTC makes a strong independence
+assumption that labels are conditionally independent of one another
+given acoustics. RNN-T removes this independence assumption by
+instead conditioning on the full history of previous non-blank labels:
+ˆy∈ARNNT(x,y)
+P(ˆyi|x1, · · · , xti, y0, . . . , yui−1)
+where ˆy = (ˆy1, . . . , ˆyT +U) ∈ARNNT(x, y) ⊂{Z ∪⟨b⟩}T +U are
+alignment sequences with T blanks and U labels such that removing
+the blanks in ˆy yields y. Practically speaking this means that the
+probability of observing the ith label, ˆyi, in an alignment, ˆy, is
+conditioned on the history of non-blank labels, y1 . . . yui−1, emitted
+thus far. Crucially, for both CTC and RNN-T we introduce one ﬁnal
+conditional independence assumption: an alignment label ˆy cannot
+depend on future acoustic frames. This enables us to build streaming
+systems that do not need to wait for the entire utterance to begin
+processing.
+The conditional distributions for both models are parameterized
+by neural networks, as illustrated in Figure 1. Given the input features
+we stack unidirectional long short-term memory (LSTM) layers
+to construct an encoder. For CTC the encoder is augmented with a
+ﬁnal softmax layer that converts the encoder output into the relevent
+conditional probability distribution. The RNN-T, instead, employs
+a feed-forward joint network that accepts as input the results from
+both the encoder and a prediction network that depends only on
+label histories. The gradients required to train both models can be
+computed using the forward-backward algorithm .
+3. REAL-TIME SPEECH RECOGNITION USING RNN-T
+This section describes various architectural and optimization improvements that increase the RNN-T model accuracy and also allow us to
+run the model on device faster than real time.
+3.1. Model Architecture
+We make a number of architectural design choices for the encoder and
+prediction network in RNN-T in order to enable efﬁcient processing
+on mobile devices. We employ an encoder network which consists of
+eight layers of uni-directional LSTM cells . We add a projection
+layer after each LSTM layer in the encoder, thus reducing the
+number of recurrent and output connections.
+Motivated by , we also add a time-reduction layer in
+the encoder to speed up training and inference.
+Speciﬁcally, if
+we denote the inputs to the time-reduction layer as h1, h2, · · · , hT ,
+then we concatenate together N adjacent input frames to produce
+N ⌉output frames, where the i + 1-th output frame is given by
+[hiN; hiN+1; · · · ; h(i+1)N−1], thus effectively reducing the overall
+frame rate by a factor of N. The computational savings obtained
+using a time-reduction layer increase if it is inserted lower in the
+encoder LSTM stack. Applying the time-reduction layer to either
+model, which already has an input frame rate of 30ms, has different
+behaiviors. Speciﬁcally, we ﬁnd that it can be inserted as low as
+after the second LSTM layer without any loss in accuracy for RNN-T,
+whereas adding it to the CTC phoneme models (with effective output
+frame rate ≥60ms) degrades accuracy.
+3.2. Training Optimizations
+In order to stabilize hidden state dynamics of the recurrent layers, we
+ﬁnd it useful to apply layer normalization to each LSTM layer in
+the encoder and the prediction network. Similar to , we train with
+word-piece subword units , which outperform graphemes in our
+experiments. We utilize an efﬁcient forward-backward algorithm ,
+which allows us to train RNN-T models on tensor processing units
+(TPUs) . This allows us to train faster with much larger batch
+sizes than would be possible using GPUs, which improves accuracy.
+3.3. Efﬁcient Inference
+Finally, we consider a number of runtime optimizations to enable
+efﬁcient on-device inference. First, since the prediction network in
+RNN-T is analogous to an RNN language model, its computation
+is independent of the acoustics. We, therefore, apply the same state
+caching techniques used in RNN language models in order to avoid
+redundant computation for identical prediction histories. In our experiments, this results in saving 50–60% of the prediction network
+computations. In addition, we use different threads for the encoder
+and the prediction network to enable pipelining through asynchrony
+in order to save time. We further split the encoder execution over
+two threads corresponding to the components before and after the
+time-reduction layer, which balances the computation between the
+two encoder components and the prediction network. This results in
+a speed-up of 28% with respect to single-threaded execution.
+3.4. Parameter Quantization
+In order to reduce memory consumption, both on disk and at runtime,
+and to optimize the model’s execution to meet real-time requirements,
+we quantize parameters from 32-bit ﬂoating-point precision into 8-bit
+ﬁxed-point, as in our previous work . In contrast to , we now
+use a simpler quantization approach that is linear (as before) but no
+longer has an explicit “zero point” offset, thus assuming that values
+are distributed around ﬂoating point zero. More speciﬁcally we deﬁne
+the quantized vector, xq, to be the product of the original vector, x,
+and a quantization factor, θ, where θ =
+|max(xmin,xmax)|. The lack
+of zero point offset avoids having to apply it prior to performing
+operations, such as multiplication, in lower precision thus speedingup execution. Note that we force the quantization to be in the range
+±(27 −1). Thus, for the typical multiply-accumulate operation, the
+sum of the products of 2 multiplies is always strictly smaller than
+15-bits, which allows us to carry more than one operation into a 32-bit
+accumulator, further speeding up inference. We leverage TensorFlow
+Lite optimization tools and runtime to execute the model on both
+ARM and x86 mobile architectures . On ARM architectures, this
+achieves a 3× speedup compared to ﬂoating point execution.
+4. CONTEXTUAL BIASING
+Contextual biasing is the problem of injecting prior knowledge into
+an ASR system during inference, for example a user’s favorite songs,
+contacts, apps or location . Conventional ASR systems perform
+contextual biasing by building an n-gram ﬁnite state transducer (FST)
+from a list of biasing phrases, which is composed on-the-ﬂy with the
+decoder graph during decoding . This helps to bias the recognition result towards the n-grams contained in the contextual FST,
+and thus improves accuracy in certain scenarios. In the E2E RNN-T
+model, we use a technique similar to , to compute biasing scores
+PC(y), which are interpolated with the base model P(y|x) using
+shallow-fusion during beam search:
+y∗= arg max
+log P(y|x) + λ log PC(y)
+where, λ is a tunable hyperparameter controlling how much the
+contextual LM inﬂuences the overall model score during beam search.
+To construct the contextual LM, we assume that a set of wordlevel biasing phrases are known ahead of time, and compile them
+into a weighted ﬁnite state transducer (WFST) . This word-level
+WFST, G, is then left-composed with a “speller” FST, S, which transduces a sequence of graphemes or word-pieces into the corresponding
+word, to obtain the contextual LM: C = min(det(S ◦G)). In order
+to avoid artiﬁcially boosting preﬁxes which match early on but do
+not match the entire phrase, we add a special failure arc which removes the boosted score, as illustrated in Figure 2. Finally, in order
+to improve RNN-T performance on proper nouns, which is critical
+for biasing, we train with an additional 500M unsupervised voice
+search utterances (each training batch is ﬁlled with supervised data
+80% of the time and unsupervised data 20% of the time). The unsupervised data is transcribed by our production-level recognizer 
+and ﬁltered to contain high-conﬁdence utterances with proper nouns
+only. Note that training with this data does not change results on our
+voice-search and dictation test sets, but only improves performance
+on the contextual biasing results described in Table 2.
+<space>:<space>/-0.25
+Fig. 2: Contextual FST for the word “cat”, represented at the subword
+unit level with backoff arcs.
+5. TEXT NORMALIZATION
+Conventional models are trained in the spoken domain ,
+which allows them to convert unseen numeric sequences into
+the written domain during decoding (e.g., navigate to two
+twenty one b baker street →navigate to 221b
+baker street), which alleviates the data sparsity issue. This
+is done by training a class-based language model where classes
+such as ADDRESSNUM replace actual instances in the training
+data, and training grammar WFSTs that map these classes to all
+possible instances through hand-crafted rules. During decoding,
+the recognizer ﬁrst outputs hypotheses in the spoken domain with
+the numeric part enclosed in the class tags (<addressnum> two
+twenty one b </addressnum>), which is then converted to
+written domain with a hand-crafted set of FST normalization rules.
+For our purposes, it would be possible to train the E2E model
+to output hypotheses in the spoken domain, and then to use either
+a neural network or an FST-based system to convert the
+hypotheses into the written domain. To keep overall system size as
+small as possible, we instead train the E2E model to directly output
+hypotheses in the written domain (i.e., normalized into the output
+form). Since we do not observe a sufﬁciently large number of audiotext pairs containing numeric sequences in training, we generate a set
+of 5 million utterances containing numeric entities. We synthesize
+this data using a concatenative TTS approach with one voice to
+create audio-text pairs, which we augment to our training data (each
+batch is ﬁlled with supervised data 90% of the time and synthetic
+data 10% of the time).
+6. EXPERIMENTAL DETAILS
+6.1. Data Sets
+The training set used for experiments consists of 35 million English
+utterances (∼27, 500 hours). The training utterances are anonymized
+and hand-transcribed, and are representative of Google’s voice search
+and dictation trafﬁc. This data set is created by artiﬁcially corrupting
+clean utterances using a room simulator, adding varying degrees of
+noise and reverberation such that the overall SNR is between 0dB
+and 30dB, with an average SNR of 12dB . The noise sources are
+from YouTube and daily life noisy environmental recordings. The
+main test sets we report results on include 14.8K voice search (VS)
+utterances extracted from Google trafﬁc, as well as 15.7K dictation
+utterances, which we refer to as the IME test set.
+To evaluate the performance of contextual biasing, we report
+performance on 4 voice command test sets, namely Songs (requests
+to play media), Contacts-Real, Contacts-TTS (requests to call/text
+contacts), and Apps (requests to interact with an app). All sets except
+Contacts-Real are created by mining song, contact or app names from
+the web, and synthesizing TTS utterances in each of these categories.
+The Contacts-Real set contains anonymized and hand-transcribed
+utterances extracted from Google trafﬁc. Only utterances with an
+intent to communicate with a contact are included in the test set.
+Noise is then artiﬁcially added to the TTS data, similar to the process
+described above .
+To evaluate the performance of numerics, we report results on
+a real data numerics set (Num-Real), which contains anonymized
+and hand-transcribed utterances extracted from Google trafﬁc. In
+addition, we include performance on a synthesized numerics set
+(Num-TTS), which uses Parallel Wavenet with 1 voice. No
+utterance / transcript from the numerics test set appears in the TTS
+training set from Section 5.
+6.2. Model Architecture Details
+All experiments use 80-dimensional log-Mel features, computed with
+a 25ms window and shifted every 10ms. Similar to , at the
+current frame, t, these features are stacked with 3 frames to the left
+and downsampled to a 30ms frame rate. The encoder network consists
+of 8 LSTM layers, where each layer has 2,048 hidden units followed
+by a 640-dimensional projection layer. For all models in this work,
+we insert a time-reduction layer with the reduction factor N = 2 after
+the second layer of encoder to achieve 1.7× improvement in overall
+system speed without any accuracy loss. The prediction network
+is 2 LSTM layers with 2,048 hidden units and a 640-dimensional
+projection per layer. The encoder and prediction network are fed to a
+joint-network that has 640 hidden units. The joint network is fed to
+a softmax layer, with either 76 units (for graphemes) or 4,096 units
+(for word-pieces ). The total size of the RNN-T model is 117M
+parameters for graphemes and 120M parameters for word-pieces. For
+the WPM, after quantization, the total size is 120MB. All RNN-T
+models are trained in Tensorﬂow on 8 × 8 Tensor Processing
+Units (TPU) slices with a global batch size of 4,096.
+In this work, we compare the RNN-T model to a strong baseline
+conventional CTC embedded model, which is similar to but much
+larger. The acoustic model consists of a CI-phone CTC model with 6
+LSTM layers, where each layer has 1,200 hidden units followed by a
+400-dimensional projection layer, and a 42-phoneme output softmax
+layer. The lexicon has 500K words in the vocabulary. We use a 5gram ﬁrst-pass language model and a small and efﬁcient second-pass
+rescoring LSTM LM. Overall the size of the model after quantization
+is 130MB, which is of similar size to the RNN-T model.
+7. RESULTS
+7.1. Quality Improvements
+Table 1 outlines various improvements to the quality of RNN-T models. First, E1 shows that layer norm helps to stabilize training,
+resulting in a 6% relative improvement in WER for VS and IME.
+Next, by moving RNN-T training to TPUs and having a larger
+batch size, we can get between a 1–4% relative improvement. Finally,
+changing units from graphemes to word-pieces (E3) shows a
+9% relative improvement. Overall, our algorithmic changes show
+27% and 25% relative improvement on VS and IME respectively
+compared to the baseline conventional CTC embedded model (B0).
+All experiments going forward in the paper will report results using
+layer norm, word-pieces and TPU training (E3).
+RNN-T Grapheme
++Layer Norm
++Larger Batch
++Word-piece
+Table 1: RNN-T model improvements. All models are unquantized.
+7.2. Contextual Biasing
+Table 2 shows results using the shallow-fusion biasing mechanism.
+We report biasing results with just supervised data (E4) and also
+including unsupervised data (E6). We also show biasing performance
+for the CTC conventional model in B1. The table indicates that E2E
+biasing outperforms or is on par with conventional-model biasing
+on all sets, except songs likely because the out-of-vocabulary rate in
+songs is 1.0%, which is higher than contacts (0.2%) or apps (0.5%).
+7.3. Text normalization
+Next, Table 3 indicates the performance of the baseline RNN-T (E3)
+word-piece model on two numeric sets. As can be seen in the table,
+the WER on the Num-TTS set is really high. A closer error analysis
+RNN-T Word-piece
+E3 + Unsupervised
+CTC + Biasing
+Table 2: WER on contextual biasing sets. All models unquantized.
+reveals that these are due to the text normalization errors: e.g., if the
+user speaks call two double three four ..., the RNN-
+T model hypothesizes 2 double 3 4 rather than 2334. To ﬁx
+this, we train the RNN-T model with more numeric examples (E7),
+as described in Section 5, which mitigates this issue substantially, at
+the cost of a small degradation on VS and IME. However, we note that
+this still outperforms the baseline system with a separate FST-based
+normalizer (B0) on all sets.
+RNN-T Word-piece
++ numerics TTS
+Table 3: WER on numeric sets. All models are unquantized.
+7.4. Real Time Factor
+In Table 4, we report WER and RT90, i.e. real time factor (processing
+time divided by audio duration) at 90 percentile, where lower values
+indicate faster processing and lower user-perceived latency. Comparing E2 and E7, we can see that the RNN-T word-piece model
+outperforms the grapheme model in both accuracy and speed.
+Quantization speeds up inference further: asymmetric quantization (E8) improves RT90 by 28% compared to the ﬂoat model (E7)
+with only a 0.1% absolute WER degradation; symmetric quantization
+(E9), which assumes that weights are centered around zero, only
+introduces additional small degradation on VS WER, but leads to a
+substantial reduction in RT90 (64% compared to the ﬂoat model),
+which is twice as fast as real time. Moreover, quantization reduces
+model size by 4×. Our best model (E9) is also faster than the conventional CTC model B2, while still achieving accuracy improvements
+of more than 20%.
+RNN-T Grapheme (Float)
+RNN-T Word-piece (Float)
++ Asymmetric Quantization
++ Symmetric Quantization
+CTC + Symmetric Quantization
+Table 4: Quantization results on WER and RT90.
+8. CONCLUSIONS
+We present the design of a compact E2E speech recognizer based on
+the RNN-T model which runs twice as fast as real-time on a Google
+Pixel phone, and improves WER by more than 20% over a strong
+embedded baseline system on both voice search and dictation tasks.
+This is achieved through a series of modiﬁcations to the RNN-T model
+architecture, quantized inference, and the use of TTS to synthesize
+training data for the E2E model. The proposed system shows that
+an end-to-end trained, all-neural model is very well suited for ondevice applications for its ability to perform streaming, high-accuracy,
+low-latency, contextual speech recognition.
+9. REFERENCES
+ G. Hinton, L. Deng, D. Yu, G. E. Dahl, A. Mohamed, N. Jaitly, A. Senior,
+V. Vanhoucke, P. Nguyen, T. N. Sainath, and B. Kingsbury, “Deep neural
+networks for acoustic modeling in speech recognition: The shared views
+of four research groups,” IEEE Signal Processing Magazine, vol. 29, no.
+6, pp. 82–97, Nov 2012.
+ J. Cohen, “Embedded speech recognition applications in mobile phones:
+Status, trends, and challenges,” in Proc. ICASSP, 2008, pp. 5352–5355.
+ J. Schalkwyk, D. Beeferman, F. Beaufays, B. Byrne, C. Chelba, M. Cohen, M. Kamvar, and B. Strope, “Your Word is my Command”: Google
+Search by Voice: A Case Study, pp. 61–90, Springer US, 2010.
+ T. N. Sainath and C. Parada, “Convolutional neural networks for smallfootprint keyword spotting,” in Proc. Interspeech, 2015.
+ S. O. Arik, M. Kliegl, R. Child, J. Hestness, A. Gibiansky, C. Fougner,
+R. Prenger, and A. Coates, “Convolutional recurrent neural networks
+for small-footprint keyword spotting,” in Proc. Interspeech, 2017.
+ Y. He, R. Prabhavalkar, K. Rao, W. Li, A. Bakhtin, and I. Mc-
+Graw, “Streaming small-footprint keyword spotting using sequence-tosequence models,” in Proc. ASRU, Dec 2017, pp. 474–481.
+ A. Waibel et al., “Speechalator: Two-way speech-to-speech translation
+on a consumer PDA,” in Proc. Eurospeech, 2003.
+ I. McGraw, R. Prabhavalkar, R. Alvarez, M. G. Arenas, K. Rao, D. Rybach, O. Alsharif, H. Sak, A. Gruenstein, F. Beaufays, and C. Parada,
+“Personalized speech recognition on mobile devices,” in Proc. ICASSP,
+2016, pp. 5955–5959.
+ W. Chan, N. Jaitly, Q. V. Le, and O. Vinyals, “Listen, attend and spell,”
+CoRR, vol. abs/1508.01211, 2015.
+ D. Bahdanau, J. Chorowski, D. Serdyuk, P. Brakel, and Y. Bengio, “Endto-End Attention-based Large Vocabulary Speech Recognition,” in Proc.
+ICASSP, 2016.
+ A. Graves, “Sequence transduction with recurrent neural networks,”
+CoRR, vol. abs/1211.3711, 2012.
+ S. Kim, T. Hori, and S. Watanabe, “Joint CTC-attention based end-toend speech recognition using multi-task learning,” in Proc. ICASSP,
+2017, pp. 4835–4839.
+ C. C. Chiu, T. N. Sainath, Y. Wu, R. Prabhavalkar, P. Nguyen, Z. Chen,
+A. Kannan, R. J. Weiss, K. Rao, N. Jaitly, B. Li, and J. Chorowski,
+“State-of-the-art speech recognition with sequence-to-sequence models,”
+in Proc. ICASSP, 2018.
+ A. Graves, S. Fernandez, F. Gomez, and J. Schmidhuber, “Connectionist
+Temporal Classiﬁcation: Labeling Unsegmented Sequenece Data with
+Recurrent Neural Networks,” in Proc. ICML, 2006.
+ A. Graves and N. Jaitly, “Towards end-to-end speech recognition with
+recurrent neural networks,” in Proc. ICML, 2014, pp. 1764–1772.
+ A. Hannun, C. Case, J. Casper, B. Catanzaro, G. Diamos, E. Elsen,
+R. Prenger, S. Satheesh, S. Sengupta, A. Coates, and A. Y. Ng, “Deep
+speech: Scaling up end-to-end speech recognition,” .
+ Y. Miao, M. Gowayyed, and F. Metze, “Eesen: End-to-end speech
+recognition using deep rnn models and wfst-based decoding,” in Proc.
+ASRU, 2015, pp. 167–174.
+ H. Soltau, H. Liao, and H. Sak, “Neural speech recognizer: Acousticto-word lstm model for large vocabulary speech recognition,” in Proc.
+Interspeech, 2017, pp. 3707–3711.
+ A. Graves, A.-R. Mohamed, and G. Hinton, “Speech recognition with
+deep neural networks,” in Proc. ICASSP, 2012.
+ K. Rao, H. Sak, and R. Prabhavalkar, “Exploring architectures, data and
+units for streaming end-to-end speech recognition with rnn-transducer,”
+in Proc. ASRU, 2017, pp. 193–199.
+ C.-C. Chiu and C. Raffel, “Monotonic chunkwise alignments,” in Proc.
+ICLR, 2017.
+ P. Aleksic, M. Ghodsi, A. Michaely, C. Allauzen, K. Hall, B. Roark,
+D. Rybach, and P. Moreno, “Bringing Contextual Information to Google
+Speech Recognition,” in in Proc. Interspeech, 2015.
+ J. L. Ba, R. Kiros, and G. E. Hinton, “Layer Normalization,” CoRR, vol.
+abs/1607.06450, 2016.
+ K. Sim, A. Narayanan, T. Bagby, T.N. Sainath, and M. Bacchiani, “Improving the Efﬁciency of Forward-Backward Algorithm using Batched
+Computation in TensorFlow,” in ASRU, 2017.
+ M. Schuster and K. Nakajima, “Japanese and korean voice search,” in
+Proc. ICASSP, 2012, pp. 5149–5152.
+ R. Alvarez, R. Prabhavalkar, and A. Bakhtin, “On the efﬁcient representation and execution of deep acoustic models,” in Proc. Interspeech,
+ I. Williams, A. Kannan, P. Aleksic, D. Rybach, and T. N. Sainath,
+“Contextual speech recognition in end-to-end neural network systems
+using beam search,” in Proc. Interspeech, 2018.
+ G. Pundak, T. Sainath, R. Prabhavalkar, A. Kannan, and D. Zhao, “Deep
+Context: End-to-End Contextual Speech Recognition,” in Proc. SLT,
+ A. van den Oord, Y. Li, and I. Babuschkin et. al., “Parallel wavenet: Fast
+high-ﬁdelity speech synthesis,” Tech. Rep., Google Deepmind, 2017.
+ S. Hochreiter and J. Schmidhuber, “Long Short-Term Memory,” Neural
+Computation, vol. 9, no. 8, pp. 1735–1780, Nov 1997.
+ H. Sak, A. Senior, and F. Beaufays, “Long Short-Term Memory Recurrent Neural Network Architectures for Large Scale Acoustic Modeling,”
+in Proc. Interspeech, 2014.
+ H. Soltau, H. Liao, and H. Sak, “Reducing the Computational Complexity for Whole Word Models,” in ASRU, 2017.
+ N. P. Jouppi et al., “In-datacenter performance analysis of a tensor
+processing unit,” in Proc. International Symposium on Computer Architecture (ISCA), 2017.
+ R. Alvarez, R. Krishnamoorthi, S. Sivakumar, Y. Li, A. Chiao,
+S. Shekhar,
+S. Sirajuddin,
+and Davis. T.,
+“Introducing
+Optimization
+TensorFlow,”
+ Accessed: 2018-10-22.
+ K.B. Hall, E. Cho, C. Allauzen, F. Beaufays, N. Coccaro, K. Nakajima,
+M. Riley, B. Roark, D. Rybach, and L. Zhang, “Composition-based
+on-the-ﬂy rescoring for salient n-gram biasing,” in Interspeech 2015,
+ A. Kannan, Y. Wu, P. Nguyen, T. N. Sainath, Z. Chen, and R. Prabhavalkar, “An analysis of incorporating an external language model into
+a sequence-to-sequence model,” in Proc. ICASSP, 2018.
+ Mehryar Mohri, Fernando Pereira, and Michael Riley, “Weighted ﬁnitestate transducers in speech recognition,” Computer Speech & Language,
+vol. 16, no. 1, pp. 69–88, 2002.
+ G. Pundak and T. N. Sainath, “Lower Frame Rate Neural Network
+Acoustic Models,” in Proc. Interspeech, 2016.
+ L. Vasserman, V. Schogol, and K.B. Hall, “Sequence-based class tagging
+for robust transcription in asr,” in Proc. Interspeech, 2015.
+ R. Sproat and N. Jaitly, “An RNN Model of Text Normalization,” in
+Proc. Interspeech, 2017.
+ X. Gonzalvo, S. Tazari, C. Chan, M. Becker, A. Gutkin, and H. Silen,
+“Recent Advances in Google Real-time HMM-driven Unit Selection
+Synthesizer,” in Interspeech, 2016.
+ C. Kim, A. Misra, K. Chin, T. Hughes, A. Narayanan, T. N. Sainath, and
+M. Bacchiani, “Generated of large-scale simulated utterances in virtual
+rooms to train deep-neural networks for far-ﬁeld speech recognition in
+google home,” in Proc. Interspeech, 2017.
+ Mike Schuster and Kaisuke Nakajima, “Japanese and Korean voice
+search,” 2012 IEEE International Conference on Acoustics, Speech and
+Signal Processing, 2012.
+ M. Abadi et al.,
+“TensorFlow:
+Large-Scale Machine Learning on Heterogeneous Distributed Systems,”
+Available online:
+ 2015.

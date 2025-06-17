@@ -1,0 +1,593 @@
+Analyzing Uncertainty in Neural Machine Translation
+Myle Ott 1 Michael Auli 1 David Grangier 1 Marc’Aurelio Ranzato 1
+Machine translation is a popular test bed for research in neural sequence-to-sequence models
+but despite much recent research, there is still a
+lack of understanding of these models. Practitioners report performance degradation with large
+beams, the under-estimation of rare words and
+a lack of diversity in the ﬁnal translations. Our
+study relates some of these issues to the inherent
+uncertainty of the task, due to the existence of
+multiple valid translations for a single source sentence, and to the extrinsic uncertainty caused by
+noisy training data. We propose tools and metrics
+to assess how uncertainty in the data is captured
+by the model distribution and how it affects search
+strategies that generate translations. Our results
+show that search works remarkably well but that
+models tend to spread too much probability mass
+over the hypothesis space. Next, we propose tools
+to assess model calibration and show how to easily ﬁx some shortcomings of current models. As
+part of this study, we release multiple human reference translations for two popular benchmarks.
+1. Introduction
+Machine translation (MT) is an interesting task not only
+for its practical applications but also for the formidable
+learning challenges it poses, from how to transduce variable
+length sequences, to searching for likely sequences in an
+intractably large hypothesis space, to dealing with the multimodal nature of the prediction task, since typically there are
+several correct ways to translate a given sentence.
+The research community has made great advances on this
+task, recently focusing the effort on the exploration of several variants of neural models that
+have greatly improved the state of the art performance on
+1Facebook AI Research, USA. Correspondence to: Myle Ott
+< >.
+Proceedings of the 35 th International Conference on Machine
+Learning, Stockholm, Sweden, PMLR 80, 2018. Copyright 2018
+by the author(s).
+public benchmarks. However, several open questions remain . In this work, we analyze
+top-performing trained models in order to answer some of
+these open questions. We target better understanding to help
+prioritize future exploration towards important aspects of
+the problem and therefore speed up progress.
+For instance, according to conventional wisdom neural
+machine translation (NMT) systems under-estimate rare
+words , why is that? Is the model
+poorly calibrated? Is this due to exposure bias , i.e., the mismatch between the distribution of
+words observed at training and test time? Or is this due
+to the combination of uncertainty in the prediction of the
+next word and inference being an arg max selection process, which always picks the most likely/frequent word?
+Similarly, it has been observed 
+that performance degrades with large beams. Is this due
+to poor ﬁtting of the model which assigns large probability
+mass to bad sequences? Or is this due to the heuristic nature
+of this search procedure which fails to work for large beam
+values? In this paper we will provide answers and solutions
+to these and other related questions.
+The underlying theme of all these questions is uncertainty,
+i.e. the one-to-many nature of the learning task. In other
+words, for a given source sentence there are several target
+sequences that have non negligible probability mass. Since
+the model only observes one or very few realizations from
+the data distribution, it is natural to ask the extent to which
+an NMT model trained with token-level cross-entropy is
+able to capture such a rich distribution, and whether the
+model is calibrated. Also, it is equally important to understand the effect that uncertainty has on search and whether
+there are better and more efﬁcient search strategies.
+Unfortunately, NMT models have hundreds of millions of
+parameters, the search space is exponentially large and we
+typically observe only one reference for a given source sentence. Therefore, measuring ﬁtness of a NMT model to
+the data distribution is a challenging scientiﬁc endeavor,
+which we tackle by borrowing and combining tools from
+the machine learning and statistics literature . With these tools, we show
+that search works surprisingly well, yielding highly likely
+sequences even with relatively narrow beams. Even if we
+ 
+Analyzing Uncertainty in Neural Machine Translation
+consider samples from the model that have similar likelihood, beam hypotheses yield higher BLEU on average. Our
+analysis also demonstrates that although NMT is well calibrated at the token and set level, it generally spreads too
+much probability mass over the space of sequences. This
+often results in individual hypotheses being under-estimated,
+and overall, poor quality of samples drawn from the model.
+Interestingly, systematic mistakes in the data collection process also contribute to uncertainty, and a particular such kind
+of noise, the target sentence being replaced by a copy of the
+corresponding source sentence, is responsible for much of
+the degradation observed when using wide beams.
+This analysis – the ﬁrst one of its kind – introduces tools and
+metrics to assess ﬁtting of the model to the data distribution,
+and shows areas of improvement for NMT. It also suggests
+easy ﬁxes for some of the issues reported by practitioners.
+We also release the data we collected for our evaluation,
+which consists of ten human translations for 500 sentences
+taken from the WMT’14 En-Fr and En-De test sets.1
+2. Related Work
+In their seminal work, Zoph et al. frame translation as
+a compression game and measure the amount of information
+added by translators. While this work precisely quantiﬁes
+the amount of uncertainty, it does not investigate its effect
+on modeling and search. In another context, uncertainty
+has been considered for the design of better evaluation metrics , in order
+not to penalize a model for producing a valid translation
+which is different from the provided reference.
+Most work in NMT has focused on improving accuracy
+without much consideration for the intrinsic uncertainty of
+the translation task itself (§3).
+Notable exceptions are latent variable models which explicitly attempt
+to model multiple modes in the data distribution, or decoding strategies which attempt to predict diverse outputs
+while leaving the model unchanged .
+However, none of these works check for improvements in
+the match between the model and the data distribution.
+Recent work on analyzing machine translation has focused
+on topics such as comparing neural translation to phrasebased models . Koehn & Knowles presented
+several challenges for NMT, including the deterioration of
+accuracy for large beam widths and the under-estimation of
+1Additional reference translations are available from:
+ 
+analyzing-uncertainty-nmt.
+rare words, which we address in this paper. Isabelle et al.
+ propose a new evaluation benchmark to test whether
+models can capture important linguistic properties. Finally,
+Niehues et al. focus on search and argue in favor of
+better translation modeling instead of improving search.
+3. Data Uncertainty
+Uncertainty is a core challenge in translation, as there are
+several ways to correctly translate a sentence; but what are
+typical sources of uncertainty found in modern benchmark
+datasets? Are they all due to different ways to paraphrase
+a sentence? In the following sections, we answer these
+questions, distinguishing uncertainty inherent to the task
+itself (§3.1), and uncertainty due to spurious artifacts caused
+by the data collection process (§3.2).
+3.1. Intrinsic Uncertainty
+One source of uncertainty is the existence of several semantically equivalent translations of the same source sentence.
+This has been extensively studied in the literature . Translations can be more
+or less literal, and even if literal there are many ways to
+express the same meaning. Sentences can be in the active
+or passive form and for some languages determiners and
+prepositions such as ‘the’, ‘of’, or ‘their’ can be optional.
+Besides uncertainty due to the existence of distinct, yet semantically equivalent translations, there are also sources of
+uncertainty due to under-speciﬁcation when translating into
+a target language more inﬂected than the source language.
+Without additional context, it is often impossible to predict
+the missing gender, tense, or number, and therefore, there
+are multiple plausible translations of the same source sentence. Simpliﬁcation or addition of cultural context are also
+common sources of uncertainty .
+3.2. Extrinsic Uncertainty
+Statistical machine translation systems, and in particular
+NMT models, require lots of training data to perform well.
+To save time and effort, it is common to augment high
+quality human translated corpora with lower quality web
+crawled data . This process is error
+prone and responsible for introducing additional uncertainty
+in the data distribution. Target sentences may only be partial
+translations of the source, or the target may contain information not present in the source. A lesser-known example are
+target sentences which are entirely in the source language,
+or which are primarily copies of the corresponding source.
+For instance, we found that between 1.1% to 2.0% of training examples in the WMT’14 En-De and WMT’14 En-Fr
+datasets (§4.2) are “copies” of the source sentences, where
+a target sentence is labeled as “copy” if the intersection over
+Analyzing Uncertainty in Neural Machine Translation
+the union of unigrams (excluding punctuation and numbers)
+is at least 50%. Source copying is particularly interesting
+since we show that, even in small quantities, it can signiﬁcantly affect the model output (§5.3). Note that test sets are
+manually curated and never contain copies.
+4. Experimental Setup
+4.1. Sequence to Sequence Model
+Our experiments rely on the pre-trained models of the
+fairseq-py toolkit , which achieve competitive performance on the datasets we consider. Formally,
+let x be an input sentence with m words {x1, . . . , xm},
+and t be the ground truth target sentence with n words
+{t1, . . . , tn}. The model is composed of an encoder and
+a decoder. The encoder takes x through several convolutional layers to produce a sequence of hidden states,
+z = {z1, . . . , zm}, one per input word. At time step k,
+the decoder takes a window of words produced so far (or
+the ground truth words at training time), {tk−1, . . . , tk−i},
+the set of encoder hidden states z and produces a distribution over the current word: p(tk|tk−1, . . . , tk−i, z). More
+precisely, at each time step, an attention module summarizes the sequence z with a single vector
+through a weighted sum of {z1, . . . , zm}. The weights depend on the source sequence x and the decoder hidden state,
+hk, which is the output of several convolutional layers taking
+as input {tk−1, . . . , tk−i}. From the source attention vector,
+the hidden state of the decoder is computed and the model
+emits a distribution over the current word as in: p(tk|hk) =
+softmax(Whk + b). Gehring et al. provides further
+details. To train the translation model, we minimize the
+cross-entropy loss: L = −Pn
+i=1 log p(ti|ti−1, . . . , t1, x),
+using Nesterov’s momentum .2
+At test time, we aim to output the most likely translation
+given the source sentence, according to the model estimate.
+We approximate such an output via beam search. Unless otherwise stated, we use beam width k = 5, where hypotheses
+are selected based on their length-normalized log-likelihood.
+Some experiments consider sampling from the model conditional distribution p(ti|ti−1, hi−1, x), one token at a time,
+until the special end of sentence symbol is sampled.
+4.2. Datasets and Evaluation
+We consider the following datasets:
+WMT’14 English-German (En-De): We use the same
+setup as Luong et al. which comprises 4.5M sentence pairs for training and we test on newstest2014. We
+build a validation set by removing 44k random sentence-
+2We also obtain similar results with models trained with
+sequence-level losses .
+Automatic evaluation
+Human evaluation (pairwise)
+Table 1. Automatic and human evaluation on a 500 sentence subset
+of the WMT’14 En-Fr and En-De test sets. Models generalize well
+in terms of perplexity and BLEU. Our human evaluation compares
+(reference, system) pairs for beam 5.
+pairs from the training data. As vocabulary we use 40k
+sub-word types based on a joint source and target byte pair
+encoding .
+WMT’17 English-German (En-De):
+The above preprocessed version of WMT’14 En-De did not provide a split
+into sub-corpora which we required for some experiments.
+We therefore also experiment on the 2017 data where we
+test on newstest2017. The full version of the dataset (original) comprises 5.9M sentence pairs after length ﬁltering
+to 175 tokens. We then consider the news-commentary
+portion with 270K sentences (clean), and a ﬁltered version comprising 4M examples after removing low scoring
+sentence-pairs according to a model trained on the cleaner
+news-commentary portion.
+WMT’14 English-French (En-Fr): We remove sentences
+longer than 175 words and pairs with a source/target length
+ratio exceeding 1.5 resulting in 35.5M sentence pairs for
+training. The source and target vocabulary is based on 40k
+BPE types. Results are reported on both newstest2014 and
+a validation set held-out from the training data comprising
+26k sentence pairs.
+We evaluate with tokenized BLEU 
+on the corpus-level and the sentence-level, after removing
+BPE splitting. Sentence-level BLEU is computed similarly
+to corpus BLEU, but with smoothed n-gram counts (+1) for
+n > 1 .
+5. Uncertainty and Search
+In this section we start by showing that the models under
+consideration are well trained (§5.1). Next, we quantify the
+amount of uncertainty in the model’s output and compare
+two search strategies: beam search and sampling (§5.2).
+Finally we investigate the inﬂuence of a particular kind of
+extrinsic uncertainty in the data on beam search, and provide
+an explanation for the performance degradation observed
+with wide beams (§5.3).
+Analyzing Uncertainty in Neural Machine Translation
+Number of hypotheses considered
+Cumulative prob.
+Number of hypotheses considered
+Avg. token prob.
+(max by model prob.)
+(max by BLEU)
+Number of hypotheses considered
+Sentence BLEU
+Figure 1. Left: Cumulative sequence probability of hypotheses obtained by beam search and sampling on the WMT’14 En-Fr valid
+set; Center: same, but showing the average per-token probability as we increase the number of considered hypotheses, for each source
+sentence we select the hypothesis with the maximum probability (orange) or sentence-level BLEU (green); Right: same, but showing
+averaged sentence-level BLEU as we increase the number of hypotheses.
+5.1. Preliminary: Models Are Well Trained
+We start our analysis by conﬁrming that the models under
+consideration are well trained. Table 1 shows that the models, and particularly the En-Fr model, achieve low perplexity
+and high BLEU scores.
+To further assess the quality of these models, we conducted
+a human evaluation with three professional translators. Annotators were shown the source sentence, reference translation, and a translation produced by our model through
+beam search—a breadth-ﬁrst search that retains only the
+k most likely candidates at each step. Here, we consider
+a relatively narrow beam of size k = 5. The reference
+and model translations were shown in random order and
+annotators were blind to their identity. We ﬁnd that model
+translations roughly match human translations for the En-Fr
+dataset, while for the En-De dataset humans prefer the reference over the model output 80% of the time. Overall, the
+models are well trained—particularly the En-Fr model—
+and beam search can ﬁnd outputs that are highly rated by
+human translators.
+5.2. Model Output Distribution Is Highly Uncertain
+How much uncertainty is there in the model’s output distribution? What search strategies are most effective (i.e.,
+produce the highest scoring outputs) and efﬁcient (i.e., require generating the fewest candidates)? To answer these
+questions we sample 10k translations and compare them to
+those produced by beam search with k = 5 and k = 200.
+Figure 1 (Left) shows that the model’s output distribution
+is highly uncertain: even after drawing 10k samples we
+cover only 24.9% of the sequence-level probability mass.
+And while beam search is much more efﬁcient at searching
+this space, covering 14.6% of the output probability mass
+with k = 5 and 22.4% of the probability mass with k = 200,
+these ﬁnding suggest that most of the probability mass is
+spread elsewhere in the space (see also §6.2).
+Figure 1 also compares the average sentence-level BLEU
+and model scores of hypotheses produced by sampling and
+beam search. Sampling results for varying sample size
+n = 1, . . . , 10k are on two curves: orange reports probability (Center) and sentence BLEU (Right) for the sentence
+with the highest probability within n samples, while green
+does the same for the sentence with the highest sentence
+BLEU in the same set . We ﬁnd that
+sampling produces hypotheses with similar probabilities
+as beam search (Center), however, for the same likelihood
+beam hypotheses have higher BLEU scores (Right). We
+also note that BLEU and model probability are imperfectly correlated: while we ﬁnd more likely translations
+as we sample more candidates, BLEU over those samples
+eventually decreases (Right, orange curve).3 Vice versa,
+hypotheses selected by BLEU have lower likelihood score
+beyond 80 samples (Center, green curve). We revisit this
+surprising ﬁnding in §5.3.
+Finally, we observe that the model on average assigns much
+lower scores to the reference translation compared to beam
+hypotheses (Figure 1, Center). To better understand this,
+in Figure 2 we compare the token-level model probabilities of the reference translation, to those of outputs from
+beam search and sampling. We observe once again that
+beam search is a very effective search strategy, ﬁnding
+hypotheses with very high average token probabilities and
+rarely leaving high likelihood regions; indeed only 20% of
+beam tokens have probabilities below 0.7. In contrast, the
+probabilities for sampling and the human references are
+much lower. The high conﬁdence of beam is somewhat surprising if we take into account the exposure bias of these models, which have only seen gold
+3Hypothesis length only decreases slightly with more samples,
+i.e., the BLEU brevity penalty moves from 0.975 after drawing
+300 samples to 0.966 after 10k samples.
+Analyzing Uncertainty in Neural Machine Translation
+Percentile
+Token probability
+Figure 2. Probability quantiles for tokens in the reference, beam
+search hypotheses (k = 5), and sampled hypotheses for the
+WMT’14 En-Fr validation set.
+translations at training time. We refer the reader to §6.2 for
+discussion about how well the model actually ﬁts the data
+distribution.
+5.3. Uncertainty Causes Large Beam Degradation
+In the previous section we observed that repeated sampling
+from the model can have a negative impact on BLEU, even
+as we ﬁnd increasingly likely hypotheses. Similarly, we observe lower BLEU scores for beam 200 compared to beam 5,
+consistent with past observations about performance degradation with large beams .
+Why does the BLEU accuracy of translations found by
+larger beams deteriorate rather than improve despite these
+sequences having higher likelihood? To answer this question we return to the issue of extrinsic uncertainty in the
+training data (§3.2) and its impact on the model and search.
+One particularly interesting case of noise is when target
+sentences in the training set are simply a copy of the source.
+In the WMT’14 En-De and En-Fr dataset between 1.1% and
+2.0% of the training sentence pairs are “copies” (§3.2). How
+does the model represent these training examples and does
+beam search ﬁnd them? It turns out that copies are overrepresented in the output of beam search. On WMT’14
+En-Fr, beam search outputs copies at the following rates:
+2.6% (beam=1), 2.9% (beam=5), 3.2% (beam=10) and 3.5%
+(beam=20).
+To better understand this issue, we trained models on the
+news-commentary portion of WMT’17 English-German
+which does not contain copies. We added synthetic copy
+noise by randomly replacing the true target by a copy of the
+source with probability pnoise. Figure 3 shows that larger
+beams are much more affected by copy noise. Even just 1%
+of copy noise can lead to a drop of 3.3 BLEU for a beam
+of k = 20 compared to a model with no added noise. For a
+10% noise level, all but greedy search have their accuracy
+more than halved.
+Next, we examine model probabilities at the token-level.
+BLEU on valid set
+Figure 3. Translation quality of models trained on WMT’17
+English-German news-commentary data with added synthetic copy
+noise in the training data (x-axis) tested with various beam sizes
+on the validation set.
+Position in sentence
+Avg. token prob.
+copying source
+Figure 4. Average probability at each position of the output sequence on the WMT’14 En-Fr validation set, comparing the reference translation, beam search hypothesis (k = 5), and copying the
+source sentence.
+Speciﬁcally, we plot the average per position log-probability
+assigned by the En-Fr model to each token of: (i) the reference translation, (ii) the beam search output with k = 5,
+and (iii) a synthetic output which is a copy of the source
+sentence. Figure 4 shows that the probability of copying the
+ﬁrst source token is very unlikely according to the model
+(and actually matches the ground truth rate of copy noise).
+However, after three tokens the model switches to almost
+deterministic transitions. Because beam search proceeds
+in strict left-to-right manner, the copy mode is only reachable if the beam is wide enough to consider the ﬁrst source
+word which has low probability. However, once in the
+beam, the copy mode quickly takes over. This explains
+why large beam settings in Figure 3 are more susceptible
+to copy noise compared to smaller settings. Thus, while
+larger beam widths are effective in ﬁnding higher likelihood
+outputs, such sequences may correspond to copies of the
+source sentence, which explains the drop in BLEU score
+for larger beams. Deteriorating accuracy of larger beams
+has been previously observed ,
+Analyzing Uncertainty in Neural Machine Translation
+original (no copy)
+filtered (no copy)
+clean (no copy)
+Figure 5. BLEU on newstest2017 as a function of beam width
+for models trained on all of the WMT’17 En-De training data
+(original), a ﬁltered version of the training data (ﬁltered) and a
+small but clean subset of the training data (clean). We also show
+results when excluding copies as a post-processing step (no copy).
+however, it has not until now been linked to the presence of
+copies in the training data or model outputs.
+Note that this ﬁnding does not necessarily imply a failure of
+beam nor a failure of the model to match the data distribution. Larger beams do ﬁnd more likely hypotheses. It could
+very well be that the true data distribution is such that no
+good translation individually get a probability higher than
+the rate of copy. In that case, even a model perfectly matching the data distribution will return a copy of the source. We
+refer the reader to §6.2 for further analysis on this subject.
+The only conclusion thus far is that extrinsic uncertainty
+is (at least partially) responsible for the degradation of
+performance of large beams.
+Finally, we present two simple methods to mitigate this issue. First, we pre-process the training data by removing low
+scoring sentence-pairs according to a model trained on the
+news-commentary portion of the WMT’17 English-German
+data (ﬁltered; §4.2). Second, we apply an inference constraint that prunes completed beam search hypotheses which
+overlap by 50% or more with the source (no copy). Figure 5
+shows that BLEU improves as beam gets wider on the clean
+portion of the dataset. Also, the performance degradation is
+greatly mitigated by both ﬁltering the data and by constraining inference, with the best result obtained by combining
+both techniques, yielding an overall improvement of 0.5
+BLEU over the original model. Appendix A describes how
+we ﬁrst discovered the copy noise issue.
+6. Model Fitting and Uncertainty
+The previous section analyzed the most likely hypotheses
+according to the model distribution. This section takes a
+more holistic view and compares the estimated distribution
+to the true data distribution. Since exact comparison is intractable and we can only have access to few samples from
+Frequency percentile in train
+Observed frequency
+rare words
+common words
+Figure 6. Unigram word frequency over the human references, the
+output of beam search (k = 5) and sampling on a random subset
+of 300K sentences from the WMT’14 En-Fr training set.
+the data distribution, we propose several necessary conditions for the two distributions to match. First, we inspect the
+match for unigram statistics. Second, we move to analyze
+calibration at the set level and design control experiments to
+assess probability estimates of sentences. Finally, we compare in various ways samples from the model with human
+references. We ﬁnd uncontroversial evidence that the model
+spreads too much probability mass in the hypothesis space
+compared to the data distribution, often under-estimating
+the actual probability of individual hypothesis. Appendix B
+outlines another condition.
+6.1. Matching Conditions at the Token Level
+If the model and the data distribution match, then unigram
+statistics of samples drawn from the two distributions should
+also match (not necessarily vice versa). This is a particularly
+interesting condition to check since NMT models are well
+known to under-estimate rare words ; is the actual model poorly estimating word frequencies or is this just an artifact of beam search? Figure 6 shows
+that samples from the model have roughly a similar word
+frequency distribution as references in the training data, except for extremely rare words (see Appendix C for more
+analysis of this issue). On the other hand, beam search overrepresents frequent words and under-represents more rare
+words, which is expected since high probability sequences
+should contain more frequent words.
+Digging deeper, we perform a synthetic experiment where
+we select 10 target word types w ∈W and replace each w in
+the training set with either w1 or w2 at a given replacement
+rate p(w1|w).4 We train a new model on this modiﬁed
+data and verify whether the model can estimate the original
+replacement rate that determines the frequency of w1 and w2.
+Figure 7 compares the replacement rate in the data (prior)
+4Each replaced type has a token count between 3k-7k, corresponding to bin 20 in Fig. 6. |W| = 50k.
+Analyzing Uncertainty in Neural Machine Translation
+prior in data distribution
+Figure 7. Comparison of how often a word type is output by the
+model with beam search or sampling compared to the data distribution; prior is the data distribution. Values below prior underestimate the data distribution and vice versa.
+to the rate measured over the output of either beam search
+or sampling. Sampling closely matches the data distribution
+for all replacement rates but beam greatly overestimates
+the majority class: it either falls below the prior for rates
+of 0.5 or less, or exceeds the prior for rates larger than
+0.5. These observations conﬁrm that the model closely
+matches unigram statistics except for very rare words,
+while beam prefers common alternatives to rarer ones.
+6.2. Matching Conditions at the Sequence Level
+In this section, we further analyze how well the model captures uncertainty in the data distribution via a sequence of
+necessary conditions operating at the sequence level.
+Set-Level Calibration.
+Calibration veriﬁes whether the model probability estimates pm match the true data probabilities pd. If
+pd and pm match, then for any set S, we observe:
+[I{x ∈S}] = pm(S).
+The left hand side gives the expected rate at which samples
+from the data distribution appear in S; the right hand side
+sums the model probability estimates over S.
+In Figure 8, we plot the left hand side against the right hand
+side where S is a set of 200 beam search hypotheses on
+the WMT’14 En-Fr validation set, covering an average of
+22.4% of the model’s probability mass. Points are binned so
+that each point represents 10% of sentences in the validation
+or test set . For instance, the
+rightmost point in the ﬁgure corresponds to sentences for
+which beam collects nearly the entire probability mass, typically very short sentences. This experiment shows that the
+model matches the data distribution remarkably well at
+the set level on both the validation and test set.
+Control Experiment. To assess the ﬁt to the data distribu-
+Rate of reference ∈S
+Perfect match
+Beam 200 (valid)
+Beam 200 (test)
+Figure 8. Matching distributions at the set level using 200 beam
+search hypotheses on the WMT’14 En-Fr valid and test set. Points
+are binned so that each represents 10% of sentences. The lowest
+probability bin (not shown) has value 0 (reference never in S).
+perfect match
+exact copy
+partial (incl. exact) copy
+Figure 9. Rate of copy of the source sentence (exact and partial) as
+a function of the amount of copy noise present in the model’s train
+data (§5.3). Results on WMT’17 En-De validation set.
+tion further, we re-consider the models trained with varying
+levels of copy noise (pnoise, cf. §5.3) and check if we reproduce the correct amount of copying (evaluated at the
+sequence level) when sampling from the model. Figure 9
+shows a large discrepancy: at low pnoise the model underestimates the probability of copying (i.e., too few of the
+produced samples are exact copies of the source), while at
+high noise levels it overestimates it. Moreover, since our
+model is smooth, it can assign non-negligible probability
+mass to partial copies5 which are not present in the training data. When we consider both partial and exact copies,
+the model correctly reproduces the amount of copy noise
+present in the training data. Therefore, although the model
+appears to under-estimate some hypotheses at low copy
+rates, it actually smears probability mass in the hypothesis space. Overall, this is the ﬁrst concrete evidence of the
+model distribution not perfectly ﬁtting the data distribution.
+5Partial copies are identiﬁed via the IoU at 50% criterion (§3.2).
+Analyzing Uncertainty in Neural Machine Translation
+Expected Inter-Sentence BLEU is deﬁned as
+x∼p,x′∼p[BLEU(x, x′)]
+which corresponds to the expected BLEU between two translations sampled from a distribution p where x is the hypothesis and x′ is the reference. If the model matches the data distribution, then the expected BLEU computed with sentences
+sampled from the model distribution pm should match the
+expected BLEU computed using two independent reference
+translations (see §6.3 for more details on data collection).
+We ﬁnd that the expected BLEU is 44.5 and 32.1 for human
+translations on the WMT’14 En-Fr and WMT’14 En-De
+datasets, respectively.6 However, the expected BLEU of the
+model is only 28.6 and 24.2, respectively. This large discrepancy provides further evidence that the model spreads
+too much probability mass across sequences, compared
+to what we observe in the actual data distribution.
+6.3. Comparing Multiple Model Outputs to Multiple
+References
+Next we assess if model outputs are similar to those produced by multiple human translators. We collect 10 additional reference translations from 10 distinct humans translators for each of 500 sentences randomly selected from
+the WMT’14 En-Fr and En-De test sets. We also collect
+a large set of translations from the model via beam search
+(k = 200) or sampling. We then compute two versions
+of oracle BLEU at the sentence-level: (i) oracle reference
+reports BLEU for the most likely hypothesis with respect to
+its best matching reference (according to BLEU); and (ii)
+average oracle computes BLEU for every hypothesis with
+respect to its best matching reference and averages this number over all hypotheses. Oracle reference measures if one of
+the human translations is similar to the top model prediction,
+while average oracle indicates whether most sentences in
+the set have a good match among the human references. The
+average oracle will be low if there are hypotheses that are
+dissimilar from all human references, suggesting a possible
+mismatch between the model and the data distributions.
+Table 2 shows that beam search (besides degradation due
+to copy noise) produces not only top scoring hypotheses
+that are very good (single reference scoring at 41 and oracle
+reference at 70) but most hypotheses in the beam are close
+to a reference translation (as the difference between oracle
+reference and average oracle is only 5 BLEU points). Unfortunately, beam hypotheses lack diversity and are all close to
+a few references as indicated by the coverage number, which
+measures how many distinct human references are matched
+6We also report inter-human pairwise corpus BLEU: 44.8 for
+En-Fr and 34.0 for En-De; and concatenated corpus BLEU over
+all human references: 45.4 for En-Fr and 34.4 for En-De.
+Prob. covered
+Sentence BLEU
+single reference
+oracle reference
+average oracle
+- # refs covered
+Corpus BLEU (multi-bleu.pl)
+single reference
+10 references
+Table 2. Sentence and corpus BLEU for beam search hypotheses
+and 200 samples on a 500 sentence subset of the WMT’14 En-Fr
+test set. “Single reference” uses the provided reference and the
+most likely hypothesis, while oracle reference and average oracle
+are computed with 10 human references.
+to at least one of the hypotheses. In contrast, hypotheses
+generated by sampling exhibit opposite behavior: the quality of the top scoring hypothesis is lower, several hypotheses poorly match references (as indicated by the 25 BLEU
+points gap between oracle reference and average oracle) but
+coverage is much higher. This ﬁnding is again consistent
+with the previous observation that the model distribution
+is too spread in hypothesis space. We conjecture that the
+excessive spread may also be partly responsible for the lack
+of diversity of beam search, as probability mass is spread
+across similar variants of the same sequence even in the
+region of high likelihood. This over-smoothing might be
+due to the function class of NMT; for instance, it is hard
+for a smooth class of functions to ﬁt a delta distribution
+(e.g., a source copy), without spreading probability mass to
+nearby hypotheses (e.g., partial copies), or to assign exact 0
+probability in space, resulting in an overall under-estimation
+of hypotheses present in the data distribution.
+7. Conclusions and Final Remarks
+In this study we investigate the effects of uncertainty in
+NMT model ﬁtting and search. We found that search works
+remarkably well. While the model is generally well calibrated both at the token and sentence level, it tends to diffuse
+probability mass too much. We have not investigated the
+causes of this, although we surmise that it is largely due
+to the class of smooth functions that NMT models can represent. We instead investigated some of the effects of this
+mismatch. In particular, excessive probability spread causes
+poor quality samples from the model. It may also cause the
+“copy mode” to become more prominent once the probability of genuine hypotheses gets lowered. We show that this
+latter issue is linked to a form of extrinsic uncertainty which
+causes deteriorating accuracy with larger beams. Future
+work will investigate even better tools to analyze distributions and leverage this analysis to design better models.
+Analyzing Uncertainty in Neural Machine Translation
+Acknowledgements
+We thank the reviewers, colleagues at FAIR and Mitchell
+Stern for their helpful comments and feedback.

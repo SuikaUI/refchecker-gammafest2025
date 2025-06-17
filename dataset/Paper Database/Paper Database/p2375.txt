@@ -1,0 +1,491 @@
+Data-Driven Sparse Structure Selection for Deep Neural
+Zehao Huang[0000−0003−1653−208X] and Naiyan Wang[0000−0002−0526−3331]
+{zehaohuang18,winsty}@gmail.com
+Abstract. Deep convolutional neural networks have liberated its extraordinary
+power on various tasks. However, it is still very challenging to deploy stateof-the-art models into real-world applications due to their high computational
+complexity. How can we design a compact and effective network without massive experiments and expert knowledge? In this paper, we propose a simple and
+effective framework to learn and prune deep models in an end-to-end manner.
+In our framework, a new type of parameter – scaling factor is ﬁrst introduced
+to scale the outputs of speciﬁc structures, such as neurons, groups or residual
+blocks. Then we add sparsity regularizations on these factors, and solve this optimization problem by a modiﬁed stochastic Accelerated Proximal Gradient (APG)
+method. By forcing some of the factors to zero, we can safely remove the corresponding structures, thus prune the unimportant parts of a CNN. Comparing with
+other structure selection methods that may need thousands of trials or iterative
+ﬁne-tuning, our method is trained fully end-to-end in one training pass without
+bells and whistles. We evaluate our method, Sparse Structure Selection with several state-of-the-art CNNs, and demonstrate very promising results with adaptive
+depth and width selection. Code is available at: 
+sparse-structure-selection.
+Keywords: sparse · model acceleration · deep network structure learning
+Introduction
+Deep learning methods, especially convolutional neural networks (CNNs) have achieved
+remarkable performances in many ﬁelds, such as computer vision, natural language processing and speech recognition. However, these extraordinary performances are at the
+expense of high computational and storage demand. Although the power of modern
+GPUs has skyrocketed in the last years, these high costs are still prohibitive for CNNs
+to deploy in latency critical applications such as self-driving cars and augmented reality,
+Recently, a signiﬁcant amount of works on accelerating CNNs at inference time
+have been proposed. Methods focus on accelerating pre-trained models include direct
+pruning , low-rank decomposition , and quantization .
+Another stream of researches trained small and efﬁcient networks directly, such as
+knowledge distillation , novel architecture designs and sparse learning . In spare learning, prior works pursued the sparsity of weights.
+ 
+Z. Huang, N. Wang
+However, non-structure sparsity only produce random connectivities and can hardly
+utilize current off-the-shelf hardwares such as GPUs to accelerate model inference in
+wall clock time. To address this problem, recently methods proposed to apply
+group sparsity to retain a hardware friendly CNN structure.
+In this paper, we take another view to jointly learn and prune a CNN. First, we introduce a new type of parameter – scaling factors which scale the outputs of some speciﬁc
+structures (e.g., neurons, groups or blocks) in CNNs. These scaling factors endow more
+ﬂexibility to CNN with very few parameters. Then, we add sparsity regularizations on
+these scaling factors to push them to zero during training. Finally, we can safely remove
+the structures correspond to zero scaling factors and get a pruned model. Comparing
+with direct pruning methods, this method is data driven and fully end-to-end. In other
+words, the network can select its unique conﬁguration based on the difﬁculty and needs
+of each task. Moreover, the model selection is accomplished jointly with the normal
+training of CNNs. We do not require extra ﬁne-tuning or multi-stage optimizations, and
+it only introduces minor cost in the training.
+To summarize, our contributions are in the following three folds:
+– We propose a uniﬁed framework for model training and pruning in CNNs. Particularly, we formulate it as a joint sparse regularized optimization problem by introducing scaling factors and corresponding sparse regularizations on certain structures of CNNs.
+– We utilize a modiﬁed stochastic Accelerated Proximal Gradient (APG) method to
+jointly optimize the weights of CNNs and scaling factors with sparsity regularizations. Compared with previous methods that utilize heuristic ways to force sparsity,
+our methods enjoy more stable convergence and better results without ﬁne-tuning
+and multi-stage optimization.
+– We test our proposed method on several state-of-the-art networks, PeleeNet, VGG,
+ResNet and ResNeXt to prune neurons, residual blocks and groups, respectively.
+We can adaptively adjust the depth and width accordingly. We show very promising
+acceleration performances on CIFAR and large scale ILSVRC 2012 image classiﬁcation datasets.
+Related Works
+Network pruning was pioneered in the early development of neural network. In Optimal Brain Damage and Optimal Brain Surgeon , unimportant connections are
+removed based on the Hessian matrix derived from the loss function. Recently, Han et
+al. brought back this idea by pruning the weights whose absolute value are smaller
+than a given threshold. This approach requires iteratively pruning and ﬁne-tuning which
+is very time-consuming. To tackle this problem, Guo et al. proposed dynamic network surgery to prune parameters during training. However, the nature of irregular
+sparse weights make them only yield effective compression but not faster inference
+in terms of wall clock time. To tackle this issue, several works pruned the neurons directly by evaluating neuron importance on speciﬁc criteria. These methods
+all focus on removing the neurons whose removal affect the ﬁnal prediction least. On
+Data-Driven Sparse Structure Selection for Deep Neural Networks
+the other hand, the diversity of neurons to be kept is also an important factor to consider
+ . More recently, and formulate pruning as a optimization problem. They
+ﬁrst select most representative neurons and further minimize the reconstitution error
+to recover the accuracy of pruned networks. While neuron level pruning can achieve
+practical acceleration with moderate accuracy loss, it is still hard to implement them in
+an end-to-end manner without iteratively pruning and retraining. Very recently, Liu et
+al. used similar technique as ours to prune neurons. They sparsify the scaling parameters of batch normalization (BN) to select channels. Ye et al. also adopted
+this idea into neuron pruning. As discussed later, both of their works can be seen as a
+special case in our framework.
+Model structure learning for deep learning models has attracted increasing attention recently. Several methods have been explored to learn CNN architectures without handcrafted design . One stream is to explore the design space by reinforcement learning or genetic algorithms . Another stream is to utilize
+sparse learning or binary optimization. added group sparsity regularizations on
+the weights of neurons and sparsiﬁed them in the training stage. Lately, Wen et al. 
+proposed a more general approach, which applied group sparsity on multiple structures
+of networks, including ﬁlter shapes, channels and layers in skip connections. Srinivas et
+al. proposed a new trainable activation function tri-state ReLU into deep networks.
+They pruned neurons by forcing the parameters of tri-state ReLU into binary.
+CNNs with skip connections have been the main stream for modern network design since it can mitigate the gradient vanishing/exploding issue in ultra deep networks
+by the help of skip connections . Among these work, ResNet and its variants
+ have attracted more attention because of their simple design principle and stateof-the-art performances. Recently, Veit et al. interpreted ResNet as an exponential
+ensemble of many shallow networks. They ﬁnd there is minor impact on the performance when removing single residual block. However, deleting more and more residual blocks will impair the accuracy signiﬁcantly. Therefore, accelerating this state-ofthe-art network architecture is still a challenging problem. In this paper, we propose a
+data-driven method to learn the architecture of such kind of network. Through scaling
+and pruning residual blocks during training, our method can produce a more compact
+ResNet with faster inference speed and even better performance.
+Proposed Method
+Notations Consider the weights of a convolutional layer l in a L layers CNN as a 4dimensional tensor Wl ∈RNl×Ml×Hl×Wl, where Nl is the number of output channels,
+Ml represents the number of input channels, Hl and Wl are the height and width of a
+2-dimensional kernel. Then we can use Wl
+k to denote the weights of k-th neuron in
+layer l. The scaling factors are represented as a 1-dimensional vector λ ∈Rs, where S
+is the number of structures we consider to prune. λi refers to the i-th value of λ. Denote
+soft-threshold operator as Sα(z)i = sign(zi)(|zi| −α)+.
+Z. Huang, N. Wang
+Fig. 1: The network architecture of our method. F represents a residual function. Gray
+block, group and neuron mean they are inactive and can be pruned since their corresponding scaling factors are 0.
+Sparse Structure Selection
+Given a training set consisting of N sample-label pairs {xi, yi}1≤i≤N, then a L layers
+CNN can be represented as a function C(xi, W), where W = {Wl}1≤l≤L represents
+the collection of all weights in the CNN. W is learned through solving an optimization
+problem of the form:
+L(yi, C(xi, W)) + R(W),
+where L(yi, C(xi, W)) is the loss on the sample xi, R(·) is a non-structured regularization applying on every weight, e.g. l2-norm as weight decay.
+Prior sparse based model structure learning work tried to learn the number of
+neurons in a CNN. To achieve this goal, they added group sparsity regularization Rg(·)
+k into Eqn.1, and enforced entire Wl
+k to zero during training. Another concurrent
+work by Wen et al. adopted similar method but on multiple different structures.
+These ideas are straightforward but the implementations are nontrivial. First, the optimization is difﬁcult since there are several constraints on weights simultaneously, including weight decay and group sparsity. Improper optimization technique may result
+in slow convergence and inferior results. Consequently, there is no successful attempt
+to directly apply these methods on large scale applications with complicated modern
+network architectures.
+In this paper, we address structure learning problem in a more simple and effective
+way. Different from directly pushing weights in the same group to zero, we try to enforce the output of the group to zero. To achieve this goal, we introduce a new type of
+parameter – scaling factor λ to scale the outputs of some speciﬁc structures (neurons,
+groups or blocks), and add sparsity constraint on λ during training. Our goal is to obtain
+a sparse λ. Namely, if λi = 0, then we can safely remove the corresponding structure
+since its outputs have no contribution to subsequent computation. Fig. 1 illustrates our
+framework.
+Data-Driven Sparse Structure Selection for Deep Neural Networks
+Formally, the objective function of our proposed method can be formulated as:
+L(yi, C(xi, W, λ)) + R(W) + Rs(λ),
+where Rs(·) is a sparsity regularization for λ with weight γ. In this work, we consider
+its most commonly used convex relaxation l1-norm, which deﬁned as γ∥λ∥1.
+For W, we can update it by Stochastic Gradient Descent (SGD) with momentum or
+its variants. For λ, we adopt Accelerated Proximal Gradient (APG) method to solve
+it. For better illustration, we shorten 1
+i=1 L(yi, C(xi, λ)) as G(λ), and reformulate
+the optimization of λ as:
+G(λ) + Rs(λ).
+Then we can update λ by APG:
+d(t) = λ(t−1) + t −2
+t + 1(λ(t−1) −λ(t−2))
+z(t) = d(t) −η(t)∇G(d(t))
+λ(t) = proxη(t)Rs(z(t)),
+where η(t) is gradient step size at iteration t and proxηRs(·) = Sηγ(·) since Rs(λ) =
+γ∥λ∥1. However, this formulation is not friendly for deep learning since additional to
+the pass for updating W, we need to obtain ∇G(d(t)) by extra forward-backward computation, which is computational expensive for deep neural networks. Thus, following
+the derivation in , we reformulate APG as a momentum based method:
+z(t) = λ(t−1) + µ(t−1)v(t−1)
+−η(t)∇G(λ(t−1) + µ(t−1)v(t−1))
+v(t) = Sη(t)γ(z(t)) −λ(t−1)
+λ(t) = λ(t−1) + v(t),
+where we deﬁne v(t−1) = λ(t−1) −λ(t−2) and µ(t−1) =
+t+1. This formulation is
+similar as the modiﬁed Nesterov Accelerated Gradient (NAG) in except the update
+of vt. Furthermore, we simpliﬁed the update of λ by replacing λ(t−1) as λ′
+λ(t−1) +µ(t−1)v(t−1) following the modiﬁcation of NAG in which has been widely
+used in practical deep learning frameworks . Our new parameters λ′
+t updates become:
+(t−1) −η(t)∇G(λ′
+v(t) = Sη(t)γ(z(t)) −λ′
+(t−1) + µ(t−1)v(t−1)
+(t) = Sη(t)γ(z(t)) + µ(t)v(t)
+In practice, we follow a stochastic approach with mini-batches and set momentum µ
+ﬁxed to a constant value. Both W and λ are updated in each iteration.
+The implementation of APG is very simple and effective after our modiﬁcation. In
+the following, we show it can be implemented by only ten lines of code in MXNet .
+Z. Huang, N. Wang
+MXNet implementation of APG
+import mxnet as mx
+def apg_updater(weight, lr, grad, mom, gamma):
+z = weight - lr * grad
+z = soft_thresholding(z, lr * gamma)
+mom[:] = z - weight + 0.9 * mom
+weight[:] = z + 0.9 * mom
+def soft_thresholding(x, gamma):
+y = mx.nd.maximum(0, mx.nd.abs(x) - gamma)
+return mx.nd.sign(x) * y
+In our framework, we add scaling factors to three different CNN micro-structures, including neurons, groups and blocks to yield ﬂexible structure selection. We will introduce these three cases in the following. Note that for networks with BN, we add scaling
+factors after BN to prevent the inﬂuence of bias parameters.
+Neuron Selection
+We introduce scaling factors for the output of channels to prune neurons. After training,
+removing the ﬁlters with zero scaling factor will result in a more compact network. A recent work proposed by Liu et al. adopted similar idea for network slimming. They
+absorbed the scaling parameters into the parameters of batch normalization, and solve
+the optimization by subgradient descent. During training, scaling parameters whose absolute value are lower than a threshold value are set to 0. Comparing with , our
+method is more general and effective. Firstly, introducing scaling factor is more universal than reusing BN parameters. On one hand, some networks have no batch normalization layers, such as AlexNet and VGG ; On the other hand, when we ﬁne-tune
+pre-trained models on object detection or semantic segmentation tasks, the parameters
+of batch normalization are usually ﬁxed due to small batch size. Secondly, the optimization of is heuristic and need iterative pruning and retraining. In contrast, our
+optimization is more stable in an end-to-end manner. Above all, can be seen as a
+special case of our method. Similarly, is also a special case of our method. The
+difference between Ye et al. and Liu et al. is Ye et al. adopted ISTA to
+optimize scaling factors. We will compare these different optimization methods in our
+experiments.
+Block Selection
+The structure of skip connection CNNs allows us to skip the computation of speciﬁc
+layers without cutting off the information ﬂow in the network. Through stacking residual blocks, ResNet can easily exploit the advantage of very deep networks.
+Formally, residual block with identity mapping can be formulated by the following formula:
+ri+1 = ri + Fi(ri, Wi),
+Data-Driven Sparse Structure Selection for Deep Neural Networks
+where ri and ri+1 are input and output of the i-th block, Fi is a residual function and
+Wi are parameters of the block.
+To prune blocks, we add scaling factor after each residual block. Then in our framework, the formulation of Eqn.13 is as follows:
+ri+1 = ri + λiFi(ri, Wi).
+As shown in Fig 1, after optimization, we can get a sparse λ. The residual block with
+scaling factor 0 will be pruned entirely, and we can learn a much shallower ResNet. A
+prior work that also adds scaling factors for residual in ResNet is Weighted Residual
+Networks . Though sharing a lot of similarities, the motivations behind these two
+works are different. Their work focuses on how to train ultra deep ResNet to get better
+results with the help of scaling factors. Particularly, they increase depth from 100+ to
+1000+. While our method aims to decrease the depth of ResNet, we use the scaling
+factors and sparse regularizations to sparsify the output of residual blocks.
+Group Selection
+Recently, Xie et al. introduced a new dimension – cardinality into ResNets and proposed
+ResNeXt . Formally, they presented aggregated transformations as:
+T i(x, Wi),
+where T i(x) represents a transformation with parameters Wi, C is the cardinality of
+the set of T i(x) to be aggregated. In practice, they use grouped convolution to ease the
+implementation of aggregated transformations. So in our framework, we refer C as the
+number of group, and formulate a weighted A(x) as:
+λiT i(x, Wi)
+After training, several basic cardinalities are chosen by a sparse λ to form the ﬁnal
+transformations. Then, the inactive groups with zero scaling factors can be safely removed as shown in Fig 1. Note that neuron pruning can also seen as a special case of
+group pruning when each group contains only one neuron. Furthermore, we can combine block pruning and group pruning to learn more ﬂexible network structures.
+Experiments
+In this section, we evaluate the effectiveness of our method on three standard datasets,
+including CIFAR-10, CIFAR-100 and ImageNet LSVRC 2012 . For neuron
+pruning, we adopt VGG16 , a classical plain network to validate our method. As
+for blocks and groups, we use two state-of-the-art networks, ResNet and ResNeXt
+ respectively. To prove the practicability of our method, we further experiment in a
+very lightweight network, PeleeNet .
+Z. Huang, N. Wang
+#parameters
+(a) VGG CIFAR10
+(b) VGG CIFAR10
+#parameters
+(c) VGG CIFAR100
+(d) VGG CIFAR100
+Fig. 2: Error vs. number of parameters and FLOPs after SSS training for VGG on
+CIFAR-10 and CIFAR-100 datasets.
+#parameters
+(a) ResNet20 CIFAR10
+(b) ResNet20 CIFAR10
+#parameters
+(c) ResNet20 CIFAR100
+(d) ResNet20 CIFAR100
+#parameters
+ResNet-164
+(e) ResNet164 CIFAR10
+ResNet-164
+(f) ResNet164 CIFAR10
+#parameters
+ResNet-164
+(g) ResNet164 CIFAR100
+ResNet-164
+(h) ResNet164 CIFAR100
+Fig. 3: Error vs. number of parameters and FLOPs after SSS training for ResNet-20 and
+ResNet-164 on CIFAR-10 and CIFAR-100 datasets.
+For optimization, we adopt NAG and our modiﬁed APG to update weights
+W and scaling factors λ, respectively. We set weight decay of W to 0.0001 and ﬁx
+momentum to 0.9 for both W and λ. The weights are initialized as in and all
+scaling factors are initialized to be 1. All the experiments are conducted in MXNet .
+We start with CIFAR dataset to evaluate our method. CIFAR-10 dataset consists of
+50K training and 10K testing RGB images with 10 classes. CIFAR-100 is similar to
+CIFAR-10, except it has 100 classes. As suggested in , the input image is 32 × 32
+randomly cropped from a zero-padded 40 × 40 image or its ﬂipping. The models in our
+experiments are trained with a mini-batch size of 64 on a single GPU. We start from a
+learning rate of 0.1 and train the models for 240 epochs. The learning rate is divided by
+10 at the 120-th,160-th and 200-th epoch.
+Data-Driven Sparse Structure Selection for Deep Neural Networks
+#parameters
+ResNeXt-20
+(a) ResNeXt20 CIFAR10
+ResNeXt-20
+(b) ResNeXt20 CIFAR10
+#parameters
+ResNeXt-20
+(c) ResNeXt20 CIFAR100
+ResNeXt-20
+(d) ResNeXt20 CIFAR100
+#parameters
+ResNeXt-164
+(e) ResNeXt164 CIFAR10
+ResNeXt-164
+(f) ResNeXt164 CIFAR10
+#parameters
+ResNeXt-164
+(g) ResNeXt164 CIFAR100
+ResNeXt-164
+(h) ResNeXt164 CIFAR100
+Fig. 4: Error vs. number of parameters and FLOPs with SSS training for ResNeXt-20
+and ResNeXt-164 on CIFAR-10 and CIFAR-100 datasets.
+VGG: The baseline network is a modiﬁed VGG16 with BN 1. We remove fc6
+and fc7 and only use one fully-connected layer for classiﬁcation. We add scale factors
+after every batch normalization layers. Fig. 2 shows the results of our method. Both
+parameters and ﬂoating-point operations per second (FLOPs)2 are reported. Our method
+can save about 30% parameters and 30% - 50% computational cost with minor lost of
+performance.
+ResNet: To learn the number of residual blocks, we use ResNet-20 and ResNet-164
+ as our baseline networks. ResNet-20 consists of 9 residual blocks. Each block has
+2 convolutional layers, while ResNet-164 has 54 blocks with bottleneck structure in
+each block. Fig. 3 summarizes our results. It is easy to see that our SSS achieves better
+performance than the baseline model with similar parameters and FLOPs. For ResNet-
+164, our SSS yields 2.5x speedup with about 2% performance loss both in CIFAR-10
+and CIFAR-100. After optimization, we found that the blocks in early stages are pruned
+ﬁrst. This discovery coincides with the common design that the network should spend
+more budget in its later stage, since more and more diverse and complicated pattern
+may emerge as the receptive ﬁeld increases.
+ResNeXt: We also test our method on ResNeXt . We choose ResNeXt-20 and
+ResNeXt-164 as our base networks. Both of these two networks have bottleneck structures with 32 groups in residual blocks. For ResNeXt-20, we focus on groups pruning since there are only 6 residual blocks in it. For ResNeXt-164, we add sparsity on
+both groups and blocks. Fig. 4 shows our experiment results. Both groups pruning and
+block pruning show good trade-off between parameters and performance, especially in
+ResNeXt-164. The combination of groups and blocks pruning is extremely effective in
+1 Without BN, the performance of this network is very worse in CIFAR-100 dataset.
+2 Multiply-adds.
+Z. Huang, N. Wang
+#parameters
+SSS-ResNet
+SSS-ResNeXt
+ResNeXt-41
+ResNeXt-35-B
+ResNeXt-35-A
+ResNeXt-38
+(a) Parameters
+SSS-ResNet
+SSS-ResNeXt
+ResNeXt-41
+ResNeXt-38
+ResNeXt-35-A
+ResNeXt-35-B
+Fig. 5: Top-1 error vs. number of parameters and FLOPs for our SSS models and original ResNets on ImageNet validation set.
+CIFAR-10. Our SSS saves about 60% FLOPs while achieves 1% higher accuracy. In
+ResNeXt-20, groups in ﬁrst and second block are pruned ﬁrst. Similarly, in ResNeXt-
+164, groups in shallow residual blocks are pruned mostly.
+ImageNet LSVRC 2012
+To further demonstrate the effectiveness of our method in large-scale CNNs, we conduct more experiments on the ImageNet LSVRC 2012 classiﬁcation task with VGG16
+ , ResNet-50 and ResNeXt-50 (32 × 4d) . We do data augmentation based
+on the publicly available implementation of “fb.resnet” 3. The mini-batch size is 128 on
+4 GPUs for VGG16 and ResNet-50, and 256 on 8 GPUs for ResNeXt-50. The optimization and initialization are similar as those in CIFAR experiments. We train the models
+for 100 epochs. The learning rate is set to an initial value of 0.1 and then divided by 10
+at the 30-th, 60-th and 90-th epoch. All the results for ImageNet dataset are summarized
+in Table 2.
+VGG16: In our experiments of VGG16 pruning, we ﬁnd the results of pruning all
+convolutional layers were not promising. This is because in VGG16, the computational
+cost in terms of FLOPs is not equally distributed in each layer. The number of FLOPs
+of conv5 layers is 2.77 billion in total, which is only 9% of the whole network (30.97
+billion). Thus, we consider the sparse penalty should be adjusted by computational
+cost of different layers. Similar idea has been adopted in and . In , they
+introduce FLOPs regularization to the pruning criteria. He et al. do not prune conv5
+layers in their VGG16 experiments. Following , we set the sparse penalty of conv5
+to 0 and only prune conv1 to conv4. The results can be found in Table 2. The pruned
+model save about 75% FLOPs, while the parameter saving is negligible. This is due to
+that fully-connected layers have a large amount of parameters (123 million in original
+VGG16), and we do not pruned fully-connected layers for fair comparison with other
+3 
+Data-Driven Sparse Structure Selection for Deep Neural Networks
+Table 1: Network architectures of ResNet-50 and our pruned ResNets for ImageNet. √
+represents that the corresponding block is kept while × denotes that the block is pruned
+ResNet-26 ResNet-32
+conv1 112×112
+7×7, 64, stride 2
+3×3 max pool, stride 2
+1 × 1, 256
+1 × 1, 128
+3 × 3, 128
+1 × 1, 512
+1 × 1, 256
+3 × 3, 256
+1 × 1, 1024
+× 6 ×√√√√√√√√× ×√√√√√√√
+1 × 1, 512
+3 × 3, 512
+1 × 1, 2048
+global average pool 1000-d FC, softmax
+Table 2: Results on ImageNet dataset. Both top-1 and top-5 validation errors (single
+crop) are reported. Number of parameters and FLOPs for inference of different models
+are also shown. Here, M/B means million/billion (106/109), respectively
+Top-1 Top-5 #Parameters #FLOPs
+27.54 9.16
+31.47 11.8
+23.88 7.14
+24.56 7.39
+25.82 8.09
+28.18 9.21
+ResNeXt-50
+22.43 6.32
+ResNeXt-41
+24.07 7.00
+ResNeXt-38
+25.02 7.50
+ResNeXt-35-A 25.43 7.83
+ResNeXt-35-B 26.83 8.42
+ResNet-50: For ResNet-50, we experiment three different settings of γ to explore
+the performance of our method in block pruning. For simplicity, we denote the trained
+models as ResNet-26, ResNet-32 and ResNet-41 depending on their depths. Their structures are shown in Table 1. All the pruned models come with accuracy loss in certain
+extent. Comparing with original ResNet-50, ResNet-41 provides 15% FLOPs reduction
+Z. Huang, N. Wang
+Table 3: Results of PeleeNet on ImageNet dataset
+#Parameters
+PeleeNet (Our impl.)
+PeleeNet-A
+PeleeNet-B
+PeleeNet-C
+with 0.7% top-1 accuracy loss while ResNet-32 saves 31% FLOPs with about 2% top-1
+loss. Fig. 5 shows the top-1 validation errors of our SSS models and ResNets as a function of the number of parameters and FLOPs. The results reveal that our pruned models
+perform on par with original hand-crafted ResNets, whilst requiring less parameters and
+computational cost. For example, comparing with ResNet-34 , both our ResNet-41
+and ResNet-32 yield better performances with less FLOPs.
+ResNeXt-50: As for ResNeXt-50, we add sparsity constraint on both residual blocks
+and groups which results in several pruned models. Table 2 summarizes the performance of these models. The learned ResNeXt-41 yields 24% top-1 error in ILSVRC
+validation set. It gets similar results with the original ResNet50, but with half parameters and more than 20% less FLOPs. In ResNeXt-41, three residual blocks in “conv5”
+stage are pruned entirely. This pruning result is somewhat contradict to the common
+design of CNNs, which worth to be studied in depth in the future.
+Pruning lightweight network
+Adopting lightweight networks, such as MobileNet , ShufﬂeNet for fast inference is a more effective strategy in practice. To future prove the effectiveness of our
+method, we adopt neuron pruning in PeleeNet , which is a state-of-the-art efﬁcient
+architecture without separable convolution. We follow the training settings and hyperparameters used in . The mini-batch size is 1024 on 8 GPUs and we train 240 epoch.
+Table 3 shows the pruning results of PeleeNet. We adopt different settings of γ and get
+three pruned networks. Comparing to baseline, Our purned PeleeNet-A save about 14%
+parameters and FLOPs with only 0.4% top-1 accuracy degradation.
+Comparison with other methods
+We compare our SSS with other pruning methods, including SSL , ﬁlter pruning
+ , channel pruning , ThiNet , and . We compare SSL with our
+method in CIFAR10 and CIFAR100. All the models are trained from scratch. As shown
+in Fig. 6, our SSS achieves much better performances than SSL, even SSL with ﬁnetune. Table 4 shows the pruning results on the ImageNet LSVRC2012 dataset. To the
+best of our knowledge, only a few works reported ResNet pruning results with FLOPs.
+Comparing with ﬁlter pruning results, our ResNet-32 performs best with least FLOPs.
+As for channel pruning, with similar FLOPs4, our ResNet-32 yields 1.88% lower top-1
+4 We calculate the FLOPs of He’s models by provided network structures.
+Data-Driven Sparse Structure Selection for Deep Neural Networks
+SSL w/o finetune
+SSL with finetune
+(a) CIFAR10
+SSL w/o finetune
+SSL with finetune
+(b) CIFAR100
+Fig. 6: Error vs. FLOPs for our SSS models and SSL models
+Table 4: Comparison among several state-of-the-art pruning methods on the ResNet and
+VGG16 networks
+ResNet-34-pruned 
+ResNet-50-pruned-A (Our impl.)
+ResNet-50-pruned-B (Our impl.)
+ResNet-50-pruned (2×) 
+ResNet-32 (Ours)
+ResNet-101-pruned 
+ResNet-41 (Ours)
+VGG16-pruned 
+VGG16-pruned (5×) 
+VGG16-pruned (ThiNet-Conv) 
+VGG16-pruned (Ours)
+error and 1.11% lower top-5 error than pruned ResNet-50 provided by . As for ,
+our ResNet-41 achieves about 1% lower top-1 error with less computation budge. We
+also show comparison in VGG16. All the method including channel pruning, ThiNet
+and our SSS achieve signiﬁcant improvement than . Our VGG16 pruning result is
+competitive to other state-of-the-art.
+We further compare our pruned ResNeXt with DenseNet in Table 5. With 14%
+less FLOPs, Our ResNeXt-38 achieves 0.2% lower top-5 error than DenseNet-121.
+Choice of different optimization methods
+We compare our APG with other different optimization methods for optimizing λ in
+our ImageNet experiments, including SGD adopted in and ISTA used in .
+We adopted ResNet-50 for block pruning and train it from scratch. The sparse penalty
+γ is set to 0.005 for all optimization methods.
+For SGD, since we can not get exact zero scale factor during training, a extra hyperparameter – hard threshold is need for the optimization of λ. In our experiment, we set
+Z. Huang, N. Wang
+Table 5: Comparison between pruned ResNeXt-38 and DenseNet-121
+DenseNet-121 
+DenseNet-121 (Our impl.)
+ResNeXt-38 (Ours)
+Table 6: Comparison between different optimization methods
+ResNet-32-SGD
+ResNet-32-APG
+it to 0.0001. After training, we get a ResNet-32-SGD network. As show in Table 6, the
+performance of our ResNet-32-APG is better than ResNet-32-SGD.
+For ISTA, we found the optimization of network could not converge. The reason
+is that the converge speed of ISTA for λ optimization is too slow when training from
+scratch. Adopting ISTA can get reasonable results in CIFAR dataset. However, in ImageNet, it is hard to optimize the λ to be sparse with small γ, and larger γ will lead too
+many zeros in our experiments. alleviated this problem by ﬁne-tunning from a pretrained model. They also adopted λ-W rescaling trick to get an small λ initialization.
+Comparing to ISTA, Our APG can be seen as a modiﬁed version of an improved
+ISTA, namely FISTA , which has been proved to be signiﬁcantly better than ISTA in
+convergence. Thus the optimization of our method is effective and stable in both CIFAR
+and ImageNet experiments. The results described in Table 4 also show the advantages
+of our APG method to ISTA. The performance of our trained ResNet-41 is better than
+ResNet-101-pruned provided by .
+Conclusions
+In this paper, we have proposed a data-driven method, Sparse Structure Selection (SSS)
+to adaptively learn the structure of CNNs. In our framework, the training and pruning of
+CNNs is formulated as a joint sparse regularized optimization problem. Through pushing the scaling factors which are introduced to scale the outputs of speciﬁc structures
+to zero, our method can remove the structures corresponding to zero scaling factors. To
+solve this challenging optimization problem and adapt it into deep learning models, we
+modiﬁed the Accelerated Proximal Gradient method. In our experiments, we demonstrate very promising pruning results on PeleeNet, VGG, ResNet and ResNeXt. We can
+adaptively adjust the depth and width of these CNNs based on budgets at hand and dif-
+ﬁculties of each task. We believe these pruning results can further inspire the design of
+more compact CNNs.
+In future work, we plan to apply our method in more applications such as object
+detection. It is also interesting to investigate the use of more advanced sparse regulariz-
+Data-Driven Sparse Structure Selection for Deep Neural Networks
+ers such as non-convex relaxations, and adjust the penalty based on the complexity of
+different structures adaptively.
+Z. Huang, N. Wang

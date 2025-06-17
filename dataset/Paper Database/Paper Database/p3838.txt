@@ -1,0 +1,558 @@
+Data-Free Quantization
+Through Weight Equalization and Bias Correction
+Markus Nagel∗
+Mart van Baalen∗
+Tijmen Blankevoort
+Max Welling
+Qualcomm AI Research†
+Qualcomm Technologies Netherlands B.V.
+{markusn, mart, tijmen, mwelling}@qti.qualcomm.com
+We introduce a data-free quantization method for deep
+neural networks that does not require ﬁne-tuning or hyperparameter selection. It achieves near-original model performance on common computer vision architectures and
+8-bit ﬁxed-point quantization is essential for efﬁcient inference on modern deep learning hardware. However, quantizing models to run in 8-bit is a non-trivial task,
+frequently leading to either signiﬁcant performance reduction or engineering time spent on training a network to be
+amenable to quantization. Our approach relies on equalizing the weight ranges in the network by making use of a
+scale-equivariance property of activation functions. In addition the method corrects biases in the error that are introduced during quantization. This improves quantization
+accuracy performance, and can be applied to many common computer vision architectures with a straight forward
+API call. For common architectures, such as the MobileNet
+family, we achieve state-of-the-art quantized model performance. We further show that the method also extends to
+other computer vision architectures and tasks such as semantic segmentation and object detection.
+1. Introduction
+In recent years, deep learning based computer vision
+models have moved from research labs into the cloud and
+onto edge devices. As a result, power consumption and
+latency of deep learning inference have become an important concern. For this reason ﬁxed-point quantization is often employed to make inference more efﬁcient. By quantizing ﬂoating point values onto a regularly spaced grid,
+the original ﬂoating point values can be approximated by
+a set of integers, a scaling factor, and an optional zero point
+∗Equal Contribution
+†Qualcomm AI Research is an initiative of Qualcomm Technologies,
+DFQ (ours)
+Figure 1. Fixed point inference for MobileNetV2 on ImageNet.
+The original model has signiﬁcant drop in performance at 12-bit
+quantization whereas our model maintains close to FP32 performance even at 6-bit quantization.
+offset .
+This allows for the use of faster and more
+power-efﬁcient integer operations in matrix multiplication
+and convolution computations, at the expense of lower representational power. We refer the reader to for details
+on commonly used, hardware-friendly quantization methods for deep learning models.
+Quantization of 32-bit full precision (FP32) models into
+8-bit ﬁxed point (INT8) introduces quantization noise on
+the weights and activations, which often leads to reduced
+model performance. This performance degradation ranges
+from very minor to catastrophic. To minimize the quantization noise, a wide range of different methods have been
+introduced in the literature (see Section 2). A major drawback of these quantization methods is their reliance on data
+and ﬁne-tuning. As an example, consider real-world actors
+that manage hardware for quantized models, such as cloudbased deep learning inference providers or cellphone manufacturers. To provide a general use quantization service they
+would have to receive data from the customers to ﬁne-tune
+the models, or rely on their customers to do the quantization. In either case, this can add a difﬁcult step to the process. For such stakeholders it would be preferable if FP32
+models could be converted directly to INT8, without needing the know-how, data or compute necessary for running
+traditional quantization methods. Even for model developarXiv:1906.04721v3 [cs.LG] 25 Nov 2019
+ers that have the capability to quantize their own models,
+automation would save signiﬁcant time.
+In this paper, we introduce a quantization approach that
+does not require data, ﬁne-tuning or hyperparameter tuning,
+resulting in accuracy improvement with a simple API call.
+Despite these restrictions we achieve near-original model
+performance when quantizing FP32 models to INT8. This is
+achieved by adapting the weight tensors of pre-trained models such that they are more amenable to quantization, and by
+correcting for the bias of the error that is introduced when
+quantizing models. We show signiﬁcant improvements in
+quantization performance on a wide range of computer vision models previously thought to be difﬁcult to quantize
+without ﬁne-tuning.
+Levels of quantization solutions
+In literature the practical application of proposed quantization methods is rarely
+discussed. To distinguish between the differences in applicability of quantization methods, we introduce four levels
+of quantization solutions, in decreasing order of practical
+applicability. Our hope is that this will enable other authors
+to explore solutions for each level, and makes the comparison between methods more fair. The axes for comparison
+are whether or not a method requires data, whether or not
+a method requires error backpropagation on the quantized
+model, and whether or not a method is generally applicable for any architecture or requires signiﬁcant model reworking. We use the following deﬁnitions throughout the
+Level 1 No data and no backpropagation required. Method
+works for any model. As simple as an API call that
+only looks at the model deﬁnition and weights.
+Level 2 Requires data but no backpropagation. Works for
+any model. The data is used e.g. to re-calibrate batch
+normalization statistics or to compute layer-wise
+loss functions to improve quantization performance.
+However, no ﬁne-tuning pipeline is required.
+Level 3 Requires data and backpropagation. Works for any
+model. Models can be quantized but need ﬁne-tuning
+to reach acceptable performance. Often requires hyperparameter tuning for optimal performance. These
+methods require a full training pipeline (e.g. ).
+Level 4 Requires data and backpropagation. Only works
+for speciﬁc models. In this case, the network architecture needs non-trivial reworking, and/or the architecture needs to be trained from scratch with quantization in mind (e.g. ). Takes signiﬁcant extra
+training-time and hyperparameter tuning to work.
+2. Background and related work
+There are several works that describe quantization and
+improving networks for lower bit inference and deployment
+ . These methods all rely on ﬁne-tuning, making them level 3 methods, whereas data-free quantization
+improves performance similarly without that requirement.
+Our method is complementary to these and can be applied
+as a pre-processing before quantization aware ﬁne-tuning.
+In a whitepaper, Krishnamoorthi , introduces a level
+1 ‘per-channel’ quantization scheme, in which the weights
+of a convolutional weight tensor are quantized per output
+A major drawback of this method is that it is
+not supported on all hardware, and that it creates unnecessary overhead in the computation due to the necessity of
+scale and offset values for each channel individually. We
+show that our method improves on per-channel quantization, while keeping a single set of scale and offset values
+for the whole weight tensor instead.
+Other methods to improve quantization need architecture
+changes or training with quantization in mind from the start
+ . These methods are even more involved
+than doing quantization and ﬁne-tuning. They also incur
+a relatively large overhead during training because of sampling and noisy optimization, and introduce extra hyperparameters to optimize. This makes them level 4 methods.
+Methods that binarize or ternarize 
+networks result in models with great inference efﬁciency
+as expensive multiplications and additions are replaced by
+bit-shift operations. However, quantizing models to binary
+often leads to strong performance degradation. Generally
+they need to be trained from scratch, making them level 4
+Other approaches use low-bit ﬂoating point operations
+instead of integer operations, or other custom quantization
+implementations . We do not consider such
+approaches as the hardware implementation is less efﬁcient.
+In concurrent work, Meller et al. also exploits the
+scale equivariance of the ReLU function to rescale weight
+channels and notice the biased error introduced by weight
+quantization , leading to a method that resembles our
+data-free quantization approach. Stock et al. also use
+the scale equivariance property of the ReLU function, but
+use it for network optimization instead.
+3. Motivation
+While many trained FP32 models can be quantized to
+INT8 without much loss in performance, some models exhibit a signiﬁcant drop in performance after quantization
+( ). For example, when quantizing a trained MobileNetV2 model, Krishnamoorthi reports a drop
+in top-1 accuracy from 70.9% to 0.1% on the ImageNet 
+validation set. The author restores near original model performance by either applying per-channel quantization, ﬁnetuning or both.
+1 2 3 4 5 6 7 8 9 1011121314151617181920212223242526272829303132
+Output channel index
+Figure 2. Per (output) channel weight ranges of the ﬁrst depthwiseseparable layer in MobileNetV2. In the boxplot the min and max
+value, the 2nd and 3rd quartile and the median are plotted for each
+channel. This layer exhibits strong differences between channel
+weight ranges.
+3.1. Weight tensor channel ranges
+The fact that per-channel quantization yields much better performance on MobileNetV2 than per-tensor quantization suggests that, in some layers, the weight distributions
+differ so strongly between output channels that the same
+set of quantization parameters cannot be used to quantize
+the full weight tensor effectively. For example, in the case
+where one channel has weights in the range [−128, 128] and
+another channel has weights in the range (−0.5, 0.5), the
+weights in the latter channel will all be quantized to 0 when
+quantizing to 8-bits.
+Figure 2 shows that large differences in output channel
+weight ranges do indeed occur in a (trained) MobileNetV2
+model. This ﬁgure shows the weight distribution of the output channel weights of the depthwise-separable layer in the
+model’s ﬁrst inverted residual block. Due to the strong differences between channel weight ranges that this layer exhibits, it cannot be quantized with reasonable accuracy for
+each channel. Several layers in the network suffer from this
+problem, making the overall model difﬁcult to quantize.
+We conjecture that performance of trained models after
+quantization can be improved by adjusting the weights for
+each output channel such that their ranges are more similar. We provide a level 1 method to achieve this without
+changing the FP32 model output in section 4.1.
+3.2. Biased quantization error
+A common assumption in literature (e.g. ) is that
+quantization error is unbiased and thus cancels out in a
+layer’s output, ensuring that the mean of a layer’s output
+does not change as a result of quantization. However, as
+we will show in this section, the quantization error on the
+weights might introduce biased error on the corresponding
+outputs. This shifts the input distribution of the next layer,
+which may cause unpredictable effects.
+The biased error in a quantized layer’s output unit j can
+Biased Output Error
+Quantized + BiasCorr
+Figure 3. Per-channel biased output error introduced by weight
+quantization of the second depthwise-separable layer in MobileNetV2, before (blue) and after (orange) bias correction.
+be computed empirically using N input data points as:
+E[eyj −yj] ≈1
+Wxn)j −(Wxn)j
+where yj and eyj are the original outputs and the outputs
+generated using the quantized weight matrix, respectively.
+Figure 3 shows the biased error per channel of a
+depthwise-separable convolution layer in a trained MobileNetV2 model. From this plot it is clear that for many
+channels in the layer’s output, the error introduced by
+weight quantization is biased, and inﬂuences the output
+statistics. Depthwise-separable layers are especially susceptible to this biased error effect as each output channel
+has only 9 corresponding weights.
+Such a biased error on the outputs can be introduced in
+many settings, e.g. when weights or activations are clipped
+ , or in non-quantization approaches, such as weight tensor factorization or channel pruning .
+In section 4.2 we introduce a method to correct for this
+bias. Furthermore, we show that a model’s batch normalization parameters can be used to compute the expected biased
+error on the output, yielding a level 1 method to ﬁx the biased error introduced by quantization.
+Our proposed data-free quantization method (DFQ) consists of three steps, on top of the normal quantization. The
+overall ﬂow of the algorithm is shown in Figure 4.
+4.1. Cross-layer range equalization
+Positive scaling equivariance
+We observe that for a
+ReLU activation function f(·) the following scaling
+equivariance property holds:
+f(sx) = sf(x)
+for any non-negative real number s. This follows from the
+deﬁnition of the ReLU:
+Figure 4. Flow diagram of the proposed DFQ algorithm.
+This equivariance also holds for the PreLU activation function. More generally, the positive scaling equivariance can be relaxed to f(sx) = s ˆf(x) for any piece-wise
+linear activation functions:
+if c1 < x ≤c2
+if cn−1 < x
+where ˆf(·) is parameterized as ˆai = ai, ˆbi = bi/s and
+ˆci = ci/s. Note that contrary to equivariance deﬁned in eq.
+2 we now also change the function f(·) into ˆf(·).
+4.1.1. Scaling equivariance in neural networks
+The positive scaling equivariance can be exploited in
+consecutive layers in neural networks. Given two layers,
+h = f(W(1)x + b(1)) and y = f(W(2)h + b(2)), through
+scaling equivariance we have that:
+y = f(W(2)f(W(1)x + b(1)) + b(2))
+= f(W(2)S ˆf(S−1W(1)x + S−1b(1)) + b(2))
+W(1)x + bb(1)) + b(2))
+where S = diag(s) is a diagonal matrix with value Sii
+denoting the scaling factor si for neuron i.
+This allows
+us to reparameterize our model with c
+W(2) = W(2)S,
+W(1) = S−1W(1) and bb(1) = S−1b(1). In case of CNNs
+the scaling will be per channel and broadcast accordingly
+over the spatial dimensions. The rescaling procedure is illustrated in Figure 5.
+4.1.2. Equalizing ranges over multiple layers
+We can exploit the rescaling and reparameterization of
+the model to make the model more robust to quantization.
+Ideally the ranges of each channel i are equal to the total
+range of the weight tensor, meaning we use the best possible
+representative power per channel. We deﬁne the precision
+of a channel as:
+Figure 5. Illustration of the rescaling for a single channel. If scaling factor si scales ci in layer 1; we can instead factor it out and
+multiply di in layer 2.
+where ˆr(1)
+is the quantization range of channel i in c
+and ˆR(1) is the total range of c
+W(1). We want to ﬁnd S such
+that the total precision per channel is maximized:
+In the case of symmetric quantization we have ˆr(1)
+2 · maxj |c
+ij | and ˆR(1) = 2 · maxij |c
+ij |. Solving eq.
+9 (see appendix A) leads to the necessary condition:
+meaning the limiting channel deﬁning the quantization
+range is given by arg maxi r(1)
+i . We can satisfy this
+condition by setting S such that:
+which results in ∀i : r(1)
+i . Thus the channel’s ranges
+between both tensors are matched as closely as possible.
+When equalizing multiple layers at the same time, we
+iterate this process for pairs of layers that are connected to
+each other without input or output splits in between, until
+convergence.
+4.1.3. Absorbing high biases
+In case si < 1 the equalization procedure increases bias
+i . This could in turn increase the range of the activation
+quantization. In order to avoid big differences between perchannel ranges in the activations we introduce a procedure
+that absorbs high biases into the subsequent layer.
+For a layer with ReLU function r, there is a non-negative
+vector c such that r(Wx + b −c) = r(Wx + b) −c. The
+trivial solution c = 0 holds for all x. However, depending
+on the distribution of x and the values of W and b, there
+can be some values ci > 0 for which this equality holds for
+(almost) all x. Following the previous two layer example,
+these ci can be absorbed from layer 1 into layer 2 as:
+y = W(2)h + b(2)
+= W(2)(r(W(1)x + b(1)) + c −c) + b(2)
+= W(2)(r(W(1)x + ˆb(1)) + c) + b(2)
+= W(2)ˆh + ˆb(2)
+where ˆb(2) = W(2)c+b(2), ˆh = h−c, and ˆb(1) = b(1)−c.
+To ﬁnd c without violating our data-free assumption
+we assume that the pre-bias activations are distributed normally with the batch normalization shift and scale parameters β and γ as its mean and standard deviation.
+set c = max(0, β −3γ). If c > 0, the equality introduced above will hold for the 99.865% of values of x (those
+greater than c) under the Gaussian assumption. As we will
+show in section 5.1.1, this approximation does not harm the
+full precision performance signiﬁcantly but helps for activation quantization. Note that, in case data is available, the
+pre-bias distribution of x can be found empirically and used
+4.2. Quantization bias correction
+As shown empirically in the motivation, quantization can
+introduce a biased error in the activations. In this section we
+show how to correct for the bias in the error on the layer’s
+output, and how we can use the network’s batch normalization parameters to compute this bias without using data.
+For a fully connected layer with weight tensor W, quantized weights f
+W, and input activations x, we have ey = f
+and therefore ey = y + ϵx, where we deﬁne the quantization error ϵ = f
+W −W, y as the layer pre-activations of the
+FP32 model, and ey that layer with quantization error added.
+If the expectation of the error for output i, E[ϵx]i ̸= 0,
+then the mean of the output i will change. This shift in distribution may lead to detrimental behavior in the following
+layers. We can correct for this change by seeing that:
+E[y] = E[y] + E[ϵx] −E[ϵx]
+= E[ey] −E[ϵx].
+Thus, subtracting the expected error on the output E [ϵx] =
+ϵE [x] from the biased output ey ensures that the mean for
+each output unit is preserved.
+For implementation, the expected error can be subtracted
+from the layer’s bias parameter, since the expected error
+vector has the same shape as the layer’s output. This method
+easily extends to convolutional layers as described in Appendix B.
+4.2.1. Computing the expected input
+To compute the expected error of the output of a layer,
+the expected input to the layer E[x] is required. If a model
+does not use batch normalization, or there are no data-usage
+restrictions, E[ϵx] can be computed by comparing the activations before and after quantization. Appendix D explains
+this procedure in more detail.
+Clipped normal distribution
+When the network includes
+batch normalization before a layer, we can use it to calculate E[x] for that layer without using data. We assume the
+pre-activation outputs of a layer are normally distributed,
+that batch normalization is applied before the activation
+function, and that the activation function is some form of
+the class of clipped linear activation functions (e.g. ReLU,
+ReLU6), which clips its input range to the range [a, b] where
+a < b, and b can be ∞.
+Due to the centralization and normalization applied by
+batch normalization, the mean and standard deviation of the
+pre-activations are known: these are the batch normalization scale and shift parameters (henceforth referred to as γ
+and β respectively).
+To compute E[x] from the previous layer’s batch normalization parameters, the mean and variance need to be
+adjusted to account for the activation function that follows
+the batch normalization layer. For this purpose we introduce the clipped normal distribution. A clipped-normally
+distributed random variable X is a normally distributed random variable with mean µ and variance σ2, whose values
+are clipped to the range [a, b] The mean and variance of the
+clipped normal distribution can be computed in closed form
+from µ, σ, a and b. We present the mean of the clipped normal distribution for the ReLU activation function, i.e. a = 0
+and b = ∞in this section, and refer the reader to Appendix
+C for the closed form solution for the general clipped normal distribution.
+The expected value for channel c in x, E[xc], which is
+the output of a layer with batch normalization parameters
+βc and γc, followed by a ReLU activation function is:
+E[xc] = E [ReLU (xpre
+where xpre
+is the pre-activation output for channel c, which
+is assumed to be normally distributed with mean βc and
+variance γ2
+c , Φ(·) is the normal CDF, and the notation N(x)
+is used to denote the normal N(x|0, 1) PDF.
+5. Experiments
+In this section we present two sets of experiments to validate the performance of data-free quantization (DFQ). We
+ﬁrst show in section 5.1 the effect of the different aspects
+of DFQ and how they solve the problems observed earlier.
+Then we show in section 5.2 how DFQ generalizes to other
+models and tasks, and sets a new state-of-the-art for level 1
+quantization.
+To allow comparison to previously published results, we
+use both weights and activations are quantized using 8bit asymmetric, per-tensor quantization in all experiments.
+Batch normalization is folded in the adjacent layer before
+quantization. Weight quantization ranges are the min and
+max of the weight tensor. Activation quantization ranges
+are set without data, by using the learned batch normalization shift and scale parameter vectors β and γ as follows:
+We compute the activation range for channel i as βi ±n·γi
+(with n = 6), with the minimum clipped to 0 in case of
+ReLU activation. We observed a wide range of n can be
+used without signiﬁcant performance difference. All experiments are done in Pytorch . In appendix E we show
+additional experiments using short-term ﬁne-tuning, symmetric quantization and per-channel quantization.
+5.1. Ablation study
+In this section we investigate the effect of our methods
+on a pre-trained MobileNetV2 model1. We validate the
+performance of the model on the ImageNet validation
+set. We ﬁrst investigate the effects of different parts of our
+approach through a set of ablation studies.
+5.1.1. Cross-layer equalization
+In this section we investigate the effects of cross-layer
+equalization and high-bias folding.
+We compare these
+methods to two baselines: the original quantized model and
+the less hardware friendly per-channel quantization scheme.
+The models considered in this section employ residual
+connections . For these networks we apply cross-layer
+equalization only to the layers within each residual block.
+MobileNetV2 uses ReLU6 activation functions, which clips
+activation ranges to . To avoid ReLU6 requiring a different cut off per channel after applying the equalization
+procedure, we replace ReLU6 with regular ReLU.
+The results of the equalization experiments are shown
+in Table 1.
+Similar to , we observe that the model
+performance is close to random when quantizing the original model to INT8. Further we note that replacing ReLU6
+by ReLU does not signiﬁcantly degrade the model performance. Applying equalization brings us to within 2% of
+FP32 performance, close to the performance of per-channel
+quantization. We note that absorbing high biases results in
+a small drop in FP32 performance, but it boosts quantized
+performance by 1% due to more precise activation quantization. Combining both methods improves performance
+over per-channel quantization, indicating the more efﬁcient
+per-tensor quantization could be used instead.
+1We use the Pytorch implementation of MobileNetV2 provided by
+ 
+Original model
+Replace ReLU6
++ equalization
++ absorbing bias
+Per channel quantization
+Table 1. Top1 ImageNet validation results for MobileNetV2, evaluated at full precision and 8-bit integer quantized. Per-channel
+quantization is our own implementation of applied posttraining.
+1 2 3 4 5 6 7 8 9 1011121314151617181920212223242526272829303132
+Output channel index
+Figure 6. Per (output) channel weight ranges of the ﬁrst depthwiseseparable layer in MobileNetV2 after equalization. In the boxplot
+the min and max value, the 2nd and 3rd quartile and the median
+are plotted for each channel. Most channels in this layer are now
+within similar ranges.
+To illustrate the effect of cross-layer equalization, we
+show the weight distributions per output channel of the
+depthwise-separable layer in the models ﬁrst inverted residual block after applying the equalization in Figure 6. We
+observe that most channels ranges are now similar and that
+the strong outliers from Figure 2 have been equalized. Note,
+there are still several channels which have all weight values
+close to zero. These channels convey little information and
+can be pruned from the network with hardly any loss in accuracy.
+5.1.2. Bias correction
+In this section we present results on bias correction for a
+quantized MobileNetV2 model. We furthermore present results of bias correction in combination with a naive weightclipping baseline, and combined with the cross-layer equalization approach.
+The weight-clipping baseline serves two functions: 1) as
+a naive baseline to the cross-layer equalization approach,
+and 2) to show that bias correction can be employed in
+any setting where biased noise is introduced. Weight clipping solves the problem of large differences in ranges between channels by clipping large ranges to smaller ranges,
+but it introduces a strongly biased error. Weight clipping
+is applied by ﬁrst folding the batch normalization parameters into a layer’s weights, and then clipping all values to
+Original Model
++ Bias Corr
+Rescaling + Bias Absorption
++ Bias Corr
+Table 2. Top1 ImageNet validation results for MobileNetV2, evaluated at full precision and 8-bit integer quantized. Bold results
+show the best result for each column in each cell.
+a certain range, in this case [−15, 15]. We tried multiple
+symmetric ranges, all provided similar results. For residual
+connections we calculate E[x] and Var[x] based on the sum
+and variance of all input expectations, taking the input to be
+zero mean and unit variance.
+To illustrate the effect of bias correction, Figure 3 shows
+the per output channel biased error introduced by weight
+quantization. The per-channel biases are obtained as described in eq. 1. This ﬁgure shows that applying bias correction reduces the bias in the error on the output of a layer
+to very close to 0 for most output channels.
+Results for the experiments described above for MobileNet V2 on the ImageNet validation set are shown in Table 2. Applying bias correction improves quantized model
+performance, indicating that a part of the problem of quantizing this model lies in the biased error that is introduced.
+However, bias correction on its own does not achieve near-
+ﬂoating point performance.
+The reason for this is most
+likely that the problem described in 3.1 is more severe for
+this model. The experiments on weight-clipping show that
+bias correction can mitigate performance degradation due to
+biased error in non-quantized models as well as quantized
+models. Clipping without correction in the FP32 model introduces a 4.66% loss in accuracy; bias correction reduces
+that loss to a mere 0.57%. Furthermore, it shows that weight
+clipping combined with bias correction is a fairly strong
+baseline for quantizing MobileNet V2. Lastly, we show
+that bias correction improves results when combined with
+the cross-layer equalization and bias folding procedures.
+The combination of all methods is our data-free quantization (DFQ) method. The full DFQ approach achieves near-
+ﬂoating point performance with a reduction of 0.53% top 1
+accuracy relative to the FP32 baseline.
+5.2. Comparison to other methods and models
+In this section we show how DFQ generalizes to other
+popular computer vision tasks, namely semantic segmentation and object detection, and other model architectures
+such as MobileNetV1 and Resnet18 . Afterwards
+we compare DFQ to methods in the literature, including
+Original model
+DFQ (ours)
+Per-channel quantization
+Table 3. DeeplabV3+ (MobileNetV2 backend) on Pascal VOC
+segmentation challenge. Mean intersection over union (mIOU)
+evaluated at full precision and 8-bit integer quantized. Per-channel
+quantization is our own implementation of applied posttraining.
+Original model
+DFQ (ours)
+Per-channel quantization
+Table 4. MobileNetV2 SSD-lite on Pascal VOC object detection
+challange. Mean average precision (mAP) evaluated at full precision and 8-bit integer quantized. Per-channel quantization is our
+own implementation of applied post-training.
+more complex level 3 and 4 approaches. This set of models
+was chosen as they are efﬁcient and likely to be used in mobile applications where 8-bit quantization is frequently used
+for power efﬁciency.
+5.2.1. Other tasks
+Semantic segmentation
+To demonstrate the generalization of our method to semantic segmentation we apply DFQ
+for DeeplabV3+ with a MobileNetV2 backend , performance is evaluated on the Pascal VOC segmentation
+challenge .
+For our experiments we use the publicly
+available Pytorch implementation2.
+We show the results of this experiment in Table 3. As
+observed earlier for classiﬁcation we notice a signiﬁcant
+drop in performance when quantizing the original model
+which makes it almost unusable in practice. Applying DFQ
+recovers almost all performance degradation and achieves
+less than 1% drop in mIOU compared to the full precision
+model. DFQ also outperforms the less hardware friendly
+per-channel quantization. To the best of our knowledge we
+are the ﬁrst to publish quantization results on DeeplabV3+
+as well as for semantic segmentation.
+Object detection
+To demonstrate the applicability of our
+method to object detection we apply DFQ for MobileNetV2
+SSDLite , evaluated on the Pascal VOC object detection challenge . In our experiments we use the publicly available Pytorch implementation of SSD3.
+2 
+pytorch-deeplab-xception
+3 
+MobileNetV2
+MobileNetV1
+DFQ (ours)
+Per-layer 
+Per-channel 
+Table 5. Top1 ImageNet validation results for different models and quantization approaches. The top half compares level 1 approaches
+(∼D: data free, ∼BP: backpropagation-free, ∼AC: Architecture change free) whereas in the second half we also compare to higher level
+approaches in literature. Results with ∗indicates our own implementation since results are not provided, ˆ results provided by and †
+results from table 2 in .
+The results are listed in Table 4. Similar to semantic
+segmentation we observe a signiﬁcant drop in performance
+when quantizing the SSDLite model. Applying DFQ recovers almost all performance drop and achieves less than 1%
+drop in mAP compared to the full precision model, again
+outperforming per-channel quantization.
+5.2.2. Comparison to other approaches
+In this section we compare DFQ to other approaches
+in literature.
+We compare our results to two other level
+1 approaches, direct per-layer quantization as well as perchannel quantization .
+In addition we also compare
+to multiple higher level approaches, namely quantization
+aware training as well as stochastic rounding and dynamic ranges , which are both level 3 approaches.
+We also compare to two level 4 approaches based on relaxed quantization , which involve training a model
+from scratch and to quantization friendly separable convolutions that require a rework of the original MobileNet
+architecture. The results are summarized in Table 5.
+For both MobileNetV1 and MobileNetV2 per-layer
+quantization results in an unusable model whereas DFQ
+stays close to full precision performance. DFQ also outperforms per-channel quantization as well as most level 3 and
+4 approaches which require signiﬁcant ﬁne-tuning, training
+or even architecture changes.
+On Resnet18 we maintain full precision performance for
+8-bit ﬁxed point quantization using DFQ. Some higher level
+approaches report slightly higher results than our
+baseline model, likely due to a better training procedure
+than used in the standard Pytorch Resnet18 model. Since
+8-bit quantization is lossless we also compare 6-bit results.
+DFQ clearly outperforms traditional per-layer quantization
+but stays slightly below per-channel quantization and higher
+level approaches such as QT and RQ .
+Overall DFQ sets a new state-of-the-art for 8-bit ﬁxed
+point quantization on several models and computer vision
+tasks. It is especially strong for mobile friendly architectures such as MobileNetV1 and MobileNetV2 which were
+previously hard to quantize. Even though DFQ is an easy
+to use level 1 approach, we generally show competitive performance when comparing to more complex level 2-4 approaches.
+6. Conclusion
+In this work, we introduced DFQ, a data-free quantization method that signiﬁcantly helps quantized model
+performance without the need for data, ﬁne-tuning or
+hyper-parameter optimization.
+The method can be applied to many common computer vision architectures with a
+straight-forward API call. This is crucial for many practical
+applications where engineers want to deploy deep learning
+models trained in FP32 to INT8 hardware without much effort. Results are presented for common computer vision
+tasks like image classiﬁcation, semantic segmentation and
+object detection. We show that our method compares favorably to per-channel quantization , meaning that instead
+the more efﬁcient per-tensor quantization can be employed
+in practice. DFQ achieves near original model accuracy
+for almost every model we tested, and even competes with
+more complicated training based methods.
+Further we introduced a set of quantization levels to facilitate the discussion on the applicability of quantization
+methods. There is a difference in how easy a method is to
+use for generating a quantized model, which is a signiﬁcant
+part of the impact potential of a quantization method in real
+world applications. We hope that the quantization levels
+and methods introduced in this paper will contribute to both
+future research and practical deployment of quantized deep
+learning models.
+Acknowledgments
+We would like to thank Christos Louizos, Harris Teague,
+Jakub Tomczak, Mihir Jain and Pim de Haan for their helpful discussions and valuable feedback.

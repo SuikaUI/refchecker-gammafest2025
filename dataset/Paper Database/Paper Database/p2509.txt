@@ -1,0 +1,692 @@
+Semantic Image Segmentation via Deep Parsing Network∗
+Ziwei Liu†
+Xiaoxiao Li†
+Chen Change Loy
+Xiaoou Tang
+Department of Information Engineering, The Chinese University of Hong Kong
+{lz013,lx015,pluo,ccloy,xtang}@ie.cuhk.edu.hk
+This paper addresses semantic image segmentation by
+incorporating rich information into Markov Random Field
+(MRF), including high-order relations and mixture of label
+Unlike previous works that optimized MRFs
+using iterative algorithm, we solve MRF by proposing a
+Convolutional Neural Network (CNN), namely Deep Parsing Network (DPN), which enables deterministic end-toend computation in a single forward pass.
+Speciﬁcally,
+DPN extends a contemporary CNN architecture to model
+unary terms and additional layers are carefully devised to
+approximate the mean ﬁeld algorithm (MF) for pairwise
+terms. It has several appealing properties. First, different
+from the recent works that combined CNN and MRF, where
+many iterations of MF were required for each training
+image during back-propagation, DPN is able to achieve
+high performance by approximating one iteration of MF.
+Second, DPN represents various types of pairwise terms,
+making many existing works as its special cases. Third,
+DPN makes MF easier to be parallelized and speeded up
+in Graphical Processing Unit (GPU). DPN is thoroughly
+evaluated on the PASCAL VOC 2012 dataset, where a single DPN model yields a new state-of-the-art segmentation
+accuracy of 77.5%.
+1. Introduction
+Markov Random Field (MRF) or Conditional Random
+Field (CRF) has achieved great successes in semantic image segmentation, which is one of the most challenging
+problems in computer vision.
+Existing works such as
+ can be generally categorized
+into two groups based on their deﬁnitions of the unary and
+pairwise terms of MRF.
+In the ﬁrst group, researchers improved labeling accuracy by exploring rich information to deﬁne the pairwise functions, including long-range dependencies ,
+∗This work has been accepted to appear in ICCV 2015. This is the preprinted version. Content may slightly change prior to the ﬁnal publication.
+†indicates shared ﬁrst authorship.
+high-order potentials , and semantic label contexts
+ . For example, Kr¨ahenb¨uhl et al. attained
+accurate segmentation boundary by inferring on a fullyconnected graph.
+Vineet et al. extended by
+deﬁning both high-order and long-range terms between
+pixels. Global or local semantic contexts between labels
+were also investigated by . Although they accomplished
+promising results, they modeled the unary terms as SVM or
+Adaboost, whose learning capacity becomes a bottleneck.
+The learning and inference of complex pairwise terms are
+often expensive.
+In the second group, people learned a strong unary classiﬁer by leveraging the recent advances of deep learning,
+such as the Convolutional Neural Network (CNN). With
+deep models, these works 
+demonstrated encouraging results using simple deﬁnition of
+the pairwise function or even ignore it. For instance, Long
+et al. transformed fully-connected layers of CNN into
+convolutional layers, making accurate per-pixel classiﬁcation possible using the contemporary CNN architectures
+that were pre-trained on ImageNet .
+Chen et al. 
+improved by feeding the outputs of CNN into a MRF
+with simple pairwise potentials, but it treated CNN and
+MRF as separated components.
+A recent advance was
+obtained by , which jointly trained CNN and MRF by
+passing the error of MRF inference backward into CNN, but
+iterative inference of MRF such as the mean ﬁeld algorithm
+(MF) is required for each training image during backpropagation (BP). Zheng et al. further showed that
+the procedure of MF inference can be represented as a
+Recurrent Neural Network (RNN), but their computational
+costs are similar.
+We found that directly combing CNN
+and MRF as above is inefﬁcient, because CNN typically
+has millions of parameters while MRF infers thousands of
+latent variables; and even worse, incorporating complex
+pairwise terms into MRF becomes impractical, limiting the
+performance of the entire system.
+This work proposes a novel Deep Parsing Network
+(DPN), which is able to jointly train CNN and complex
+pairwise terms.
+DPN has several appealing properties.
+(1) DPN solves MRF with a single feed-forward pass,
+ 
+reducing computational cost and meanwhile maintaining
+high performance. Speciﬁcally, DPN models unary terms
+by extending the VGG-16 network (VGG16) pretrained on ImageNet, while additional layers are carefully
+designed to model complex pairwise terms. Learning of
+these terms is transformed into deterministic end-to-end
+computation by BP, instead of embedding MF into BP as
+ did. Although MF can be represented by RNN ,
+it needs to recurrently compute the forward pass so as to
+achieve good performance and thus is time-consuming, e.g.
+each forward pass contains hundred thousands of weights.
+DPN approximates MF by using only one iteration. This
+is made possible by joint learning strong unary terms and
+rich pairwise information.
+(2) Pairwise terms determine
+the graphical structure. In previous works, if the former is
+changed, so is the latter as well as its inference procedure.
+But with DPN, modifying the complexity of pairwise terms,
+e.g. range of pixels and contexts, is as simple as modifying
+the receptive ﬁelds of convolutions, without varying BP.
+DPN is able to represent multiple types of pairwise terms,
+making many previous works as its special
+cases. (3) DPN approximates MF with convolutional and
+pooling operations, which can be speeded up by lowrank approximation and easily parallelized in a
+Graphical Processing Unit (GPU).
+Our contributions are summarized as below.
+novel DPN is proposed to jointly train VGG16 and rich
+pairwise information, i.e. mixture of label contexts and
+high-order relations. Compared to existing deep models,
+DPN can approximate MF with only one iteration, reducing
+computational cost but still maintaining high performance.
+(2) We disclose that DPN represents multiple types of
+MRFs, making many previous works such as RNN and
+DeepLab as its special cases. (3) Extensive experiments
+investigate which component of DPN is crucial to achieve
+high performance. A single DPN model achieves a new
+state-of-the-art accuracy of 77.5% on the PASCAL VOC
+2012 test set. (4) We analyze the time complexity of
+DPN on GPU.
+2. Our Approach
+DPN learns MRF by extending VGG16 to model unary
+terms and additional layers are carefully designed for pairwise terms.
+Overview MRF is an undirected graph where each
+node represents a pixel in an image I, and each edge represents relation between pixels. Each node is associated with
+a binary latent variable, yi
+u ∈{0, 1}, indicating whether
+a pixel i has label u. We have ∀u ∈L = {1, 2, ..., l},
+representing a set of l labels. The energy function of MRF
+is written as
+where y, V, and E denote a set of latent variables, nodes,
+and edges, respectively. Φ(yu
+i ) is the unary term, measuring
+the cost of assigning label u to the i-th pixel. For instance,
+if pixel i belongs to the ﬁrst category other than the second
+one, we should have Φ(y1
+i ) < Φ(y2
+i ). Moreover, Ψ(yu
+is the pairwise term that measures the penalty of assigning
+labels u, v to pixels i, j respectively.
+Intuitively, the unary terms represent per-pixel classiﬁcations, while the pairwise terms represent a set of smoothness
+constraints. The unary term in Eqn.(1) is typically deﬁned
+i ) = −ln p(yu
+where p(yu
+i = 1|I) indicates the probability of the presence
+of label u at pixel i, modeling by VGG16.
+To simplify
+discussions, we abbreviate it as pu
+i . The smoothness term
+can be formulated as
+j ) = µ(u, v)d(i, j),
+where the ﬁrst term learns the penalty of global cooccurrence between any pair of labels, e.g. the output value
+of µ(u, v) is large if u and v should not coexist, while the
+second term calculates the distances between pixels, e.g.
+d(i, j) = ω1∥Ii −Ij∥2 + ω2∥[xi yi] −[xj yj]∥2. Here,
+Ii indicates a feature vector such as RGB values extracted
+from the i-th pixel, x, y denote coordinates of pixels’
+positions, and ω1, ω2 are the constant weights.
+implies that if two pixels are close and look similar, they
+are encouraged to have labels that are compatible. It has
+been adopted by most of the recent deep models 
+for semantic image segmentation.
+However, Eqn.(3) has two main drawbacks. First, its
+ﬁrst term captures the co-occurrence frequency of two
+labels in the training data, but neglects the spatial context
+between objects. For example, ‘person’ may appear beside
+‘table’, but not at its bottom.
+This spatial context is a
+mixture of patterns, as different object conﬁgurations may
+appear in different images.
+Second, it deﬁnes only the
+pairwise relations between pixels, missing their high-order
+interactions.
+To resolve these issues, we deﬁne the smoothness term
+by leveraging rich information between pixels, which is one
+of the advantages of DPN over existing deep models. We
+λkµk(i, u, j, v)
+The ﬁrst term in Eqn.(4) learns a mixture of local label
+contexts, penalizing label assignment in a local region,
+where K is the number of components in mixture and λk
+is an indicator, determining which component is activated.
+We deﬁne λk ∈{0, 1} and PK
+k=1 λk = 1. An intuitive
+𝝁𝝁𝒌𝒌𝒊𝒊, 𝒖𝒖, 𝒋𝒋, 𝒗𝒗
+𝝁𝝁𝒊𝒊, 𝒖𝒖, 𝒋𝒋, 𝒗𝒗
+𝒅𝒅𝒋𝒋, 𝒛𝒛𝒒𝒒𝒗𝒗,
+𝒋𝒋 𝒛𝒛∈𝜨𝜨𝒋𝒋
+𝝁𝝁𝒌𝒌𝒊𝒊, 𝒖𝒖, 𝒋𝒋, 𝒗𝒗,
+Figure 1: (a) Illustration of the pairwise terms in DPN. (b) explains the
+label contexts. (c) and (d) show that mean ﬁeld update of DPN corresponds
+to convolutions.
+illustration is given in Fig.1 (b), where the dots in red and
+blue represent a center pixel i and its neighboring pixels j,
+i.e. j ∈Ni, and (i, u) indicates assigning label u to pixel i.
+Here, µ(i, u, j, v) outputs labeling cost between (i, u) and
+(j, v) with respect to their relative positions. For instance,
+if u, v represent ‘person’ and ‘table’, the learned penalties
+of positions j that are at the bottom of center i should be
+large. The second term basically models a triple penalty,
+which involves pixels i, j, and j’s neighbors, implying that
+if (i, u) and (j, v) are compatible, then (i, u) should be also
+compatible with j’s nearby pixels (z, v), ∀z ∈Nj, as shown
+in Fig.1 (a).
+Learning parameters (i.e. weights of VGG16 and costs
+of label contexts) in Eqn.(1) is to minimize the distances
+between ground-truth label map and y, which needs to be
+inferred subject to the smoothness constraints.
+Inference Overview Inference of Eqn.(1) can be
+distribution
+Z exp{−E(y)},
+fully-factorized
+proposal distribution, Q(y) = Q
+i is a variable we need to estimate, indicating the
+predicted probability of assigning label u to pixel i. To
+simplify the discussion, we denote Φ(yu
+i ) and Ψ(yu
+ij , respectively. Q(y) is typically optimized by
+minimizing a free energy function of MRF,
+Speciﬁcally, the ﬁrst term in Eqn.(5) characterizes the cost
+of each pixel’s predictions, while the second term characterizes the consistencies of predictions between pixels.
+The last term is the entropy, measuring the conﬁdences of
+predictions. To estimate qu
+i , we differentiate Eqn.(5) with
+respect to it and equate the resulting expression to zero. We
+then have a closed-form expression,
+such that the predictions for each pixel is independently
+attained by repeating Eqn.(6), which implies whether pixel i
+have label u is proportional to the estimated probabilities of
+all its neighboring pixels, weighted by their corresponding
+smoothness penalties.
+Substituting Eqn.(4) into (6), we
+µk(i, u, j, v)
+where each qu
+i is initialized by the corresponding pu
+Eqn.(2), which is the unary prediction of VGG16. Eqn.(7)
+satisﬁes the smoothness constraints.
+In the following, DPN approximates one iteration of
+Eqn.(7) by decomposing it into two steps. Let Qv be a
+predicted label map of the v-th category. In the ﬁrst step
+as shown in Fig.1 (c), we calculate the triple penalty term
+in (7) by applying a m × m ﬁlter on each position j, where
+each element of this ﬁlter equals d(j, z)qv
+j , resulting in Qv′.
+Apparently, this step smoothes the prediction of pixel j with
+respect to the distances between it and its neighborhood. In
+the second step as illustrated in (d), the labeling contexts
+can be obtained by convolving Qv′ with a n × n ﬁlter, each
+element of which equals µk(i, u, j, v), penalizing the triple
+relations as shown in (a).
+3. Deep Parsing Network
+This section describes the implementation of Eq.(7) in
+a Deep Parsing Network (DPN). DPN extends VGG16 as
+unary term and additional layers are designed to approximate one iteration of MF inference as the pairwise term.
+The hyper-parameters of VGG16 and DPN are compared in
+VGG16 As listed in Table 1 (a), the ﬁrst row represents
+the name of layer and ‘x-y’ in the second row represents
+the size of the receptive ﬁeld and the stride of convolution,
+respectively. For instance, ‘3-1’ in the convolutional layer
+implies that the receptive ﬁeld of each ﬁlter is 3×3 and it
+is applied on every single pixel of an input feature map,
+while ‘2-2’ in the max-pooling layer indicates each feature
+map is pooled over every other pixel within a 2×2 local
+region. The last three rows show the number of the output
+feature maps, activation functions, and the size of output
+(a) VGG16: 224×224×3 input image; 1×1000 output labels
+ﬁlter–stride
+activation
+(b) DPN: 512×512×3 input image; 512×512×21 output label maps
+ﬁlter–stride
+activation
+Table 1: The comparisons between the network architectures of VGG16 and DPN, as shown in (a) and (b) respectively. Each table contains ﬁve rows,
+representing the ‘name of layer’, ‘receptive ﬁeld of ﬁlter’−‘stride’, ‘number of output feature maps’, ‘activation function’ and ‘size of output feature
+maps’, respectively. Furthermore, ‘conv’, ‘lconv’,‘max’, ‘bmin’, ‘fc’, and ‘sum’ represent the convolution, local convolution, max pooling, block min
+pooling, fully connection, and summation, respectively. Moreover, ‘relu’, ‘idn’, ‘soft’, ‘sigm’, and ‘lin’ represent the activation functions, including rectiﬁed
+linear unit , identity, softmax, sigmoid, and linear, respectively.
+feature maps, respectively. As summarized in Table 1 (a),
+VGG16 contains thirteen convolutional layers, ﬁve maxpooling layers, and three fully-connected layers.
+layers can be partitioned into twelve groups, each of which
+covers one or more homogenous layers. For example, the
+ﬁrst group comprises two convolutional layers with 3×3
+receptive ﬁeld and 64 output feature maps, each of which
+is 224×224.
+3.1. Modeling Unary Terms
+To make full use of VGG16, which is pre-trained by
+ImageNet, we adopt all its parameters to initialize the
+ﬁlters of the ﬁrst ten groups of DPN. To simplify the
+discussions, we take PASCAL VOC 2012 (VOC12) as
+an example. Note that DPN can be easily adapted to any
+other semantic image segmentation dataset by modifying
+its hyper-parameters. VOC12 contains 21 categories and
+each image is rescaled to 512×512 in training. Therefore,
+DPN needs to predict totally 512×512×21 labels, i.e. one
+label for each pixel. To this end, we extends VGG16 in two
+In particular, let ai and bi denote the i-th group in Table
+1 (a) and (b), respectively. First, we increase resolution of
+VGG16 by removing its max pooling layers at a8 and a10,
+because most of the information is lost after pooling, e.g.
+a10 reduces the input size by 32 times, i.e. from 224×224
+to 7×7. As a result, the smallest size of feature map in
+DPN is 64×64, keeping much more information compared
+with VGG16. Note that the ﬁlters of b8 are initialized as
+the ﬁlters of a9, but the 3×3 receptive ﬁeld is padded into
+5×5 as shown in Fig.2 (a), where the cells in white are the
+original values of the a9’s ﬁlter and the cells in gray are
+zeros. This is done because a8 is not presented in DPN, such
+that each ﬁlter in a9 should be convolved on every other
+pixel of a7. To maintain the convolution with one stride, we
+pad the ﬁlters with zeros. Furthermore, the feature maps in
+b11 are up-sampled to 512×512 by bilinear interpolation.
+21 channels
+convolution
+Figure 2: (a) and (b) show the padding of the ﬁlters. (c) illustrates local
+convolution of b12.
+Since DPN is trained with label maps of the entire images,
+the missing information in the preceding layers of b11 can
+be recovered by BP.
+Second, two fully-connected layers at a11 are transformed to two convolutional layers at b9 and b10, respectively. As shown in Table 1 (a), the ﬁrst ‘fc’ layer learns
+7×7×512×4096 parameters, which can be altered to 4096
+ﬁlters in b9, each of which is 25×25×512. Since a8 and a10
+have been removed, the 7×7 receptive ﬁeld is padded into
+25×25 similar as above and shown in Fig.2 (b). The second
+‘fc’ layer learns a 4096×4096 weight matrix, corresponding
+to 4096 ﬁlters in b10. Each ﬁlter is 1×1×4096.
+Overall, b11 generates the unary labeling results, producing twenty-one 512×512 feature maps, each of which
+represents the probabilistic label map of each category.
+3.2. Modeling Smoothness Terms
+The last four layers of DPN, i.e. from b12 to b15, are
+carefully designed to smooth the unary labeling results.
+• b12 As listed in Table 1 (b), ‘lconv’ in b12 indicates
+a locally convolutional layer, which is widely used in
+face recognition to capture different information
+from different facial positions. Similarly, distinct spatial
+positions of b12 have different ﬁlters, and each ﬁlter is
+shared across 21 input channels, as shown in Fig.2 (c). It
+can be formulated as
+(j,v) = lin(k(j,v) ∗o11
+(a) Convolution of b13
+. (𝒊𝒊, 𝒖𝒖= 𝟏𝟏)
+(b) Pooling in b14
+21 channels
+𝒖𝒖∈{𝟏𝟏, … , 𝟐𝟐𝟐𝟐}
+Figure 3: (a) and (b) illustrates the convolutions of b13 and the poolings
+where lin(x) = ax + b representing the linear activation
+function, ‘∗’ is the convolutional operator, and k(j,v) is
+a 50×50×1 ﬁlter at position j of channel v.
+k(j,1) = k(j,2) = ... = k(j,21) shared across 21 channels.
+(j,v) indicates a local patch in b11, while o12
+(j,v) is the
+corresponding output of b12.
+Since b12 has stride one,
+the result of kj ∗o11
+(j,v) is a scalar. In summary, b12 has
+512×512 different ﬁlters and produces 21 output feature
+Eqn.(8) implements the triple penalty of Eqn.(7). Recall
+that each output feature map of b11 indicates a probabilistic
+label map of a speciﬁc object appearing in the image. As
+a result, Eqn.(8) suggests that the probability of object v
+presented at position j is updated by weighted averaging
+over the probabilities at its nearby positions. Thus, as shown
+in Fig.1 (c), o11
+(j,v) corresponds to a patch of Qv centered at
+j, which has values pv
+z, ∀z ∈N 50×50
+. Similarly, k(j,v)
+is initialized by d(j, z)pv
+j, implying each ﬁlter captures
+dissimilarities between positions. These ﬁlters remain ﬁxed
+during BP, other than learned as in conventional CNN1.
+• b13 As shown in Table 1 (b) and Fig.3 (a), b13 is
+a convolutional layer that generates 105 feature maps by
+using 105 ﬁlters of size 9×9×21. For example, the value
+of (i, u = 1) is attained by applying a 9×9×21 ﬁlter at
+positions {(j, v = 1, ..., 21)}. In other words, b13 learns
+a ﬁlter for each category to penalize the probabilistic label
+maps of b12, corresponding to the local label contexts in
+Eqn.(7) by assuming K = 5 and n = 9, as shown in Fig.1
+• b14 As illustrated in Table 1 and Fig.3 (b), b14 is a
+block min pooling layer that pools over every 1×1 region
+with one stride across every 5 input channels, leading to
+21 output channels, i.e. 105÷5=21.
+b14 activates the
+contextual pattern with the smallest penalty.
+• b15 This layer combines both the unary and smoothness terms by summing the outputs of b11 and b14 in an
+1Each ﬁlter in b12 actually represents a distance metric between pixels
+in a speciﬁc region. In VOC12, the patterns of all the training images
+in a speciﬁc region are heterogenous, because of various object shapes.
+Therefore, we initialize each ﬁlter with Euclidean distance. Nevertheless,
+Eqn.(8) is a more general form than the triple penalty in Eqn.(7), i.e. ﬁlters
+in (8) can be automatically learned from data, if the patterns in a speciﬁc
+region are homogenous, such as face or human images, which have more
+regular shapes than images in VOC12.
+element-wise manner similar to Eqn.(7),
+(i,u)) −o14
+(i,u)) −o14
+where probability of assigning label u to pixel i is normalized over all the labels.
+Relation to Previous Deep Models Many existing deep
+models such as employed Eqn.(3) as the pairwise
+terms, which are the special cases of Eqn.(7). To see this,
+let K=1 and j=i, the right hand side of (7) reduces to
+λ1µ1(i, u, i, v)
+where µ(u, v) and d(i, z) represent the global label cooccurrence and pairwise pixel similarity of Eqn.(3), respectively. This is because λ1 is a constant, d(i, i) = 0, and
+µ(i, u, i, v) = µ(u, v). Eqn.(10) is the corresponding MF
+update equation of (3).
+3.3. Learning Algorithms
+Learning The ﬁrst ten groups of DPN are initialized
+by VGG162, while the last four groups can be initialized
+randomly. DPN is then ﬁne-tuned in an incremental manner
+with four stages. During ﬁne-tuning, all these stages solve
+the pixelwise softmax loss , but updating different sets
+of parameters.
+First, we add a loss function to b11 and ﬁne-tune the
+weights from b1 to b11 without the last four groups, in
+order to learn the unary terms.
+Second, to learn the
+triple relations, we stack b12 on top of b11 and update its
+parameters (i.e. ω1, ω2 in the distance measure), but the
+weights of the preceding groups (i.e. b1∼b11) are ﬁxed.
+Third, b13 and b14 are stacked onto b12 and similarly,
+their weights are updated with all the preceding parameters
+ﬁxed, so as to learn the local label contexts. Finally, all the
+parameters are jointly ﬁne-tuned.
+Implementation DPN transforms Eqn.(7) into convolutions and poolings in the groups from b12 to b15, such
+that ﬁltering at each pixel can be performed in a parallel
+manner. Assume we have f input and f ′ output feature
+maps, N × N pixels, ﬁlters with s × s receptive ﬁeld, and a
+mini-batch with M samples. b12 takes a total f ·N 2 ·s2 ·M
+operations, b13 takes f · f ′ · N 2 · s2 · M operations,
+while both b14 and b15 require f · N 2 · M operations.
+For example, when M=10 as in our experiment, we have
+21×5122×502×10=1.3×1011 operations in b12, which
+2We use the released VGG16 model, which is public available at
+ 
+has the highest complexity in DPN. We parallelize these
+operations using matrix multiplication on GPU as did,
+b12 can be computed within 30ms. The total runtime of the
+last four layers of DPN is 75ms. Note that convolutions in
+DPN can be further speeded up by low-rank decompositions
+ of the ﬁlters and model compressions .
+However, direct calculation of Eqn.(7) is accelerated by
+fast Gaussian ﬁltering . For a mini-batch of ten 512×512
+images, a recently optimized implementation takes 12
+seconds on CPU to compute one iteration of (7). Therefore,
+DPN makes (7) easier to be parallelized and speeded up.
+4. Experiments
+Dataset We evaluate the proposed approach on the PAS-
+CAL VOC 2012 (VOC12) dataset, which contains 20
+object categories and one background category. Following
+previous works such as , we employ 10, 582
+images for training, 1, 449 images for validation, and 1, 456
+images for testing.
+Evaluation Metrics All existing works employed mean
+pixelwise intersection-over-union (denoted as mIoU) 
+to evaluate their performance. To fully examine the effectiveness of DPN, we introduce another three metrics, including tagging accuracy (TA), localization accuracy (LA),
+and boundary accuracy (BA). (1) TA compares the predicted image-level tags with the ground truth tags, calculating the accuracy of multi-class image classiﬁcation. (2) LA
+evaluates the IoU between the predicted object bounding
+boxes3 and the ground truth bounding boxes (denoted as
+bIoU), measuring the precision of object localization. (3)
+For those objects that have been correctly localized, we
+compare the predicted object boundary with the ground
+truth boundary, measuring the precision of semantic boundary similar to .
+Comparisons
+bestperforming methods on VOC12, including FCN ,
+Zoom-out , DeepLab , WSSL , BoxSup ,
+Piecewise , and RNN .
+All these methods are
+based on CNNs and MRFs, and trained on VOC12 data
+following . They can be grouped according to different
+(1) joint-train:
+Piecewise and RNN; (2) w/o
+joint-train: DeepLab, WSSL, FCN, and BoxSup; (3) pretrain on COCO: RNN, WSSL, and BoxSup.
+and the second groups are the methods with and without
+joint training CNNs and MRFs, respectively. Methods in
+the last group also employed MS-COCO to pre-train
+deep models. To conduct a comprehensive comparison, the
+performance of DPN are reported on both settings, i.e., with
+and without pre-training on COCO.
+In the following, Sec.4.1 investigates the effectiveness of
+different components of DPN on the VOC12 validation set.
+3They are the bounding boxes of the predicted segmentation regions.
+Receptive Field
+(a) Comparisons between different receptive ﬁelds of b12.
+Receptive Field
+9×9 mixtures
+(b) Comparisons between different receptive ﬁelds of b13.
+Pairwise Terms
+DeepLab 
+improvement (%)
+(c) Comparing pairwise terms of different methods.
+Table 2: Ablation study of hyper-parameters.
+Sec.4.2 compares DPN with the state-of-the-art methods on
+the VOC12 test set.
+4.1. Effectiveness of DPN
+All the models evaluated in this section are trained and
+tested on VOC12.
+Triple Penalty
+The receptive ﬁeld of b12 indicates
+the range of triple relations for each pixel. We examine
+different settings of the receptive ﬁelds, including ‘10×10’,
+‘50×50’, and ‘100×100’, as shown in Table 2 (a), where
+‘50×50’ achieves the best mIoU, which is sightly better
+than ‘100×100’. For a 512×512 image, this result implies
+that 50×50 neighborhood is sufﬁcient to capture relations
+between pixels, while smaller or larger regions tend to
+under-ﬁt or over-ﬁt the training data. Moreover, all models
+of triple relations outperform the ‘baseline’ method that
+models dense pairwise relations, i.e. VGG16+denseCRF
+Label Contexts
+Receptive ﬁeld of b13 indicates the
+range of local label context. To evaluate its effectiveness,
+we ﬁx the receptive ﬁeld of b12 as 50×50. As summarized
+in Table 2 (b), ‘9×9 mixtures’ improves preceding settings
+by 1.7, 0.5, and 0.2 percent respectively. We observe large
+gaps exist between ‘1×1’ and ‘5×5’. Note that the 1×1
+receptive ﬁeld of b13 corresponds to learning a global label
+co-occurrence without considering local spatial contexts.
+Table 2 (c) shows that the pairwise terms of DPN are more
+effective than DSN and DeepLab4.
+More importantly, mIoU of all the categories can be
+improved when increasing the size of receptive ﬁeld and
+learning a mixture. Speciﬁcally, for each category, the improvements of the last three settings in Table 2 (b) over the
+ﬁrst one are 1.2±0.2, 1.5±0.2, and 1.7±0.3, respectively.
+We also visualize the learned label compatibilities and
+contexts in Fig.4 (a) and (b), respectively. (a) is obtained
+by summing each ﬁlter in b13 over 9×9 region, indicating
+how likely a column object would present when a row
+object is presented. Blue represents high possibility. (a)
+4The other deep models such as RNN and Piecewise did not report the
+exact imrprovements after combining unary and pairwise terms.
+train : bkg
+person : mbike
+bottle : bottle
+chair : person
+Figure 4: Visualization of (a) learned label compatibility (b) learned
+contextual information. (Best viewed in color)
+(a) Original Image
+(d) +Triple Penalty
+(c) Unary Term
+(e) +Label Contexts
+(f) +Joint Tuning
+(b) Ground Truth
+Figure 5: Step-by-step visualization of DPN. (Best viewed in color)
+is non-symmetry. For example, when ‘horse’ is presented,
+‘person’ is more likely to present than the other objects.
+Also, ‘chair’ is compatible with ‘table’ and ‘bkg’ is compatible with all the objects. (b) visualizes some contextual
+patterns, where ‘A:B’ indicates that when ‘A’ is presented,
+where ‘B’ is more likely to present. For example, ‘bkg’ is
+around ‘train’, ‘motor bike’ is below ‘person’, and ‘person’
+is sitting on ‘chair’.
+Incremental Learning As discussed in Sec.3.3, DPN is
+trained in an incremental manner. The right hand side of Table 3 (a) demonstrates that each stage leads to performance
+gain compared to its previous stage. For instance, ‘triple
+penalty’ improves ‘unary term’ by 2.3 percent, while ‘label
+contexts’ improves ‘triple penalty’ by 1.8 percent. More
+importantly, joint ﬁne-tuning all the components (i.e. unary
+terms and pairwise terms) in DPN achieves another gain
+of 1.3 percent. A step-by-step visualization is provided in
+We also compare ‘incremental learning’ with ‘joint
+learning’, which ﬁne-tunes all the components of DPN at
+the same time. The training curves of them are plotted in
+Fig.6 (a), showing that the former leads to higher and more
+stable accuracies with respect to different iterations, while
+the latter may get stuck at local minima. This difference
+is easy to understand, because incremental learning only
+introduces new parameters until all existing parameters
+Number of Training Iterations
+Incremental Learning
+Joint Learning
+Number of MF Iterations
+DPN pairwise terms
+denseCRF 
+Ablation study of (a) training strategy (b) required MF
+iterations. (Best viewed in color)
+mean BBox IoU
+mean Pixel Acc
+mean Tag Acc
+Unary Term
+Triple Penalty
+Label Contexts
+Joint Tuning
+69.5%70.1%
+93.1%93.1%
+Figure 7: Stage-wise analysis of (a) mean tagging accuracy (b) mean
+localization accuracy (c) mean boundary accuracy.
+have been ﬁne-tuned.
+One-iteration MF DPN approximates one iteration of
+MF. Fig.6 (b) illustrates that DPN reaches a good accuracy
+with one MF iteration. A CRF with dense pairwise
+edges needs more than 5 iterations to converge.
+has a large gap compared to DPN. Note that the existing
+deep models such as required 5∼10 iterations to
+converge as well.
+Different Components Modeling Different Information We further evaluate DPN using three metrics. The
+results are given in Fig.7. For example, (a) illustrates that
+the tagging accuracy can be improved in the third stage, as
+it captures label co-occurrence with a mixture of contextual
+patterns. However, TA is decreased a little after the ﬁnal
+Since joint tuning maximizes segmentation accuracies by optimizing all components together, extremely
+small objects, which rarely occur in VOC training set,
+are discarded.
+As shown in (b), accuracies of object
+localization are signiﬁcantly improved in the second and the
+ﬁnal stages. This is intuitive because the unary prediction
+can be reﬁned by long-range and high-order pixel relations,
+and joint training further improves results.
+(c) discloses
+that the second stage also captures object boundary, since
+it measures dissimilarities between pixels.
+Per-class Analysis
+Table 3 (a) reports the per-class
+accuracies of four evaluation metrics, where the ﬁrst four
+rows represent the mIoU of four stages, while the last
+three rows represent TA, LA, and BA, respectively.
+have several valuable observations, which motivate future
+researches. (1) Joint training beneﬁts most of the categories,
+except animals such as ‘bird’, ‘cat’, and ‘cow’.
+instances of these categories are extremely small so that
+bottle bus
+horse mbike person plant
+sheep sofa
+Unary Term (mIoU)
++ Triple Penalty
++ Label Contexts
++ Joint Tuning
+TA (tagging Acc.)
+BA (boundary Acc.)
+(a) Per-class results on VOC12 val.
+bottle bus
+horse mbike person plant
+sheep sofa
+Zoom-out 
+Piecewise 
+DeepLab 
+WSSL† 
+BoxSup† 
+(b) Per-class results on VOC12 test. The approaches pre-trained on COCO are marked with †.
+Table 3: Per-class results on VOC12.
+joint training discards them for smoother results.
+Training DPN with pixelwise label maps implicitly models
+image-level tags, since it achieves a high averaged TA of
+(3) Object localization always helps.
+for the object with complex boundary such as ‘bike’, its
+mIoU is low even it can be localized, e.g. ‘bike’ has
+high LA but low BA and mIoU. (4) Failures of different
+categories have different factors. With these three metrics,
+they can be easily identiﬁed. For example, the failures of
+‘chair’, ‘table’, and ‘plant’ are caused by the difﬁculties
+to accurately capture their bounding boxes and boundaries.
+Although ‘bottle’ and ‘tv’ are also difﬁcult to localize, they
+achieve moderate mIoU because of their regular shapes. In
+other words, mIoU of ‘bottle’ and ‘tv’ can be signiﬁcantly
+improved if they can be accurately localized.
+4.2. Overall Performance
+As shown in Table 3 (b), we compare DPN with the
+best-performing methods5 on VOC12 test set based on two
+settings, i.e. with and without pre-training on COCO. The
+approaches pre-trained on COCO are marked with ‘†’. We
+evaluate DPN on several scales of the images and then
+average the results following .
+DPN outperforms all the existing methods that were
+trained on VOC12, but DPN needs only one MF iteration
+to solve MRF, other than 10 iterations of RNN, DeepLab,
+and Piecewise. By averaging the results of two DPNs, we
+achieve 74.1% accuracy on VOC12 without outside training
+As discussed in Sec.3.3, MF iteration is the most
+complex step even when it is implemented as convolutions.
+Therefore, DPN at least reduces 10× runtime compared to
+5The results of these methods were presented in either the published
+papers or arXiv pre-prints.
+previous works.
+Following , we pre-train DPN with COCO, where
+20 object categories that are also presented in VOC12 are
+selected for training. A single DPN† has achieved 77.5%
+mIoU on VOC12 test set. As shown in Table 3 (b), we
+observe that DPN† achieves best performances on more
+than half of the object classes. Please refer to the appendices
+for visual quality comparisons.
+5. Conclusion
+We proposed Deep Parsing Network (DPN) to address
+semantic image segmentation, which has several appealing
+properties. First, DPN uniﬁes the inference and learning
+of unary term and pairwise terms in a single convolutional
+network. No iterative inference are required during backpropagation.
+Second, high-order relations and mixtures
+of label contexts are incorporated to its pairwise terms
+modeling, making existing works serve as special cases.
+Third, DPN is built upon conventional operations of CNN,
+thus easy to be parallelized and speeded up.
+DPN achieves state-of-the-art performance on VOC12,
+and multiple valuable facts about semantic image segmention are revealed through extensive experiments.
+directions include investigating the generalizability of DPN
+to more challenging scenarios, e.g. large number of object
+classes and substantial appearance/scale variations.

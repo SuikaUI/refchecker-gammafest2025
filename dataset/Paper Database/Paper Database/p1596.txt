@@ -1,0 +1,752 @@
+Google’s Multilingual Neural Machine Translation System:
+Enabling Zero-Shot Translation
+Melvin Johnson∗, Mike Schuster∗, Quoc V. Le, Maxim Krikun,
+Yonghui Wu, Zhifeng Chen, Nikhil Thorat, Fernanda Viégas,
+Martin Wattenberg, Greg Corrado, Macduff Hughes, Jeffrey Dean
+{melvinp,schuster}@google.com
+We propose a simple solution to use a single
+Neural Machine Translation (NMT) model to
+translate between multiple languages. Our solution requires no changes to the model architecture from a standard NMT system but instead
+introduces an artiﬁcial token at the beginning
+of the input sentence to specify the required
+target language. Using a shared wordpiece vocabulary, our approach enables Multilingual
+NMT systems using a single model. On the
+WMT’14 benchmarks, a single multilingual
+model achieves comparable performance for
+English→French and surpasses state-of-theart results for English→German. Similarly,
+a single multilingual model surpasses stateof-the-art results for French→English and
+German→English on WMT’14 and WMT’15
+benchmarks, respectively. On production corpora, multilingual models of up to twelve
+language pairs allow for better translation of
+many individual pairs. Our models can also
+learn to perform implicit bridging between language pairs never seen explicitly during training, showing that transfer learning and zeroshot translation is possible for neural translation. Finally, we show analyses that hints at a
+universal interlingua representation in our models and also show some interesting examples
+when mixing languages.
+Introduction
+End-to-end
+Translation
+(NMT) is an approach to machine
+∗Corresponding authors.
+translation that has rapidly gained adoption in many
+large-scale settings .
+Almost all such
+systems are built for a single language pair — so far
+there has not been a sufﬁciently simple and efﬁcient
+way to handle multiple language pairs using a single
+model without making signiﬁcant changes to the
+basic NMT architecture.
+In this paper we introduce a simple method to
+translate between multiple languages using a single
+model, taking advantage of multilingual data to improve NMT for all languages involved. Our method
+requires no change to the traditional NMT model
+architecture. Instead, we add an artiﬁcial token to
+the input sequence to indicate the required target language, a simple amendment to the data only. All
+other parts of the system — encoder, decoder, attention, and shared wordpiece vocabulary as described
+in Wu et al., — stay exactly the same. This
+method has several attractive beneﬁts:
+• Simplicity: Since no changes are made to the
+architecture of the model, scaling to more languages is trivial — any new data is simply
+added, possibly with over- or under-sampling
+such that all languages are appropriately represented, and used with a new token if the target language changes. Since no changes are
+made to the training procedure, the mini-batches
+for training are just sampled from the overall
+mixed-language training data just like for the
+single-language case. Since no a-priori decisions about how to allocate parameters for different languages are made, the system adapts
+automatically to use the total number of param-
+Transactions of the Association for Computational Linguistics, vol. 5, pp. 339–351, 2017. Action Editor: Colin Cherry.
+Submission batch: 11/2016; Revision batch: 3/2017; Published 10/2017.
+c⃝2017 Association for Computational Linguistics. Distributed under a CC-BY 4.0 license.
+Downloaded from by guest on 26 March 2025
+eters efﬁciently to minimize the global loss. A
+multilingual model architecture of this type also
+simpliﬁes production deployment signiﬁcantly
+since it can cut down the total number of models necessary when dealing with multiple languages. Note that at Google, we support a total
+of over 100 languages as source and target, so
+theoretically 1002 models would be necessary
+for the best possible translations between all
+pairs, if each model could only support a single
+language pair. Clearly this would be problematic in a production environment. Even when
+limiting to translating to/from English only, we
+still need over 200 models. Finally, batching together many requests from potentially different
+source and target languages can signiﬁcantly
+improve efﬁciency of the serving system. In
+comparison, an alternative system that requires
+language-dependent encoders, decoders or attention modules does not have any of the above
+advantages.
+• Low-resource language improvements: In a
+multilingual NMT model, all parameters are
+implicitly shared by all the language pairs being
+modeled. This forces the model to generalize
+across language boundaries during training. It
+is observed that when language pairs with little
+available data and language pairs with abundant
+data are mixed into a single model, translation
+quality on the low resource language pair is
+signiﬁcantly improved.
+• Zero-shot translation: A surprising beneﬁt of
+modeling several language pairs in a single
+model is that the model can learn to translate
+between language pairs it has never seen in this
+combination during training (zero-shot translation) — a working example of transfer learning within neural translation models. For example, a multilingual NMT model trained with
+Portuguese→English and English→Spanish examples can generate reasonable translations for
+Portuguese→Spanish although it has not seen
+any data for that language pair. We show that the
+quality of zero-shot language pairs can easily be
+improved with little additional data of the language pair in question (a fact that has been previously conﬁrmed for a related approach which
+is discussed in more detail in the next section).
+In the remaining sections of this paper we ﬁrst
+discuss related work and explain our multilingual
+system architecture in more detail. Then, we go
+through the different ways of merging languages
+on the source and target side in increasing difﬁculty (many-to-one, one-to-many, many-to-many),
+and discuss the results of a number of experiments on
+WMT benchmarks, as well as on some of Google’s
+large-scale production datasets. We present results
+from transfer learning experiments and show how
+implicitly-learned bridging (zero-shot translation)
+performs in comparison to explicit bridging (i.e., ﬁrst
+translating to a common language like English and
+then translating from that common language into the
+desired target language) as typically used in machine
+translation systems. We describe visualizations of the
+new system in action, which provide early evidence
+of shared semantic representations (interlingua) between languages. Finally we also show some interesting applications of mixing languages with examples:
+code-switching on the source side and weighted target language mixing, and suggest possible avenues
+for further exploration.
+Related Work
+Interlingual translation is a classic method in machine
+translation . Despite its distinguished history, most practical applications of machine translation have focused
+on individual language pairs because it was simply
+too difﬁcult to build a single system that translates
+reliably from and to several languages.
+Neural Machine Translation (NMT) was shown to be a promising end-to-end learning approach in Sutskever et
+al. ; Bahdanau et al. ; Cho et al. 
+and was quickly extended to multilingual machine
+translation in various ways.
+An early attempt is the work in Dong et al., ,
+where the authors modify an attention-based encoderdecoder approach to perform multilingual NMT by
+adding a separate decoder and attention mechanism
+for each target language. In Luong et al., 
+multilingual training in a multitask learning setting
+is described. This model is also an encoder-decoder
+Downloaded from by guest on 26 March 2025
+network, in this case without an attention mechanism.
+To make proper use of multilingual data, they extend
+their model with multiple encoders and decoders,
+one for each supported source and target language.
+In Caglayan et al., the authors incorporate
+multiple modalities other than text into the encoderdecoder framework.
+Several other approaches have been proposed for
+multilingual training, especially for low-resource language pairs. For instance, in Zoph and Knight 
+a form of multi-source translation was proposed
+where the model has multiple different encoders and
+different attention mechanisms for each source language. However, this work requires the presence of a
+multi-way parallel corpus between all the languages
+involved, which is difﬁcult to obtain in practice. Most
+closely related to our approach is Firat et al., 
+in which the authors propose multi-way multilingual
+NMT using a single shared attention mechanism but
+multiple encoders/decoders for each source/target
+language. Recently in Lee et al., a CNNbased character-level encoder was proposed which is
+shared across multiple source languages. However,
+this approach can only perform translations into a
+single target language.
+Our approach is related to the multitask learning
+framework . Despite its promise, this
+framework has seen limited practical success in real
+world applications. In speech recognition, there have
+been many successful reports of modeling multiple
+languages using a single model for an extensive reference and references
+therein). Multilingual language processing has also
+shown to be successful in domains other than translation .
+There have been other approaches similar to ours
+in spirit, but used for very different purposes. In Sennrich et al., , the NMT framework has been
+extended to control the politeness level of the target
+translation by adding a special token to the source
+sentence. The same idea was used in Yamagishi et
+al., to add the distinction between ‘active’ and
+‘passive’ tense to the generated target sentence.
+Our method has an additional beneﬁt not seen in
+other systems: it gives the system the ability to perform zero-shot translation, meaning the system can
+translate from a source language to a target language
+without having seen explicit examples from this speciﬁc language pair during training. Zero-shot translation was the direct goal of Firat et al., .
+Although they were not able to achieve this direct
+goal, they were able to do what they call “zeroresource” translation by using their pre-trained multiway multilingual model and later ﬁne-tuning it with
+pseudo-parallel data generated by the model.
+should be noted that the difference between “zeroshot” and “zero-resource” translation is the additional
+ﬁne-tuning step which is required in the latter approach.
+To the best of our knowledge, our work is the ﬁrst
+to validate the use of true multilingual translation
+using a single encoder-decoder model, and is incidentally also already used in a production setting.
+It is also the ﬁrst work to demonstrate the possibility of zero-shot translation, a successful example of
+transfer learning in machine translation, without any
+additional steps.
+System Architecture
+The multilingual model architecture is identical to
+Google’s Neural Machine Translation (GNMT) system (with the optional addition of
+direct connections between encoder and decoder layers which we have used for some of our experiments).
+To be able to make use of multilingual data within
+a single system, we propose one simple modiﬁcation
+to the input data, which is to introduce an artiﬁcial
+token at the beginning of the input sentence to indicate the target language the model should translate
+to. For instance, consider the following En→Es pair
+of sentences:
+How are you? -> ¿Cómo estás?
+It will be modiﬁed to:
+<2es> How are you? -> ¿Cómo estás?
+to indicate that Spanish is the target language. Note
+that we don’t specify the source language – the model
+will learn this automatically.
+After adding the token to the input data, we train
+the model with all multilingual data consisting of
+multiple language pairs at once, possibly after overor undersampling some of the data to adjust for the
+relative ratio of the language data available. To address the issue of translation of unknown words and
+to limit the vocabulary for computational efﬁciency,
+Downloaded from by guest on 26 March 2025
+we use a shared wordpiece model across all the source and target data
+used for training, usually with 32,000 word pieces.
+The segmentation algorithm used here is very similar
+(with small differences) to Byte-Pair-Encoding (BPE)
+which was described in Gage and was also
+used in Sennrich et al., for machine translation. All training is carried out similar to and implemented in TensorFlow .
+In summary, this approach is the simplest among
+the alternatives that we are aware of. During training
+and inference, we only need to add one additional
+token to each sentence of the source data to specify
+the desired target language.
+Experiments and Results
+In this section, we apply our proposed method to
+train multilingual models in several different conﬁgurations. Since we can have models with either single
+or multiple source/target languages we test three interesting cases for mapping languages: 1) many to
+one, 2) one to many, and 3) many to many. As already discussed in Section 2, other models have been
+used to explore some of these cases already, but for
+completeness we apply our technique to these interesting use cases again to give a full picture of the
+effectiveness of our approach.
+We will also show results and discuss beneﬁts of
+bringing together many (un)related languages in a
+single large-scale model trained on production data.
+Finally, we will present our ﬁndings on zero-shot
+translation where the model learns to translate between pairs of languages for which no explicit parallel examples existed in the training data, and show
+results of experiments where adding additional data
+improves zero-shot translation quality further.
+Datasets, Training Protocols and
+Evaluation Metrics
+For WMT, we train our models on the WMT’14
+En→Fr and the WMT’14 En→De datasets. In both
+cases, we use newstest2014 as the test sets to be
+able to compare against previous work . For WMT Fr→En and De→En we
+use newstest2014 and newstest2015 as test sets. Despite training on WMT’14 data, which is somewhat
+smaller than WMT’15, we test our De→En model on
+newstest2015, similar to Luong et al., . The
+combination of newstest2012 and newstest2013 is
+used as the development set.
+In addition to WMT, we also evaluate the multilingual approach on some Google-internal large-scale
+production datasets representing a wide spectrum
+of languages with very distinct linguistic properties:
+En↔Japanese(Ja), En↔Korean(Ko), En↔Es, and
+En↔Pt. These datasets are two to three orders of
+magnitude larger than the WMT datasets.
+Our training protocols are mostly identical to those
+described in Wu et al., . We ﬁnd that some
+multilingual models take a little more time to train
+than single language pair models, likely because each
+language pair is seen only for a fraction of the training process. We use larger batch sizes with a slightly
+higher initial learning rate to speed up the convergence of these models.
+We evaluate our models using the standard BLEU
+score metric and to make our results comparable
+to previous work , we
+report tokenized BLEU score as computed by the
+multi-bleu.pl script, which can be downloaded
+from the public implementation of Moses.1
+To test the inﬂuence of varying amounts of training data per language pair we explore two strategies
+when building multilingual models: a) where we
+oversample the data from all language pairs to be
+of the same size as the largest language pair, and b)
+where we mix the data as is without any change. The
+wordpiece model training is done after the optional
+oversampling taking into account all the changed data
+ratios. For the WMT models we report results using
+both of these strategies. For the production models,
+we always balance the data such that the ratios are
+One beneﬁt of the way we share all the components
+of the model is that the mini-batches can contain data
+from different language pairs during training and inference, which are typically just random samples
+from the ﬁnal training and test data distributions.
+This is a simple way of preventing “catastrophic
+forgetting” - tendency for knowledge of previously
+1 
+Downloaded from by guest on 26 March 2025
+learned task(s) (e.g. language pair A) to be abruptly
+forgotten as information relevant to the current task
+(e.g. language pair B) is incorporated .
+Other approaches to multilingual translation require
+complex update scheduling mechanisms to prevent
+this effect .
+Many to One
+In this section we explore having multiple source languages and a single target language — the simplest
+way of combining language pairs. Since there is only
+a single target language no additional source token is
+required. We perform three sets of experiments:
+• The ﬁrst set of experiments is on the WMT
+datasets, where De→En and Fr→En are combined to train a multilingual model. Our baselines are two single language pair models:
+De→En and Fr→En trained independently. We
+perform these experiments once with oversampling and once without.
+• The second set of experiments is on production
+data where we combine Ja→En and Ko→En,
+with oversampling. The baselines are two single
+language pair models trained independently.
+• Finally, the third set of experiments is on production data where we combine Es→En and
+Pt→En, with oversampling. The baselines are
+again two single language pair models trained
+independently.
+All of the multilingual and single language pair models have the same total number of parameters as the
+baseline NMT models trained on a single language
+pair (using 1024 nodes, 8 LSTM layers and a shared
+wordpiece model vocabulary of 32k, a total of 255M
+parameters per model). A side effect of this equal
+choice of parameters is that it is presumably unfair to
+the multilingual models as the number of parameters
+available per language pair is reduced by a factor of
+N compared to the single language pair models, if
+N is the number of language pairs combined in the
+multilingual model. The multilingual model also has
+to handle the combined vocabulary of all the single
+models. We chose to keep the number of parameters
+constant for all models to simplify experimentation.
+We relax this constraint for some of the large-scale
+experiments shown further below.
+Table 1: Many to One: BLEU scores on for single language pair and multilingual models. ⋆: no oversampling
+WMT De→En⋆
+WMT Fr→En⋆
+Prod Ja→En
+Prod Ko→En
+Prod Es→En
+Prod Pt→En
+The results are presented in Table 1. For all experiments the multilingual models outperform the
+baseline single systems despite the above mentioned
+disadvantage with respect to the number of parameters available per language pair. One possible hypothesis explaining the gains is that the model has
+been shown more English data on the target side,
+and that the source languages belong to the same
+language families, so the model has learned useful
+generalizations.
+For the WMT experiments, we obtain a maximum
+gain of +1.27 BLEU for Fr→En. Note that the results on both the WMT test sets are better than other
+published state-of-the-art results for a single model,
+to the best of our knowledge.
+One to Many
+In this section, we explore the application of our
+method when there is a single source language and
+multiple target languages. Here we need to prepend
+the input with an additional token to specify the target
+language. We perform three sets of experiments very
+similar to the previous section.
+Table 2 summarizes the results when performing
+translations into multiple target languages. We see
+that the multilingual models are comparable to, and
+in some cases outperform, the baselines, but not always. We obtain a large gain of +0.9 BLEU for
+En→Es. Unlike the previous set of results, there are
+less signiﬁcant gains in this setting. This is perhaps
+due to the fact that the decoder has a more difﬁcult
+time translating into multiple target languages which
+may even have different scripts, which are combined
+into a single shared wordpiece vocabulary. Note that
+even for languages with entirely different scripts (e.g.,
+Korean and Japanese) there is signiﬁcant overlap in
+Downloaded from by guest on 26 March 2025
+wordpieces when real data is used, as often numbers,
+dates, names, websites, punctuation etc. are actually
+using a shared script (ASCII).
+Table 2: One to Many: BLEU scores for single language
+pair and multilingual models. ⋆: no oversampling
+WMT En→De⋆
+WMT En→Fr⋆
+Prod En→Ja
+Prod En→Ko
+Prod En→Es
+Prod En→Pt
+We observe that oversampling helps the smaller
+language pair (En→De) at the cost of lower quality
+for the larger language pair (En→Fr). The model
+without oversampling achieves better results on the
+larger language compared to the smaller one as expected. We also ﬁnd that this effect is more prominent
+on smaller datasets (WMT) and much less so on our
+much larger production datasets.
+Many to Many
+In this section, we report on experiments when there
+are multiple source languages and multiple target
+languages within a single model — the most difﬁcult
+setup. Since multiple target languages are given, the
+input needs to be prepended with the target language
+token as above.
+The results are presented in Table 3. We see that
+the multilingual production models with the same
+model size and vocabulary size as the single language
+models are quite close to the baselines – the average
+relative loss in BLEU score across all experiments is
+only approximately 2.5%.
+Although there are some signiﬁcant losses in quality from training many languages jointly using a
+model with the same total number of parameters as
+the single language pair models, these models reduce the total complexity involved in training and
+productionization.
+Large-scale Experiments
+This section shows the result of combining 12 production language pairs having a total of 3B parameters
+(255M per single model) into a single multilingual
+Table 3: Many to Many: BLEU scores for single language
+pair and multilingual models. ⋆: no oversampling
+WMT En→De⋆
+WMT En→Fr⋆
+WMT De→En⋆
+WMT Fr→En⋆
+Prod En→Ja
+Prod En→Ko
+Prod Ja→En
+Prod Ko→En
+Prod En→Es
+Prod En→Pt
+Prod Es→En
+Prod Pt→En
+model. A range of multilingual models were trained,
+starting from the same size as a single language pair
+model with 255M parameters (1024 nodes) up to
+650M parameters (1792 nodes). As above, the input
+needs to be prepended with the target language token. We oversample the examples from the smaller
+language pairs to balance the data as explained above.
+The results for single language pair models versus multilingual models with increasing numbers of
+parameters are summarized in Table 4. We ﬁnd that
+the multilingual models are on average worse than
+the single models (about 5.6% to 2.5% relative depending on size, however, some actually get better)
+and as expected the average difference gets smaller
+when going to larger multilingual models. It should
+be noted that the largest multilingual model we have
+trained has still about ﬁve times less parameters than
+the combined single models.
+The multilingual model also requires only roughly
+1/12-th of the training time (or computing resources)
+to converge compared to the combined single models
+(total training time for all our models is still in the
+order of weeks). Another important point is that since
+we only train for a little longer than a standard single
+model, the individual language pairs can see as little
+as 1/12-th of the data in comparison to their single
+language pair models but still produce satisfactory
+In summary, multilingual NMT enables us to
+Downloaded from by guest on 26 March 2025
+Table 4: Large-scale experiments: BLEU scores for single
+language pair and multilingual models.
+group languages with little loss in quality while having the beneﬁts of better training efﬁciency, smaller
+number of models, and easier productionization.
+Zero-Shot Translation
+The most straight-forward approach of translating
+between languages where no or little parallel data
+is available is to use explicit bridging, meaning to
+translate to an intermediate language ﬁrst and then
+to translate to the desired target language. The intermediate language is often English as xx→En and
+En→yy data is more readily available. The two potential disadvantages of this approach are: a) total
+translation time doubles, b) the potential loss of quality by translating to/from the intermediate language.
+An interesting beneﬁt of our approach is that it allows to perform directly implicit bridging (zero-shot
+translation) between a language pair for which no
+explicit parallel training data has been seen without
+any modiﬁcation to the model. Obviously, the model
+will only be able to do zero-shot translation between
+languages it has seen individually as source and target languages during training at some point, not for
+entirely new ones.
+To demonstrate this we will use two multilingual
+models — a model trained with examples from two
+different language pairs, Pt→En and En→Es (Model
+1), and a model trained with examples from four different language pairs, En↔Pt and En↔Es (Model
+2). As with the previous multilingual models, both of
+these models perform comparable to or even slightly
+better than the baseline single models for the language pairs explicitly seen. Additionally, we show
+that both of these models can generate reasonable
+quality Pt→Es translations (BLEU scores above 20)
+without ever having seen Pt→Es data during training.
+To our knowledge this is the ﬁrst successful demonstration of true multilingual zero-shot translation.
+Table 5 summarizes our results for the Pt→Es
+translation experiments. Rows (a) and (b) show the
+performance of the phrase-based machine translation
+(PBMT) system and the NMT system through explicit bridging (Pt→En, then En→Es). It can be seen
+that the NMT system outperforms the PBMT system
+by close to 2 BLEU points. For comparison, we also
+built a single NMT model on all available Pt→Es
+parallel sentences (see (c) in Table 5).
+Table 5: Portuguese→Spanish BLEU scores using various
+PBMT bridged
+NMT bridged
+Model 1 (Pt→En, En→Es)
+Model 2 (En↔{Es, Pt})
+Model 2 + incremental training
+The most interesting observation is that both
+Model 1 and Model 2 can perform zero-shot translation with reasonable quality (see (d) and (e)) compared to the initial expectation that this would not
+work at all. Note that Model 2 outperforms Model
+1 by close to 3 BLEU points although Model 2 was
+trained with four language pairs as opposed to with
+only two for Model 1 (with both models having the
+same number of total parameters). In this case the addition of Spanish on the source side and Portuguese
+on the target side helps Pt→Es zero-shot translation
+(which is the opposite direction of where we would
+expect it to help). We believe that this unexpected
+effect is only possible because our shared architecture enables the model to learn a form of interlingua
+between all these languages. We explore this hypothesis in more detail in Section 5.
+Finally we incrementally train zero-shot Model 2
+with a small amount of true Pt→Es parallel data (an
+order of magnitude less than Table 5 (c)) and obtain
+the best quality and half the decoding time compared
+Downloaded from by guest on 26 March 2025
+to explicit bridging (Table 5 (b)). The resulting model
+cannot be called zero-shot anymore since some true
+parallel data has been used to improve it. Overall
+this shows that the proposed approach of implicit
+bridging using zero-shot translation via multilingual
+models can serve as a good baseline for further incremental training with relatively small amounts of
+true parallel data of the zero-shot direction. This
+result is especially signiﬁcant for non-English lowresource language pairs where it might be easier to
+obtain parallel data with English but much harder to
+obtain parallel data for language pairs where neither
+the source nor the target language is English. We
+explore the effect of using parallel data in more detail
+in Section 4.7.
+Since Portuguese and Spanish are of the same language family, an interesting question is how well
+zero-shot translation works for less related languages.
+Table 6 shows the results for explicit and implicit
+bridging from Spanish to Japanese using the largescale model from Table 4 – Spanish and Japanese
+can be regarded as quite unrelated. As expected zeroshot translation works worse than explicit bridging
+and the quality drops relatively more (roughly 50%
+drop in BLEU score) than for the case of more related languages as shown above. Despite the quality
+drop, this proves that our approach enables zero-shot
+translation even between unrelated languages.
+Table 6: Spanish→Japanese BLEU scores for explicit and
+implicit bridging using the 12-language pair large-scale
+model from Table 4.
+NMT Es→Ja explicitly bridged
+NMT Es→Ja implicitly bridged
+Effect of Direct Parallel Data
+In this section, we explore two ways of leveraging
+available parallel data to improve zero-shot translation quality, similar in spirit to what was reported in
+Firat et al., . For our multilingual architecture
+we consider:
+• Incrementally training the multilingual model
+on the additional parallel data for the zero-shot
+directions.
+• Training a new multilingual model with all available parallel data mixed equally.
+For our experiments, we use a baseline model which
+we call “Zero-Shot” trained on a combined parallel
+corpus of English↔{Belarusian(Be), Russian(Ru),
+Ukrainian(Uk)}. We trained a second model on the
+above corpus together with additional Ru↔{Be, Uk}
+data. We call this model “From-Scratch”. Both models support four target languages, and are evaluated
+on our standard test sets. As done previously we
+oversample the data such that all language pairs are
+represented equally. Finally, we take the best checkpoint of the “Zero-Shot” model, and run incremental
+training on a small portion of the data used to train
+the “From-Scratch” model for a short period of time
+until convergence (in this case 3% of “Zero-Shot”
+model total training time). We call this model “Incremental”.
+As can be seen from Table 7, for the English↔X
+directions, all three models show comparable scores.
+On the Ru↔{Be, Uk} directions, the “Zero-Shot”
+model already achieves relatively high BLEU scores
+for all directions except one, without any explicit
+parallel data. This could be because these languages
+are linguistically related. In the “From-Scratch” column, we see that training a new model from scratch
+improves the zero-shot translation directions further.
+However, this strategy has a slightly negative effect
+on the En↔X directions because our oversampling
+strategy will reduce the frequency of the data from
+these directions. In the ﬁnal column, we see that incremental training with direct parallel data recovers
+most of the BLEU score difference between the ﬁrst
+two columns on the zero-shot language pairs. In summary, our shared architecture models the zero-shot
+language pairs quite well and hence enables us to
+easily improve their quality with a small amount of
+additional parallel data.
+Visual Analysis
+The results of this paper — that training a model
+across multiple languages can enhance performance
+at the individual language level, and that zero-shot
+translation can be effective — raise a number of questions about how these tasks are handled inside the
+model. Is the network learning some sort of shared
+representation, in which sentences with the same
+meaning are represented in similar ways regardless
+of language? Does the model operate on zero-shot
+Downloaded from by guest on 26 March 2025
+Table 7: BLEU scores for English↔{Belarusian, Russian,
+Ukrainian} models.
+From-Scratch
+Incremental
+translations in the same way as it treats language
+pairs it has been trained on?
+One way to study the representations used by the
+network is to look at the activations of the network
+during translation. A starting point for investigation
+is the set of context vectors, i.e., the sum of internal
+encoder states weighted by their attention probabilities per step (Eq. (5) in ).
+A translation of a single sentence generates a sequence of context vectors. In this context, our original questions about shared representation can be
+studied by looking at how the vector sequences of
+different sentences relate. We could then ask for example: Do sentences cluster together depending on
+the source or target language? Or instead do sentences with similar meanings cluster, regardless of
+language? We try to ﬁnd answers to these questions
+by looking at lower-dimensional representations of
+internal embeddings of the network that humans can
+more easily interpret.
+Evidence for an Interlingua
+Several trained networks indeed show strong visual evidence of a shared representation. For example, Figure 1 below was produced from a manyto-many model trained on four language pairs,
+English↔Japanese and English↔Korean. To visualize the model in action we began with a small corpus
+of 74 triples of semantically identical cross-language
+phrases. That is, each triple contained phrases in English, Japanese and Korean with the same underlying
+meaning. To compile these triples, we searched a
+ground-truth database for English sentences which
+were paired with both Japanese and Korean translations.
+We then applied the trained model to translate each
+sentence of each triple into the two other possible languages. Performing this process yielded six new sentences based on each triple, for a total of 74∗6 = 444
+total translations with 9,978 steps corresponding to
+the same number of context vectors. Since context
+vectors are high-dimensional, we use the TensorFlow
+Embedding Projector2 to map them into more accessible 3D space via t-SNE .
+In the following diagrams, each point represents a
+single decoding step during the translation process.
+Points that represent steps for a given sentence are
+connected by line segments.
+Figure 1 shows a global view of all 9,978 context
+vectors. Points produced from the same original sentence triple are all given the same (random) color.
+Inspection of these clusters shows that each strand
+represents a single sentence, and clusters of strands
+generally represent a set of translations of the same
+underlying sentence, but with different source and
+target languages.
+At right are two close-ups: one of an individual
+cluster, still coloring based on membership in the
+same triple, and one where we have colored by source
+Partially Separated Representations
+Not all models show such clean semantic clustering.
+Sometimes we observed joint embeddings in some
+regions of space coexisting with separate large clusters which contained many context vectors from just
+one language pair.
+For example, Figure 2a shows a t-SNE projection
+of context vectors from a model that was trained on
+Portuguese→English (blue) and English→Spanish
+(yellow) and performing zero-shot translation from
+Portuguese→Spanish (red). This projection shows
+153 semantically identical triples translated as described above, yielding 459 total translations. The
+large red region on the left primarily contains zeroshot Portuguese→Spanish translations.
+words, for a signiﬁcant number of sentences, the
+zero-shot translation has a different embedding than
+the two trained translation directions. On the other
+hand, some zero-shot translation vectors do seem to
+2 
+embedding_viz
+Downloaded from by guest on 26 March 2025
+Figure 1: A t-SNE projection of the embedding of 74 semantically identical sentences translated across all 6 possible
+directions, yielding a total of 9,978 steps (dots in the image), from the model trained on English↔Japanese and
+English↔Korean examples. (a) A bird’s-eye view of the embedding, coloring by the index of the semantic sentence.
+Well-deﬁned clusters each having a single color are apparent. (b) A zoomed in view of one of the clusters with the same
+coloring. All of the sentences within this cluster are translations of “The stratosphere extends from about 10km to about
+50km in altitude.” (c) The same cluster colored by source language. All three source languages can be seen within this
+Figure 2: (a) A bird’s-eye view of a t-SNE projection of an embedding of the model trained on Portuguese→English
+(blue) and English→Spanish (yellow) examples with a Portuguese→Spanish zero-shot bridge (red). The large red
+region on the left primarily contains the zero-shot Portuguese→Spanish translations. (b) A scatter plot of BLEU scores
+of zero-shot translations versus the average point-wise distance between the zero-shot translation and a non-bridged
+translation. The Pearson correlation coefﬁcient is −0.42.
+Downloaded from by guest on 26 March 2025
+fall near the embeddings found in other languages,
+as on the large region on the right.
+It is natural to ask whether the large cluster of “separated” zero-shot translations has any signiﬁcance. A
+deﬁnitive answer requires further investigation, but
+in this case zero-shot translations in the separated
+area do tend to have lower BLEU scores.
+Figure 2b shows a plot of BLEU scores of a zeroshot translation versus the average pointwise distance
+between it and the same translation from a trained
+language pair. An interesting area for future research
+is to ﬁnd a more reliable correspondence between embedding geometry and model performance to predict
+the quality of a zero-shot translation during decoding
+by comparing it to the embedding of the translation
+through a trained language pair.
+Mixing Languages
+Having a mechanism to translate from a random
+source language to a single chosen target language
+using an additional source token made us think about
+what happens when languages are mixed on the
+source or target side. In particular, we were interested
+in the following two experiments: 1) Can a multilingual model successfully handle multi-language input (code-switching) in the middle of a sentence?; 2)
+What happens when a multilingual model is triggered
+with a linear mix of two target language tokens?
+Source Language Code-Switching
+Here we show how multilingual models deal with
+source language code-switching – an example from
+a multilingual {Ja,Ko}→En model is below. Mixing
+Japanese and Korean in the source produces in many
+cases correct English translations, showing that codeswitching can be handled by this model, although
+no such code-switching samples were present in the
+training data. Note that the model can effectively handle the different typographic scripts since the individual characters/wordpieces are present in the shared
+vocabulary.
+• Japanese: 私は東京大学の学生です。→I
+am a student at Tokyo University.
+• Korean: ᄂ
+I am a student at Tokyo University.
+• Japanese/Korean: 私は東京大学ᄒ
+ᅡ. →I am a student of Tokyo University.
+Interestingly, the mixed-language translation is
+slightly different from both single source language
+translations.
+Weighted Target Language Selection
+Here we test what happens when we mix target languages. Using a multilingual En→{Ja, Ko} model,
+we feed a linear combination (1−w)<2ja>+w<2ko>
+of the embedding vectors for “<2ja>” and “<2ko>”.
+Clearly, for w = 0 the model should produce
+Japanese, for w = 1 it should produce Korean, but
+what happens in between?
+The model may produce some sort of intermediate
+language (“Japarean”), but the results turn out to
+be less surprising. Most of the time the output just
+switches from one language to another around w =
+0.5. In some cases, for intermediate values of w, the
+model switches languages mid-sentence.
+A possible explanation for this behavior is that
+the target language model, implicitly learned by the
+decoder LSTM, may make it very hard to mix words
+from different languages, especially when they use
+different scripts.
+Table 8 shows an example of mixed target languages (Ja/Ko), where we can observe an interesting
+transition in the script and grammar. At wko = 0.58,
+the model translates the source sentence into a mix
+of Japanese and Korean. At wko = 0.60, the sentence is translated into full Korean, where all of the
+source words are captured, however, the ordering of
+the words is not natural. When wko is increased to
+0.7, the model starts to translate the source sentence
+into a Korean sentence that sounds more natural.3
+Conclusion
+We present a simple solution to multilingual NMT.
+We show that we can train multilingual NMT models that can be used to translate between a number
+of different languages using a single model where
+all parameters are shared, which as a positive sideeffect also improves the translation quality of lowresource languages in the mix. We also show that
+zero-shot translation without explicit bridging is possible, which is the ﬁrst time to our knowledge that a
+3The Korean translation does not contain spaces and uses
+‘。’ as punctuation symbol, and these are all artifacts of applying
+a Japanese postprocessor.
+Downloaded from by guest on 26 March 2025
+Table 8: Gradually mixing target languages Ja/Ko.
+I must be getting somewhere near the centre of the
+私は地球の中心の近くにどこかに行っている
+私は地球の中心近くのどこかに着いているに
+私は地球の中心の近くのどこかになっている
+form of true transfer learning has been shown to work
+for machine translation. To explicitly improve the
+zero-shot translation quality, we explore two ways
+of adding available parallel data and ﬁnd that small
+additional amounts are sufﬁcient to reach satisfactory results. In our largest experiment we merge
+12 language pairs into a single model and achieve
+only slightly lower translation quality as for the single language pair baselines despite the drastically
+reduced amount of modeling capacity per language
+in the multilingual model. Visual interpretation of the
+results shows that these models learn a form of interlingua representation between all involved language
+pairs. The simple architecture makes it possible to
+mix languages on the source or target side to yield
+some interesting translation examples. Our approach
+has been shown to work reliably in a Google-scale
+production setting and enables us to scale to a large
+number of languages quickly.
+Acknowledgements
+We would like to thank the entire Google Brain Team
+and Google Translate Team for their foundational
+contributions to this project. In particular, we thank
+Junyoung Chung for his insights on the topic and
+Alex Rudnick and Otavio Good for helpful suggestions. We would also like to thank the TACL Action
+Editor and the reviewers for their feedback.

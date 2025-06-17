@@ -1,0 +1,662 @@
+CHEX: CHannel EXploration for CNN Model Compression
+Zejiang Hou1*
+Minghai Qin2
+Xiaolong Ma3†
+Yen-Kuang Chen2
+Sun-Yuan Kung1
+1Princeton University 2Alibaba Group 3Northeastern University 4Dalian University of Technology
+Channel pruning has been broadly recognized as an effective technique to reduce the computation and memory
+cost of deep convolutional neural networks. However, conventional pruning methods have limitations in that: they
+are restricted to pruning process only, and they require a
+fully pre-trained large model. Such limitations may lead to
+sub-optimal model quality as well as excessive memory and
+training cost. In this paper, we propose a novel Channel
+Exploration methodology, dubbed as CHEX, to rectify these
+problems. As opposed to pruning-only strategy, we propose
+to repeatedly prune and regrow the channels throughout the
+training process, which reduces the risk of pruning important channels prematurely. More exactly: From intra-layer’s
+aspect, we tackle the channel pruning problem via a wellknown column subset selection (CSS) formulation. From
+inter-layer’s aspect, our regrowing stages open a path for
+dynamically re-allocating the number of channels across
+all the layers under a global channel sparsity constraint .
+In addition, all the exploration process is done in a single
+training from scratch without the need of a pre-trained large
+model. Experimental results demonstrate that CHEX can
+effectively reduce the FLOPs of diverse CNN architectures
+on a variety of computer vision tasks, including image classiﬁcation, object detection, instance segmentation, and 3D
+vision. For example, our compressed ResNet-50 model on
+ImageNet dataset achieves 76% top-1 accuracy with only
+25% FLOPs of the original ResNet-50 model, outperforming
+previous state-of-the-art channel pruning methods.
+checkpoints and code are available at here .
+1. Introduction
+Albeit the empirical success of deep convolutional neural networks (CNN) on many computer vision tasks, the
+excessive computational and memory cost impede their deployment on mobile or edge devices. Therefore, it is vital to
+*Work done during an internship at DAMO Academy, Alibaba Group.
+†Work partially done during an internship at Alibaba Group.
+‡Work partially done during working period at Alibaba Group.
+Figure 1. Comparison of the accuracy-FLOPs Pareto curve of the
+compressed ResNet-50 models on ImageNet. CHEX shows the
+top-performing Pareto frontier compared with previous methods.
+And we obtain the sub-models without pre-training a large model.
+explore model compression, which reduces the redundancy
+in the model while maximally maintaining the accuracy.
+Among various model compression approaches, channel pruning has been recognized as an effective tool to
+achieve practical memory saving and inference acceleration on general-purpose hardware. To derive a sub-model,
+channel pruning removes the redundant channels along with
+all the associated ﬁlters connected to those channels.
+Most existing channel pruning methods adopt a progressive
+pruning-training pipeline: pre-training a large model until
+convergence, pruning a few unimportant channels by the
+pre-deﬁned criterion, and ﬁnetuning the pruned model to
+restore accuracy. The last two stages are usually executed in
+an interleaved manner repeatedly, which suffers from long
+training time. Various attempts have been made to improve
+the pruning efﬁciency. Training-based channel pruning methods impose sparse regularization such
+as LASSO or group LASSO to the model parameters during
+training. However, these commonly adopted regularization
+may not penalize the parameters to exactly zero. Removing
+ 
+Figure 2. An illustration of our CHEX method, which jointly optimizes the weight values and explores the sub-model structure in one
+training pass from scratch. In CHEX, both retained and regrown channels in the sub-model are active, participating in the training iterations.
+many small but non-zero parameters inevitably damages the
+model accuracy. Although this problem can be addressed by
+applying specialized optimizers or model reparameterization tricks , these methods require a well-pretrained
+large model, which counters our goal of improving pruning
+efﬁciency. Sampling-based methods 
+directly train sparse models. However, these methods may
+suffer from training instability and converge to sub-optimal
+points . shorten or eliminate the pretraining phase, and extract the sub-model at an early stage
+or even from random initialization. These methods are incapable to recover prematurely pruned important channels,
+which limits the model capacity and leads to unacceptable
+accuracy degradation.
+To rectify the aforementioned limitations, we propose
+a channel exploration methodology called CHEX to obtain high accuracy sub-models without pre-training a large
+model or ﬁnetuning the pruned model. In contrast to the traditional pruning approaches that permanently remove channels , we dynamically adjust the importance
+of the channels via a periodic pruning and regrowing process, which allows the prematurely pruned channels to be
+recovered and prevents the model from losing the representation ability early in the training process. From intra-layer’s
+perspective, we re-formulate the channel pruning problem
+into the classic column subset selection (CSS) problem in
+linear algebra, leading to a closed-form solution. From interlayer’s perspective, rather than sticking to a ﬁxed or manually
+designed sub-model structure, our approach re-evaluates the
+importance of different layers after each regrowing stage.
+This leads to a sub-model structure exploration technique to
+dynamically re-allocate the number of channels across all
+the layers under a given budget. With only one training pass
+from scratch, our obtained sub-models yield better accuracy
+than the previous methods under the same FLOPs reductions.
+Moreover, the simplicity of our method allows us to derive a
+theoretical analysis on the training behaviour of CHEX, to
+provide further insights and interpretation.
+The contributions of this paper are highlighted as follows:
+• We propose a channel exploration method CHEX with
+three novel features: (1) a periodic channel pruning and
+regrowing process, (2) a pruning criterion (i.e., leverage
+score) based on column subset selection, and (3) a submodel structure exploration technique.
+• Our method obtains the sub-model in one training pass
+from scratch, effectively reducing the training cost,
+because it circumvents the expensive pretrain-prune-
+ﬁnetune cycles.
+• Experimentally, CHEX exhibits superior accuracy under different FLOPs constraints (as shown in Figure 1),
+and is applicable to a plethora of computer vision tasks.
+For image classiﬁcation on ImageNet, our compressed
+ResNet-50 model yields 4× FLOPs reduction while
+achieving 76% top-1 accuracy, improving previous best
+result by 0.7%. For object detection on COCO
+dataset, our method achieves 2× FLOPs reduction on
+the SSD model while improving 0.7% mAP over the unpruned baseline. For instance segmentation on COCO
+dataset and 3D point cloud segmentation on ShapeNet
+dataset, our method achieves 2× and 11× FLOPs reductions on the Mask R-CNN and PointNet++ models
+with negligible quality loss compared to the unpruned
+models, respectively.
+• We provide a theoretical convergence guarantee of our
+CHEX method from the view of non-convex optimization setting, which is applicable to deep learning.
+2. Methodology
+Our method takes an existing CNN model as our channel
+exploration space, which provides the maximum number of
+explored channels. As illustrated in Figure 2, we describe
+the training ﬂow of CHEX using a 3-layer CNN model as
+an example, in which we set the target channel sparsity1 to
+50%. From top to bottom, the three layers contain 6, 8, and
+10 channels, respectively, denoted as Conv −6 −8 −10.
+Our method starts with a randomly initialized sub-model.
+During training, at periodically spaced training iterations
+(e.g., pre-determined ∆T iterations), a channel pruning and
+regrowing process is performed, which is referred to as one
+step in CHEX. A total of N steps are applied, and each step
+is composed of the following stages:
+• A pruning stage removes the unimportant channels to
+the target sparsity. The number of channels are reallocated across all different layers via the sub-model
+structure exploration technique. For example, in Figure 2, the pruned sub-model in step 1 has an architecture
+Conv −3 −4 −5, retaining 12 out of 24 channels. It
+may be adjusted later to Conv−2−3−7 in step 2. Such
+adaptations continue in the loop across the N steps.
+• Immediately after pruning, a channel regrowing stage
+regrows back a fraction of the previously pruned channels, whose weight values are restored to their most
+recently used values before being pruned. Note that the
+regrown channels may be pruned multiple steps before.
+A decay scheduler is adopted to gradually reduce the
+number of regrown channels across the N steps. For example, in Figure 2, the channel regrowing stage in step
+1 re-activates six channels, while it only re-activates
+four channels in step 2.
+Our method interleaves the model training and the periodic pruning-regrowing stages. Since the total number of
+regrown channels is reduced at each step, the sub-model
+under training enjoys gradually decreased computation cost
+and converges to the target channel sparsity in the end. As an
+algorithm guideline, the pseudo-code of CHEX is provided
+in Algorithm 1.
+2.1. Channel pruning stage
+Suppose a CNN contains L layers with parameters
+{w1, ..., wL}, with wl ∈RHlW lCl−1×Cl denoting the reshaped2 convolution weight matrix. Cl−1, Cl, Hl × W l
+represent the number of input channels, the number of output channels, and the kernel size, respectively. The j-th
+channel in the l-th layer is denoted as wl
+:,j. That is, a column
+in wl represents one channel in the convolution. For notation
+simplicity, we use Kl = HlW lCl−1 in the following text,
+i.e., wl ∈RKl×Cl.
+1We follow the notion of structured sparsity introduced in . Our
+sub-model is a slimmer dense CNN model.
+2For ease of derivation, we convert the convolution weight tensor of size
+Hl × W l × Cl−1 × Cl to the matrix of size HlW lCl−1 × Cl, where
+the channels are listed as columns in the reshaped weight matrix.
+Algorithm 1: Overview of the CHEX method.
+1 Input: An L-layer CNN model with weights
+W = {w1, ..., wL}; target channel sparsity S; total
+training iterations Ttotal; initial regrowing factor δ0;
+training iterations between two consecutive steps ∆T;
+total pruning-regrowing steps Tmax; training set D ;
+2 Output: A sub-model satisfying the target sparsity S and
+its optimal weight values W∗;
+3 Randomly initialize the model weights W;
+4 for each training iteration t ∈[Ttotal] do
+Sample a mini-batch from D and update the model
+weights W ;
+if Mod(t, ∆T) = 0 and t ≤Tmax then
+Re-allocate the number of channels for each layer
+in the sub-model {κl, l ∈[L]} by Eq.(4) ;
+Prune {κlCl, l ∈[L]} channels by CSS-based
+pruning in Algorithm 2 ;
+Compute the channel regrowing factor by a decay
+scheduler function ;
+Perform importance sampling-based channel
+regrowing in Algorithm 3 ;
+Suppose κl denotes the channel sparsity of the l-th layer.
+For each layer, channel pruning identiﬁes a set of important
+channels with index set T l (|T l| = ⌈(1 −κl)Cl⌉), which
+retains the most important information in wl, such that the
+remaining ones {wl
+:,j, j /∈T l} may be discarded with minimal impact to model accuracy. In other words, channel
+pruning selects the most “representative” columns from wl
+that can reconstruct the original weight matrix with minimal error. From this perspective, channel pruning can be
+naturally represented as the Column Subset Selection (CSS)
+problem in linear algebra . This provides us a new theoretical guideline for designing channel pruning criterion in
+a principled way, rather than depending on heuristics. To
+rigorously characterize the most “representative" columns
+of a matrix, we formally deﬁne CSS as follows:
+Deﬁnition 2.1 (Column Subset Selection). Given a matrix
+wl ∈RK×Cl, let c ≤Cl be the number of columns to select.
+Find c columns of wl, denoted by wl
+c, that would minimize:
+or ∥wl −wl
+where † stands for the Moore-Penrose pseudo-inverse, ∥· ∥F
+and ∥·∥2 represent matrix Frobenius norm and spectral norm,
+respectively.
+Since channel pruning and CSS share the same goal of
+best recovering the full matrix by a subset of its columns,
+we can leverage the rich theoretical foundations of CSS to
+derive a new pruning criterion. Our channel pruning stage
+is conducted periodically during training, thus we employ a
+computationally efﬁcient deterministic CSS algorithm, referred to as the Leverage Score Sampling . The core
+Algorithm 2: CSS-based channel pruning.
+1 Input: Model weights wl; pruning ratios κl ;
+2 Output: The pruned layer l ;
+3 Compute the number of retained channels
+˜Cl = ⌈(1 −κl)Cl⌉;
+4 Compute the top ˜Cl right singular vectors Vl
+Cl of wl ;
+5 Compute the leverage scores for all the channels in layer l
+2 for all j ∈[Cl] ;
+6 Retain the important channels identiﬁed as
+T l = ArgTopK({ψl
+j}; ˜Cl) ;
+7 Prune channels {wl
+:,j, j /∈T l} from layer l ;
+Algorithm 3: Sampling-based channel regrowing.
+1 Input: Indices of active channels T l in the sub-model;
+regrowing factor δt;
+2 Output: The regrown layer l ;
+3 Compute the importance sampling probabilities by Eq.(2)
+j = exp(ϵl
+j′) for all j ∈[Cl]\T l ;
+4 Compute the number of regrown channels kl = ⌈δtCl⌉;
+5 Perform importance sampling Gl=Multinomial({pl
+6 Restore the MRU weights of the chosen channels
+j, j ∈Gl} ;
+7 Regrow channels { ˆwl
+j, j ∈Gl} to layer l ;
+of this algorithm involves the leverage scores of matrix wl,
+which are deﬁned as follows:
+Deﬁnition 2.2 (Leverage Scores). Let Vc ∈RCl×c be the
+top-c right singular vectors of wl (c represents the number
+of selected columns from wl). Then, the leverage score of
+the j-th column of wl is given as: ψj = ∥[Vc]j,:∥2
+[Vc]j,: denotes the jth row of Vc.
+The leverage score sampling algorithm samples c
+columns of wl that corresponds to the largest c leverage
+scores of wl. Despite its simplicity, theoretical analysis
+in has shown that this deterministic solution provably obtains near optimal low-rank approximation error for Eq.(1).
+Based on the above analysis, we propose a CSS-based
+channel pruning method with leverage score sampling, as
+shown in Algorithm 2. When given a pruning ratio κl for
+layer l, we need to select and retain ⌈(1 −κl)Cl⌉important channels. We ﬁrst compute the top ⌈(1 −κl)Cl⌉right
+singular vectors of the weight matrix wl. Then, we calculate the leverage scores of all the channels in this layer
+as Deﬁnition 2.2, and rank them in descending order. Finally, we identify the set of important channels to retain as
+T l = ArgTopK({ψl
+j}; ⌈(1 −κl)Cl⌉), which gives the indices of channels with the top ⌈(1 −κl)Cl⌉leverage scores
+of wl. The remaining bottom-ranking channels are pruned.
+2.2. Channel regrowing stage
+Since the method trains from a randomly initialized model
+and the pruning stage may be based on the weights that are
+not sufﬁciently trained. In the early stage of training, the
+pruning decisions may not be optimal and some important
+channels are prematurely pruned. Therefore, after each pruning stage, our method regrows a fraction of the previously
+pruned channels back to the model. The regrown channels
+are updated in the subsequent training. If they are important
+to the model, they may survive the future pruning stages after
+a number of iterations of training. Moreover, the channel
+regrowing stage enables the model to have better representation ability during training, since the model capacity is not
+permanently restricted as the one-shot pruning methods.
+To complete the regrowing stage, we need to assign
+proper weight values to the newly activated channels. One
+straightforward choice is to assign zero values for stable
+training, since the regrown channels do not affect the output
+of the model. However, we ﬁnd that regrowing channels with
+zeros would receive zero gradients in the subsequent training
+iterations. This is undesirable because the regrown channels
+would remain deactivated and the method degenerates to the
+one-shot early-bird pruning . Based on our ablations,
+we ﬁnd the best scheme is that the newly activated channels
+restore their most recently used (MRU) parameters, which
+are the last values before they are pruned. We constantly
+maintain a copy of the weight values of the pruned channels, in case that they may get regrown back in the future
+regrowing stages. Note that the regrowing stage may regrow channels that are pruned multiple steps before, instead
+of just re-activating what are pruned at the pruning stage
+immediately before the current regrowing stage.
+To determine the channels to regrow, a naive way is to
+perform uniform sampling from the candidate set {j|j ∈
+[Cl] \ T l}. However, uniform sampling does not consider
+the possible inter-channel dependency between the active
+channels survived in the sub-model and the candidate channels to regrow. Instead, we propose an importance sampling
+strategy based on channel orthogonality for regrowing, as
+shown in Algorithm 3. Channel orthogonality automatically
+implies linear independency, which helps avoid trivial regrowing where the newly regrown channels lie in the span
+of the active channels. Channel orthogonality also encourages the channel diversity and improves model accuracy .
+Formally, we denote the active channels in layer l by matrix
+T l. The orthogonality ϵl
+j of a channel wl
+j in the candidate
+set with respect to the active channels can be computed by
+the classic orthogonal projection formula :
+A higher orthogonality value indicates that the channel is
+harder to approximate by others, and may have a better
+chance to be retained in the CSS pruning stage of the future
+steps. Thus, the corresponding channel may be sampled
+with a relatively higher probability. We use the orthogonality
+values to design our importance sampling distribution, and
+the probability pl
+j to regrow a channel wl
+j is given as:
+j = exp(ϵl
+Then, the channels to regrow are sampled according to the
+distribution Multinomial({pl
+j|j ∈[Cl] \ T l}; ⌈δtCl⌉) without replacement, where δt is the regrowing factor introduced
+as follows.
+In the regrowing stage, we employ a cosine decay scheduler to gradually reduce the number of regrown channels so
+that the sub-model converges to the target channel sparsity at
+the end of training. Speciﬁcally, the regrowing factor at t-th
+step is computed as: δt = 1
+where δ0 is the initial regrowing factor, Tmax denotes the
+total exploration steps, and ∆T represents the frequency to
+invoke the pruning-regrowing steps.
+2.3. Sub-model structure exploration
+The starting model architecture may not have balanced
+layer distributions. Some layers are more important to the
+model accuracy and more channels need to be preserved,
+while some other layers may contain excessive number of
+channels. To better preserve model accuracy, our method
+dynamically re-distributes the surviving channels across different layers in each pruning stage. Such re-distribution is
+called sub-model structure exploration.
+Inspired by , we use the learnable scaling factors in
+batch normalization (BN) 3 to reﬂect the layer importance. Denote the BN scaling factors of all channels across
+all layers by Γ = {γ1, ..., γL}, γl ∈RCl, and the overall
+target channel sparsity by S. We calculate the layer-wise
+pruning ratios by ranking all scaling factors in descending
+order and preserving the top 1 −S percent of the channels.
+Then, the sparsity κl for layer l is given as:
+j∈[Cl] 1{γl
+/Cl, l ∈[L],
+where 1{γl
+j≤q(Γ,S)} is 0 if γl
+j > q(Γ, S) and 1 if γl
+q(Γ, S). q(Γ, S) represents the S-th percentile of all the
+scaling factors Γ. Accordingly, the number of channels in
+each layer of the sub-model is obtained as ⌈(1 −κl)Cl⌉.
+ relies on LASSO regularization to identify the insigniﬁcant channels, it extracts the sub-model from a fully
+pre-trained model in one-shot manner, and the subsequent
+ﬁnetuning procedure ﬁxes the architecture without adaptation. In contrast, our method proposes a CSS-based pruning
+criterion without requiring any sparse regularization. And
+we advocate a repeated pruning and regrowing paradigm as
+opposed to the pruning-only strategy. We use BN scaling
+factors only for re-allocating the number of channels. We
+3BN applies afﬁne transformations to standardized input feature-maps:
+Xout = γ ˜
+Xin + β, where γ / β are learnable scaling / shifting factors.
+perform such re-allocation repeatedly at each step to take
+into account the changing layer importance during training.
+Thanks to our regrowing stages which help maintain the
+exploration space, our method can dynamically re-distribute
+channels from the less crucial layers to the more important
+ones, leading to a better sub-model structure.
+3. Theoretical Justiﬁcation
+We now provide the convergence guarantee for the CHEX
+method. Let F(W) = Ex∼D[f(W; x)] be the loss function
+of the deep learning task where x is the data following a
+distribution D and E[·] is the expectation. In addition, let
+Wt ∈Rd be the model parameter at the t-th training iteration, and mt ∈{0, 1}d be a binary channel mask vector for
+t = 1, · · · , T. Apparently, quantity Wt ⊙mt ∈Rd is a submodel pruned from Wt where ⊙denotes the element-wise
+product. The following proposition shows that the CHEX
+will converge to a neighborhood around the stationary solution at rate O(1/
+T) when learning rate is set properly.
+Due to the space limitation, we put its proof in the Appendix.
+Proposition 1 (Convergence Guarantee). Suppose the loss
+function F(W) is L-smooth, the sampled stochastic gradient is unbiased and has bounded variance, and the relative
+error introduced by each mask is bounded, i.e., ∥W −W ⊙
+mt∥2 ≤δ2∥W∥2 and ∥∇F(W) −∇F(W) ⊙mt∥2 ≤
+ζ2∥∇F(W)∥2 for constants δ ∈ and ζ ∈ . If
+learning rate η =
+L(T +1) in which C0 = E[F(W0)],
+the sub-models obtained by CHEX will converge as follows:
+E[∥∇F(Wt ⊙mt)∥2]
+(T + 1)(1 −ζ)2
+Remark. If there is no pruning (i.e., mt = 1 ∈Rd) in the
+training process, it holds that δ = 0 and ζ = 0. Substituting
+it into (5), we ﬁnd that the CHEX method can converge
+exactly to the stationary solution, i.e., E[∥∇F(WT )∥2] →0
+as T increases to inﬁnity. When a sparse channel mask is
+utilized, it holds that δ ̸= 0 and ζ ̸= 0. In this scenario, the
+mask-induced error will inevitably inﬂuence the accuracy of
+the trained sub-model, i.e., constants δ and ζ will inﬂuence
+the magnitude of the second term in the upper bound (5).
+4. Experiments
+To evaluate the efﬁcacy and generality of CHEX, we experiment on a variety of computer vision tasks with diverse
+CNN architectures. All experiments run on PyTorch framework based on DeepLearningExamples with NVIDIA
+PT FLOPs Top-1 Epochs Method
+PT FLOPs Top-1 Epochs
+1.27G 67.4%
+1.10G 69.2%
+1.04G 67.1%
+1.04G 68.4%
+1.04G 69.0%
+1.03G 69.6%
+Hrank 
+Taylor 
+Taylor 
+CafeNet 
+2.0G 77.4%
+Hinge 
+CafeNet N
+AdaptDCP Y
+2.0G 73.5%
+ResNet-101
+ResRep 
+Polarize 
+DSNet 
+MetaPrune N
+EagleEye 
+3.4G 78.8%
+CafeNet 
+1.9G 77.6%
+1.0G 76.0%
+AP AP50 AP75 APS APM APL
+SSD object detection
+Baseline 
+25.2 42.7 25.8 7.3 27.1 40.8
+24.1 41.2 24.7 6.7 25.6 39.2
+25.9 43.0 26.8 7.8 27.8 41.7
+24.3 41.0 24.9 7.1 25.6 40.1
+Mask R-CNN object detection
+Baseline 
+37.3 59.0 40.2 21.9 40.9 48.1
+37.3 58.5 40.4 21.7 39.0 49.5
+Mask R-CNN instance segmentation
+Baseline 
+34.2 55.9 36.2 15.8 36.9 50.1
+34.5 55.7 36.7 15.9 36.1 51.2
+3D shape classiﬁcation (Quality is accuracy)
+Baseline 
+3D part segmentation (Quality is class/instance mIoU)
+Baseline 
+82.5%/85.4%
+77.1%/84.0%
+82.3%/85.2%
+Table 1. (a): Results of ResNet on ImageNet dataset. “PT”: require pre-training. “Y”: Yes, “N”: No. (b): Results of SSD on COCO2017 and
+Mask R-CNN on COCO2014. For objection detection, we evaluate the bounding box AP. For instance segmentation, we evaluate the mask
+AP. (c): Results of PointNet++ for 3D point clouds classiﬁcation on ModelNet40 dataset and segmentation on ShapeNet dataset.
+Tesla V100 GPUs. We set δ0 = 0.3 and ∆T = 2 epoch,
+where δ0 means the initial regrowing factor, and ∆T is
+the number of training iterations between two consecutive
+pruning-regrowing steps. To keep our method simple and
+generic, the above hyper-parameters are kept constant for
+our experiments. We set the rest of the hyper-parameters in
+the default settings and specify them in the Appendix. In
+this paper, FLOPs is calculated by counting multiplication
+and addition as one operation by following .
+4.1. Image recognition
+For image recognition, we apply CHEX to ResNet 
+with different depths on ImageNet . The baseline ResNet-
+18/34/50/101 models have 1.8/3.7/4.1/7.6 GFLOPs with
+70.3%/73.9%/77.8%/78.9% top-1 accuracy, respectively.
+As shown in Table 1(a), CHEX achieves noticeably higher
+accuracy than the state-of-the-art channel pruning methods under the same FLOPs. For example, compared with
+MetaPruning , DCMP and CafeNet , our pruned
+ResNet-50 model with 4× FLOPs reduction achieves 2.6%,
+1.6%, and 0.7% higher top-1 accuracy, respectively. On the
+other hand, at the same target accuracy, CHEX achieves
+higher FLOPs reduction. For example, CHEX achieves 4×
+FLOPs reduction on ResNet-101 model with 77.6% top-1
+accuracy, compared to the latest work NPPM which
+yields 2.2× FLOPs reduction.
+The results in Table 1(a) also show an interesting property
+of our CHEX method. When we search a sub-model with
+a small FLOPs target, it is better to start our method on a
+larger model than on a smaller one. For instance, pruning
+a ResNet-50 model to 1 GFLOPs yields an accuracy 6.6%
+higher than pruning a ResNet-18 model to 1 GFLOPs. This
+indicates that CHEX performs training-time structural exploration more effectively when given a larger parametric
+space. To illustrate this point further, we conduct an additional experiment by applying CHEX to a model with twice
+the number of channels as the ResNet-50 model, with the
+goal of reducing its FLOPs to the same level as the original
+ResNet-50 model. Notably, this sub-model achieves 78.9%
+top-1 accuracy at 4.1 GFLOPs. This suggests that CHEX
+has the potential to optimize existing CNNs.
+4.2. Object detection
+For object detection, we apply CHEX to the SSD
+model on COCO2017 dataset . Table 1(b) summarizes the performance with different FLOPs reductions.
+Our pruned model outperforms the baseline model by 0.7%
+AP (25.9 vs. 25.2) while achieving 2× FLOPs reduction.
++ Periodic pruning and regrowing
++ Dynamic sub-model structure exploration
++ Importance sampling-based regrowing
+Table 2. Ablation study of different components in CHEX.
+Compared with previous SOTA channel pruning method
+ , our method achieves 1.8% higher AP (25.9 vs. 24.1)
+with 2× FLOPs reduction. Moreover, our method achieves
+4× FLOPs reduction with less than 1% AP loss.
+4.3. Instance segmentation
+For instance segmentation, we apply CHEX to the Mask
+R-CNN model on COCO2014 dataset. Since Mask
+R-CNN is a multi-task framework, we evaluate both the
+bounding box AP for object detection and the mask AP for
+instance segmentation. As shown in Table 1(b), the models
+pruned using our method achieve 2× FLOPs reduction without AP loss, even for the challenging instance segmentation
+task where the model needs to detect all objects correctly in
+an image while precisely segmenting each instance.
+4.4. 3D point cloud
+Apart from 2D computer vision problems, we also apply
+CHEX to compress PointNet++ for 3D shape classiﬁcation on ModelNet40 dataset and 3D part segmentation
+on ShapeNet dataset. The results are shown in Table
+1(c). On shape classiﬁcation, the model pruned using our
+method achieves around 7.5× FLOPs reduction while improving the accuracy slightly compared to the unpruned
+baseline. On part segmentation, the model pruned using our
+method achieves 11× FLOPs reduction while maintaining
+similar mIoU compared with the unpruned baseline.
+5. Ablation Analysis
+We investigate the effectiveness of different components
+in the CHEX method through ablation studies. All the following results are based on pruning the ResNet-50 model to
+1 GFLOPs (4× reduction) on ImageNet dataset.
+Ablation study. In Table 2, we study the effectiveness of
+different components in CHEX, namely the periodic channel pruning and regrowing process, the sub-model structure
+exploration technique, and the importance sampling-based
+regrowing. The baseline is one-shot early-stage pruning ,
+where the model is pruned by CSS very early after 6% of
+the total training epochs, and there is no regrowing stage.
+The sub-model architecture is based on the BN scaling factors and kept ﬁxed in the subsequent training. The periodic pruning and regrowing process repeatedly samples the
+important channels and prevents the channels from being
+pruned prematurely. This brings in 0.9% accuracy improvement. When the number of channels in each layer is also
+Prune criterion
+Magnitude 
+CSS (Ours)
+Pretrain-prune-ﬁnetune
+Table 3. Inﬂuence of the pruning criterion to the top-1 accuracy in
+pretrain-prune-ﬁnetune framework and our CHEX method.
+Initialization of regrown channels
+Design choices
+Regrowing factor
+Design choices δ0 = 0.1 δ0 = 0.2 δ0 = 0.3
+Scheduler for channel regrowing
+Design choices Constant
+Linear decay
+Cosine decay
+Pruning-regrowing frequency
+Design choices ∆T = 1
+∆T = 5 ∆T = 10 ∆T = 20
+Table 4. Compare different design choices in the regrowing stages
+of the CHEX method.
+dynamically adjusted instead of sticking to the ﬁxed structure determined very early in training, we can obtain a more
+optimal sub-model structure, which further improves the
+accuracy by 0.8%. Finally, using the importance sampling
+strategy described in Eq.(3) instead of uniform sampling in
+the regrowing stages improves the top-1 accuracy to 76%.
+Inﬂuence of pruning criterion. We study the inﬂuence of
+pruning criterion to the ﬁnal accuracy by comparing CSS
+versus ﬁlter magnitude and BN pruning in Table
+3. As suggested by , pruning criterion is an
+important factor in the traditional pretrain-prune-ﬁnetune
+(PPF) approach. Indeed, when the PPF approach is used,
+our proposed CSS shows the best accuracy, outperforming
+magnitude and BN pruning by 0.8% and 1.5%, respectively.
+On the other hand, we observe that CHEX is more robust
+to the pruning criterion, as it improves the accuracy for all
+three criteria and the accuracy gap among them becomes
+smaller: CSS outperforms magnitude and BN pruning by
+0.3% and 0.7%, respectively. We suspect that this is because
+CHEX can dynamically adjust the channel importance and
+can recover from sub-optimal pruning decisions.
+Design choices for the regrowing stage. In Table 4, we
+investigate the impact of different schemes in the channel
+regrowing stage of CHEX:
+(1) Different initialization schemes for the regrown channels affect model quality critically. We have experimented
+several methods by initializing the regrown channels with
+random normal distribution , zero weights, the exponential moving average (EMA) weights, and most recently used
+(MRU) weights. The results show that MRU yields the best
+top-1 accuracy, outperforming the other three initialization
+schemes by 0.5% ∼1.9%.
+(2) The initial regrowing factor δ0 also affects the model
+quality. Intuitively, a large regrowing factor can maintain
+relatively larger model capacity in the early stage of training,
+and involve more channels into the exploration steps. As
+shown, the accuracy is improved by 0.8% as the δ0 increases
+from 0.1 to 0.3, at the price of more training cost. However,
+we did not observe further improvement when the regrowing factor increases from δ0 = 0.3 to full model size, in
+which case one step in CHEX consists of pruning to target
+channel sparsity and regrowing all pruned channels. This
+suggests that regrowing a fraction of the previously pruned
+channels may be enough for a comprehensive exploration of
+the channels if we also aim more training cost savings.
+(3) We decay the number of regrown channels in each
+regrowing stage to gradually restrict the scope of exploration.
+We compare several decay schedulers, including constant,
+linear, and cosine. The cosine decay scheduler performs better than the other two schemes by 0.7% and 0.4% accuracy,
+respectively. With a decay scheduler, the sub-model under
+training will enjoy gradually decreased computation cost.
+(4) The training iterations between two consecutive
+pruning-regrowing steps, ∆T, also affects the model quality.
+A smaller ∆T incurs more frequent pruning-regrowing steps
+in CHEX, leading to better accuracy in general. We use
+∆T = 2 epoch, as it gives the best accuracy.
+6. Related Works
+Channel pruning methods can be roughly categorized into
+three classes.
+(1) Pruning after training approaches follow a threestage pipeline: pre-training a large model, pruning the unimportant channels, and ﬁnetuning the pruned model. Prior
+arts in this category mainly focus on comparing different
+pruning criteria. Exemplary metrics for evaluating channel importance include weight norm ,
+geometric median , Taylor expansion of cross-entropy
+loss , discrepancy of ﬁnal response layer ,
+feature-maps reconstruction error , feature-maps
+rank , KL-divergence , greedy forward selection
+with largest loss reduction , feature-maps discriminant
+information . Our method differs substantially
+from these approaches that we do not pre-train a large model.
+Instead, the compact sub-model is explored during a normal
+training process from scratch.
+(2) Pruning during training approaches perform channel selection
+and model training jointly, usually by imposing sparse regularizations to the channel-wise scaling factors and adopting
+specialized optimizers to solve it. Although these methods usually yield good acceleration due to joint optimization, many of them perform
+the sparse regularization training on fully pre-trained large
+models. Therefore, these approaches still suffer from the
+expensive training cost. In contrast, our method does not rely
+on sparse regularization. Instead, the periodic channel pruning and regrowing processes adaptively explore the channel
+importance during training.
+(3) Pruning at early stage methods compress the model
+at random initialization or early stage of training . Although the training cost is reduced,
+one-shot pruning based on under-trained model weights may
+not properly reﬂect the channel importance and the model
+representation ability is prematurely reduced at the very beginning, resulting in signiﬁcant accuracy loss. In contrast,
+the proposed method can recover prematurely pruned channels and better maintain the model capacity.
+AutoML or NAS based pruning methods automatically
+search the optimal number of channels in each layer of CNN.
+ uses reinforcement learning to search a compression
+policy in a layer-wise manner. MetaPruning pre-trains
+a hyper-network to predict the weights for candidate pruned
+models, and adopts evolutionary search to ﬁnd a good candidate. NetAdapt progressively adapts a pre-trained
+model to a mobile platform until a resource budget is met.
+DMCP proposes a differentiable search method by modeling channel pruning as a Markov process. CafeNet 
+proposes locally free weight sharing for the one-shot model
+width search. proposes a Gaussian process search for
+optimizing the multi-dimensional compression policy. These
+approaches usually rely on a pre-trained supernet, and require a separate search process involving substantial searchevaluation iterations. In contrast, CHEX performs sub-model
+structure learning together with weights optimization, making it more efﬁcient than the search-based methods. Channel
+pruning has also been incorporated into NAS to further tune
+the searched architecture for different latency targets .
+Since CHEX does not increase the training time, it can be
+potentially used as a step in AutoML.
+7. Conclusion
+We propose a novel channel exploration methodology,
+CHEX, to reduce the computation cost of deep CNNs in
+both training and inference. CHEX (1) dynamically adjusts
+the channel importance based on a periodic pruning and
+regrowing process, which prevents the important channels
+from being prematurely pruned; (2) dynamically re-allocates
+the number of channels under a global sparsity constraint to
+search for the optimal sub-model structure during training.
+We design the components in the pruning and regrowing
+process by proposing a column subset selection based criterion for pruning and a channel orthogonality based importance sampling for regrowing. This enables us to obtain
+a sub-model with high accuracy in only one training pass
+from scratch, without pre-training a large model or requiring
+extra ﬁne-tuning. Experiments on multiple deep learning
+tasks demonstrate that our method can effectively reduce
+the FLOPs of diverse CNN models while achieving superior
+accuracy compared to the state-of-the-art methods.
+Acknowledgment
+This work was supported by Alibaba
+Group through Alibaba Research Intern Program.

@@ -1,0 +1,1512 @@
+Aggregate Nearest Neighbor Queries in
+Spatial Databases
+DIMITRIS PAPADIAS
+Hong Kong University of Science and Technology
+City University of Hong Kong
+KYRIAKOS MOURATIDIS and CHUN KIT HUI
+Hong Kong University of Science and Technology
+Given two spatial datasets P (e.g., facilities) and Q (queries), an aggregate nearest neighbor (ANN)
+query retrieves the point(s) of P with the smallest aggregate distance(s) to points in Q. Assuming,
+for example, n users at locations q1, . . . qn, an ANN query outputs the facility p ∈P that minimizes
+the sum of distances |pqi| for 1 ≤i ≤n that the users have to travel in order to meet there. Similarly,
+another ANN query may report the point p ∈P that minimizes the maximum distance that any
+user has to travel, or the minimum distance from some user to his/her closest facility. If Q ﬁts in
+memory and P is indexed by an R-tree, we develop algorithms for aggregate nearest neighbors that
+capture several versions of the problem, including weighted queries and incremental reporting of
+results. Then, we analyze their performance and propose cost models for query optimization. Finally,
+we extend our techniques for disk-resident queries and approximate ANN retrieval. The efﬁciency
+of the algorithms and the accuracy of the cost models are evaluated through extensive experiments
+with real and synthetic datasets.
+Categories and Subject Descriptors: H.2 [Database Management]; H3.3 [Information Storage
+and Retrieval]: Information Search and Retrieval
+General Terms: Algorithms, Experimentation
+Additional Key Words and Phrases: Spatial database, nearest neighbor queries, aggregation
+This research was supported by the grant HKUST 6180/03E and CityU 1163/04E from Hong Kong
+Authors’ addresses: D. Papadias, K. Mouratidis, and C. K. Hui, Department of Computer Science,
+Hong Kong University of Science and Technology, Clear Water Bay, Hong Kong, China; email:
+{dimitris,kyriakos,michaelh}@cs.ust.hk; Y. Tao, Department of Computer Science, City University
+of Hong Kong, Tat Chee Avenue, Hong Kong, China; email: .
+Permission to make digital or hard copies of part or all of this work for personal or classroom use is
+granted without fee provided that copies are not made or distributed for proﬁt or direct commercial
+advantage and that copies show this notice on the ﬁrst page or initial screen of a display along
+with the full citation. Copyrights for components of this work owned by others than ACM must be
+honored. Abstracting with credit is permitted. To copy otherwise, to republish, to post on servers,
+to redistribute to lists, or to use any component of this work in other works requires prior speciﬁc
+permission and/or a fee. Permissions may be requested from Publications Dept., ACM, Inc., 1515
+Broadway, New York, NY 10036 USA, fax: +1 (212) 869-0481, or .
+⃝2005 ACM 0362-5915/05/0600-0529 $5.00
+ACM Transactions on Database Systems, Vol. 30, No. 2, June 2005, Pages 529–576.
+D. Papadias et al.
+Examples of ANN queries.
+1. INTRODUCTION
+This article proposes and solves aggregate nearest neighbor (ANN) queries in
+spatial databases. Let f be a monotonically increasing function1 and Q =
+{q1, . . . , qn} be a set of query points. We deﬁne the aggregate distance between
+a data point p and Q as adist(p, Q) = f (|pq1|, . . . , |pqn|), where |pqi| is the
+Euclidean distance of p and qi. Given a set P = {p1, . . . , pN} of static data points,
+an ANN query returns the data point p with the minimum aggregate distance.
+Similarly, a k-ANN query outputs the k (≥1) data points with the smallest aggregate distances. As an example consider Figure 1, where the dataset P contains a set of facilities p1, . . . , p12 and Q is a set of user locations q1, . . . , q4. If f
+is the sum function (Figure 1(a)), the corresponding 1-ANN query reports the
+facility (p9) that minimizes the total distance that the users have to travel in order to meet there, that is, adist(p9, Q) = 4
+i=1 |p9qi| = 24 ≤adist(p, Q)∀p ∈P.
+On the other hand, if f is the max function (Figure 1(b)), the ANN query
+will report the facility (p10) that minimizes the maximum distance that any
+user has to travel (adist(p10, Q) = max4
+i=1|p10qi| = |p10q1| = 9), which,
+in turn, leads to the earliest time that all users will arrive at the meeting
+point (assuming that they move with the same speed). Finally, if f = min
+(Figure 1(c)), the result is the facility (p5) which is closest to any user, that
+is, adist(p5, Q) = min4
+i=1|p5qi| = |p5q4| = 1 ≤adist(p, Q) ∀p ∈P. Another
+interesting instance of ANN queries occurs when each point qi in Q is associated with a positive weight wi. Returning to our example, consider that in
+Figure 1(a) each qi is the position of some airplane carrying wi passengers and
+the goal is to ﬁnd the airport p that minimizes the total distance traveled by
+all passengers (as opposed to airplanes), that is, adist(p, Q) = 4
+i=1 wi|pqi|.
+Similarly, in Figure 1(b), if each airplane has average travel speed vi, then the
+airport p that leads to the shortest meeting time is the one that minimizes
+i=1|pqi|/vi, that is, wi = 1/vi.
+Aggregate NN queries constitute a generalized form of nearest neighbor search, where there are multiple (instead of one) query points and the
+1A function f is monotonically increasing iff: ∀ixi ≥x′
+i implies that f (x1, . . . , xn) ≥f sum ANN query
+reports the location that minimizes the sum of distances to all urban blocks of
+interest. Such examples can be constructed for several similar problems (e.g.,
+a supermarket chain that wants to determine the warehouse location minimizing the sum of distances to all stores served by the new warehouse). For the
+second case, assume that a military unit wants to identify a collection point
+for troops under distress. A max ANN query outputs the point that leads to
+the earliest pick-up time. As a meteorology example, consider a system that
+monitors severe weather phenomena (e.g., typhoons). A min ANN reports the
+urban areas under the highest potential danger based on their proximity to any
+phenomenon.
+In addition to their usefulness as standalone methods, ANN query processing techniques can be integrated as modules for solving numerous related problems. As an example, assume that a franchise plans to open k branches in a city,
+so that the average distance from each residential block to the closest branch
+is minimized. This is an instance of k-medoids application, where residential
+blocks constitute the input dataset and the k branch locations correspond to the
+medoids. Despite an avalanche of methods for small and moderate-size datasets
+[Ng and Han 1994], currently there exists no technique for very large databases.
+The proposed ANN algorithms may potentially lead to scalable solutions. Furthermore, in clustering [Jain et al. 1999] and outlier detection [Aggrawal and Yu
+2001], the quality of a solution can be evaluated by the sum of distances (or the
+maximum distance) between the points and their nearest cluster center. Finally,
+the operability and speed of very large circuits depends on the relative distance
+between their various components. ANN queries can be applied to detect abnormalities and guide relocation of components [Nakano and Olariu 1997].
+For the following discussion, we consider Euclidean distance and 2D point
+datasets indexed by R-trees [Guttman 1984; Beckmann et al. 1990], but the
+proposed techniques are applicable to higher dimensions and alternative datapartition access methods . For ease of presentation, the examples focus on the sum, max and min functions due to their
+signiﬁcance in practice. In cases where the extension to the weighted versions
+of these problems is non-trivial, we comment on the necessary changes. The
+rest of the article is structured as follows. Section 2 outlines related work on
+spatial nearest neighbor search and top-k queries. Section 3 develops three algorithms for processing memory-resident ANN queries, which are independent
+of the function, i.e., f is also an input parameter. Section 4 describes cost models that provide signiﬁcant insight into the behavior of the algorithms and can
+be used for query optimization. Section 5 deals with disk-resident query sets
+and Section 6 discusses approximate ANN retrieval. Section 7 experimentally
+evaluates the effectiveness of the proposed techniques and Section 8 concludes
+the paper with directions for future work.
+ACM Transactions on Database Systems, Vol. 30, No. 2, June 2005.
+D. Papadias et al.
+Example of an R-tree and a point NN query.
+2. RELATED WORK
+Nearest neighbor (NN) search is one of the oldest problems in computer science.
+Several algorithms and theoretical performance bounds have been devised for
+exact and approximate processing in main memory [Sproull 1991; Arya et al.
+1998]. Furthermore, the application of NN search to content-based and similarity retrieval has led to the development of numerous cost models [Papadopoulos
+and Manolopoulos 1997; Weber et al. 1998; Beyer et al. 1999; Bohm 2000] and
+indexing techniques [Sakurai et al. 2000; Yu et al. 2001] for high-dimensional
+versions of the problem. In spatial databases most of the work has focused on
+the point NN query that retrieves the k(≥1) objects from a dataset P that are
+closest (usually according to Euclidean distance) to a point q. Algorithms for
+conventional (i.e., point) NN queries are discussed in Section 2.1. Section 2.2
+overviews some related work in the literature of top-k (or ranked) queries.
+2.1 Conventional NN Queries
+The existing algorithms assume that P is indexed by a spatial access method
+(most often an R-tree) and utilize some pruning bounds to restrict the search
+space. Figure 2 shows an R-tree for point set P = {p1, p2, . . . , p12} with a
+capacity of three entries per node (typically, the capacity is in the order of
+hundreds). Points that are close in space (e.g., p1, p2, p3) are clustered in the
+same leaf node (N3). Nodes are then recursively grouped together with the same
+principle until the top level, which consists of a single root. Given a node N and
+a query point q, the mindist(N, q) corresponds to the closest possible distance
+between q and any point in the subtree of node N. Similarly, mindist(N1, N2)
+is the minimum possible distance between any two points that reside in the
+sub-trees of nodes N1 and N2. Figure 2(a) shows the mindist between point q
+and node N1, and between N1 and N2.
+The ﬁrst NN algorithm for R-trees [Roussopoulos et al. 1995] searches the
+tree in a depth-ﬁrst (DF) manner, recursively visiting the node with the minimum mindist from q. For example, in Figure 2, DF accesses the root, followed
+ACM Transactions on Database Systems, Vol. 30, No. 2, June 2005.
+Aggregate Nearest Neighbor Queries in Spatial Databases
+DF NN algorithm.
+by N1 and N4, where the ﬁrst potential nearest neighbor is found (p5). During
+backtracking to the upper level (node N1), the algorithm prunes entries whose
+mindist is equal to or larger than the distance (best dist) of the nearest neighbor already retrieved. In the example of Figure 2, after discovering p5, DF will
+backtrack to the root level (without visiting N3), and then follow the path N2,
+N6 where the actual NN p11 is found.
+Figure 3 illustrates the pseudocode for DF NN queries. This is a simpli-
+ﬁed version because the original algorithm [Roussopoulos et al. 1995] includes
+some additional pruning heuristics (e.g., minmaxdist), which are redundant (as
+shown in Cheung and Fu ). The ﬁrst call of the algorithm uses the root of
+the data R-tree after setting the initial value of best dist to ∞. DF can be easily
+extended for the retrieval of k > 1 nearest neighbors: the k points discovered
+so far with the minimum overall distances are maintained in an ordered list of
+k pairs < p, |pq| > (sorted on |pq|) and best dist equals the distance of the kth
+NN. Whenever a better neighbor is found, it is inserted in the list and the last
+element is removed.
+The DF algorithm is suboptimal, that is, it accesses more nodes than necessary. In particular, as proven in Berchtold et al. , Papadopoulos and
+Manolopoulos , and Bohm , an optimal algorithm should visit only
+nodes intersecting the search region, that is, a circle centered at the query
+point q with radius equal to the distance between q and its nearest neighbor. In Figure 2(a), for instance, an optimal algorithm should visit only the
+root, N1, N2, and N6 (whereas DF also visits N4). The best-ﬁrst (BF) algorithm of Henrich and Hjaltason and Samet achieves the optimal I/O performance by maintaining a heap H with the entries visited so far,
+sorted by their mindist. As with DF, BF starts from the root, and inserts all
+the entries into H (together with their mindist). For example, in Figure 2(a),
+H = {<N1, mindist(N1, q)>, <N2, mindist(N2, q)>}. Then, at each step, BF
+visits the node in H with the smallest mindist. Continuing the example, the algorithm retrieves the content of N1 and inserts all its entries in H, after which
+H = {<N2, mindist(N2, q)>, <N4, mindist(N4, q)>, <N3, mindist(N3, q)>}.
+The next two nodes accessed are N2 and N6 (inserted in H after visiting
+N2), in which p11 is discovered as the current NN. At this time, the algorithm
+ACM Transactions on Database Systems, Vol. 30, No. 2, June 2005.
+D. Papadias et al.
+Incremental BF NN algorithm.
+terminates (with p11 as the ﬁnal result) since the next entry (N4) in H is farther
+(from q) than p11.
+Similarly to DF, BF can be easily extended to kNN queries (k > 1). In addition, BF is incremental, that is, it can output the nearest neighbors in ascending
+order of their distance to the query without a predeﬁned termination condition.
+Consider, for example, a query that asks for the nearest city of Hong Kong with
+population more than 2M. An incremental algorithm ﬁnds the nearest city c1,
+and examines whether it qualiﬁes the population condition. If the answer is
+negative, the algorithm retrieves the next nearest city c2 and repeats this process until a city satisfying the population condition is found. The implication is
+that the number of nearest neighbors to be retrieved is not known in advance.
+Figure 4 shows the incremental version of BF, where data points are reported
+according to the order that they are de-heaped. To simplify the pseudocode, in
+line 6, we assume that the mindist of a data point corresponds to its actual
+A similar framework also applies to closest pair queries that ﬁnd the pair of
+objects (from two datasets) with the minimum distance. Hjaltason and Samet
+ , Corral et al. , and Shan et al. propose various algorithms
+based on DF and BF traversal. The difference from NN is that the algorithms access two index structures (one for each data set) simultaneously. If the mindist
+of two intermediate nodes Ni and Nj (one from each R-tree) is already greater
+than the distance of the closest pair of objects found so far, the subtrees of
+Ni and Nj cannot contain a closest pair (thus, the pair is pruned). Furthermore, variations of nearest neighbor queries have been studied in the context
+of (i) road networks, where the distance between two points is deﬁned as the
+length of the shortest path connecting them in the network [Papadias et al.
+2003; Kolahdouzan and Shahabi 2004], (ii) spatio-temporal databases, where
+the query and/or the data objects move [Kollios et al. 1999; Song and Roussopoulos 2001; Benetis et al. 2002; Tao and Papadias 2003], and (iii) data stream
+environments, which necessitate techniques for the efﬁcient handling of continuous queries and intensive updates [Liu and Ferhatosmanoglu 2003; Yu et al.
+2005; Xiong et al. 2005].
+2.2 Top-k Queries
+A top-k query returns the k tuples with the highest scores according to a monotone preference function. Assuming that the data reside in the same repository,
+ACM Transactions on Database Systems, Vol. 30, No. 2, June 2005.
+Aggregate Nearest Neighbor Queries in Spatial Databases
+The threshold algorithm.
+such queries can be processed by Onion [Chang et al. 2000] (based on convex
+hulls) or Prefer [Hristidis and Papakonstantinou 2004] (based on view materialization). If the data reside in multiple databases, several algorithms (see Fagin
+et al. , Bruno et al. , and Fagin ) compute the ﬁnal output by
+integrating partial search results in each repository. As an example, consider
+that a user wants to ﬁnd the k images that are most similar to a query image Q,
+where similarity is deﬁned according to n features q1, . . . , qn (color histogram,
+object arrangement, texture, shape, etc.). The query is submitted to n retrieval
+engines that return the best matches for particular features together with their
+similarity scores. The problem is to combine the multiple outputs in order to
+determine the top-k results in terms of their overall similarity.
+Assume that we want to retrieve the single best match in terms of the overall
+similarity, deﬁned as the sum of scores for individual features. The threshold
+algorithm [Fagin et al. 2001], shown in Figure 5, works as follows. The ﬁrst
+search engine returns the data object p1 with the highest score on the ﬁrst feature q1. The global similarity between p1 and Q (with respect to all features) is
+computed. Then, the second search engine returns the best match p2 according
+to q2. The overall similarity of p2 is also computed, and the best of p1 and p2
+becomes the current result (best result). The process is repeated in a roundrobin fashion, that is, after the last search engine is queried, the second match
+is retrieved with respect to q1 and so on. The algorithm terminates when the
+global similarity of the current result is higher than the similarity that can be
+achieved by any subsequent solution. In order to compute this value, the algorithm maintains, for each search engine, a local threshold ti that corresponds
+to the partial score of the last retrieved object (with respect to feature qi). The
+best possible similarity that can be achieved by any not-yet discovered point is
+i=1 ti. In the next section, we adapt this approach to ANN processing.
+3. ANN ALGORITHMS FOR MEMORY-RESIDENT QUERY SETS
+Sections 3.1, 3.2, and 3.3 present three methods for processing memory-resident
+ANN queries. For simplicity, we illustrate all algorithms for single (k = 1)
+ANN retrieval in 2D space using depth-ﬁrst traversal. Section 3.4 discusses
+modiﬁcations for arbitrary values of k and dimensionality, as well as, best-ﬁrst
+ACM Transactions on Database Systems, Vol. 30, No. 2, June 2005.
+D. Papadias et al.
+Table I. Frequently Used Symbols
+Description
+set of query points (that ﬁts in memory)
+number of query points in Q(Qi)
+MBR of Q(Qi)
+Euclidean distance between p and query point qi
+adist(p, Q) = f (w1.|pq1|, . . . ,
+aggregate distance between point p and query
+points in Q
+centroid of Q
+mindist(N, q)
+minimum distance between MBR of node N and
+mindist(p, M)
+minimum distance between data point p and query
+amindist(N, Q) = f (mindist(N, q1), . . . ,
+aggregate mindist of node N from points in Q
+mindist(N, qn))
+amindist(N, M) = f (mindist(N, M), . . . ,
+aggregate mindist of node N with respect to M
+mindist(N, M))
+amindist(p, M) = f (mindist(p, M), . . . ,
+aggregate mindist of point p with respect to M
+mindist(p, M))
+Example of MQM.
+traversal including incremental output of the results and handling of nonspatial
+preferences. Table I contains the primary symbols used in our description.
+3.1 Multiple Query Method
+The multiple query method (MQM) utilizes the main idea of the threshold algorithm, that is, it performs incremental NN queries for each point in Q and
+combines their results.
+Algorithm.
+Assume the set of data points shown in Figure 6 and a query
+with Q = {q1, q2}, f
+= sum. MQM retrieves the ﬁrst NN of q1 (p10 with
+|p10q1| = 1) and computes |p10q2| = 5, adist(p10, Q) = |p10q1| + |p10q2| = 6.
+Similarly, the method ﬁnds the ﬁrst NN of q2 (point p12 with |p12q2| = 1)
+ACM Transactions on Database Systems, Vol. 30, No. 2, June 2005.
+Aggregate Nearest Neighbor Queries in Spatial Databases
+The MQM algorithm.
+and computes |p12q1| = 6, adist(p12, Q) = 7. Since adist(p10, Q) < adist(p12,
+Q), p10 becomes the current ANN (best NN) of Q. Best dist (= 6) denotes the
+aggregate distance of best NN (p10). For each query point qi, MQM stores a
+threshold ti, which is the distance of its current NN, that is, t1 = |p10q1| = 1
+and t2 = |p12q2| = 1. The total threshold T is deﬁned as T = f (t1, . . . , tn), which
+in this case is the sum of the two thresholds (=2). Continuing the example, since
+T < best dist, it is possible that there exists some point in P whose distance to
+Q is smaller than best dist. Therefore, MQM retrieves the second NN of q1 (p11)
+and computes the aggregate distance adist(p11, Q) = |p11q1| + |p11q2| = 8. The
+best NN remains p10 because best dist < adist(p11, Q). The threshold values
+are set to t1(= |p11q1|) = 4, T = 5 and MQM continues since best dist(=6) > T.
+The next query ﬁnds again p11 (as the second NN of q2) and sets t2 = 4 and
+T = 8. MQM now terminates (best dist < T) with p10 as the result. In other
+words, every nonencountered point has distance greater than or equal to T,
+and therefore it cannot be closer to Q than p10 in terms of aggregate distance.
+The only difference for the max function concerns the computation of the aggregate distances and the value of the threshold T. Returning to the example
+of Figure 6, the aggregate distance of the ﬁrst NN (p10) of q1 is adist(p10, Q) =
+max(|p10q1|, |p10q2|) = 5. Similarly, for the ﬁrst NN of q2, adist(p12, Q) =
+max(|p12q1|, |p12q2|) = 6 and p10 becomes the best NN with best dist = 5. The
+threshold T is set to max(t1, t2) = 1. Since best dist > T, MQM continues with
+the second NN of q1 (p11), which has adist(p11, Q) = max(|p11q1|, |p11q2|) = 4
+and replaces p10 as the best NN. The value of T is set to 4 (i.e., the new t1)
+and MQM terminates with p11 as the ﬁnal result. The processing of the min
+function is simpler since it sufﬁces to ﬁnd the ﬁrst NN of each query point; the
+ﬁnal result is the NN (in this case, p10 or p12) with the minimum distance.
+Figure 7 shows the pseudocode for MQM (single NN retrieval) capturing any
+monotonically increasing function. The only lines speciﬁc to individual functions are 7 (update of threshold T) and 8 (computation of adist). The algorithm
+for computing nearest neighbors of query points should be incremental (e.g.,
+best-ﬁrst search as shown in Figure 4) because the termination condition is not
+ACM Transactions on Database Systems, Vol. 30, No. 2, June 2005.
+D. Papadias et al.
+known in advance. The handling of weights is straightforward; in particular,
+the aggregate distance and global threshold computations must also take into
+account the weights (e.g., in the case of the sum function T = n
+i=1 wi · ti). Furthermore, instead of retrieving NNs for each query point in a round-robin fashion, we choose the next query point qi with a probability that is proportional to
+its weight wi. This minimizes the extent of individual queries since, intuitively,
+the ﬁnal result is more likely to be near the “most important” query points. The
+weighted min function is an exception to this policy because, unless there is a
+data point that coincides with some query point (i.e., adist(p, Q) = 0), the ANN
+algorithm can only terminate if there is one NN found for each query point.
+Proof of Correctness
+LEMMA 3.1.
+MQM reports the point of P with the minimum aggregate distance from Q.
+Let pbest be the output of MQM and adistbest its aggregate distance.
+Clearly, pbest has the minimum adist among all the points encountered by the
+algorithm before its termination. In order to prove correctness, it sufﬁces to
+show that each non-encountered point p ∈P has adist(p, Q) ≥adistbest. MQM
+terminates when T = f (t1, . . . , tn) ≥adistbest. It holds that |pqi| ≥ti for each
+qi because, otherwise, p would have been discovered by the incremental NN
+search for some query point. Due to the monotonicity of f : adist(p, Q) =
+f (|pq1|, . . . , |pqn|) ≥f (t1, . . . , tn) = T ≥adistbest. Hence, the result of MQM is
+correct. The proof also captures the existence of weights since the inequality
+f (w1 · |pq1|, . . . , wn · |pqn|) ≥f (w1 · t1, . . . , wn · tn) = T still holds.
+3.2 Single Point Method
+MQM may incur multiple accesses to the same nodes and retrieve the same
+data point through different queries. To avoid this problem, the single point
+method (SPM) processes ANN queries by a single index traversal. First, SPM
+computes the aggregate centroid q of Q, which is a point in space that minimizes
+(exactly or approximately) the value of adist(q, Q). The intuition behind this
+approach is that the aggregate nearest neighbor is a point of P “near” q. The
+centroid depends on the function f and its exact computation is not always
+possible. Nevertheless, SPM returns correct results for any possible selection
+of q; a good approximation (or, ideally, an exact aggregate centroid) leads to
+fewer node accesses. It remains to derive (i) the computation of q, and (ii) the
+range around q in which we should search for points of P, before we conclude
+that no better NN can be found.
+Centroid Computation.
+The centroid computation is performed at the initialization phase of SPM and does not incur any I/O operations sinceQ is
+memory-resident. In the case of sum, qminimizes the function adist(q, Q) =
+i=1 |qqi|, and is also known as the Fermat—Weber point [Wesolowsky 1993].
+Let (x, y) be the coordinates of q and (xi, yi) be the coordinates of query point
+qi. Since the partial derivatives of function adist(q, Q) with respect to its independent variables x and y are zero at the centroid q, we have the following
+ACM Transactions on Database Systems, Vol. 30, No. 2, June 2005.
+Aggregate Nearest Neighbor Queries in Spatial Databases
+equations:
+∂adist(q, Q)
+(x −xi)2 + ( y −yi)2 = 0,
+∂adist(q, Q)
+(x −xi)2 + ( y −yi)2 = 0.
+Unfortunately, the above equations cannot be solved into closed form for n > 2,
+or in other words, they must be evaluated numerically, which implies that the
+centroid is approximate. In our implementation, we use the gradient descent
+[Hochreiter et al. 2001] method to quickly obtain a good approximation. Specifically, the method starts with the geometric centroid, that is, x = (1/n)·n
+and y = (1/n) · n
+i=1 yi, and modiﬁes its coordinates as follows:
+x = x −η∂adist(q, Q)
+and y = y −η∂adist(q, Q)
+where η is a step size. The process is repeated until the distance function
+adist(q, Q) converges to a minimum value. The same technique, but with initial coordinates (for the geometric centroid) x = (1/ n
+i=1 wi) · n
+i=1 wi · xi and,
+y = (1/ n
+i=1 wi) · n
+i=1 wi · yi, captures the existence of weights.
+For the max function, the centroid (minimizing the function adist(q, Q) =
+i=1|qqi|) corresponds to the center of the smallest disk that contains all
+points in Q. This is also known as the minimum enclosing circle problem, for
+which a variety of algorithms derive exact answers. In our implementation,
+we use the randomized incremental algorithm of Welzl with expected
+linear time (to the number of query points). Unfortunately, to the best of our
+knowledge there is no method for deriving the exact centroid in the presence
+of weights. Thus, for weighted max, we can use the same centroid as in the
+un-weighted case.
+Considering the min aggregate function, any of the query points can be selected as the centroid since it leads to adist(q, Q) = minn
+i=1|qqi| = 0. Among the
+n alternatives, we choose the one that minimizes maxn
+i=1|qiq j| (i.e., the query
+point with the lowest maximum distance from any point in Q). The reason for
+this choice will become apparent after the description of the pruning strategy
+of SPM. In the weighted min scenario, among the n possible choices for q, we
+select the query point qi with the maximum weight wi.
+Algorithm.
+Having computed the aggregate centroid, we now proceed with
+the main algorithm. The centroid q can be used to prune the search space based
+on the following lemma.
+LEMMA 3.2.
+Let Q = {q1, . . . , qn} be a set of query points and q an arbitrary
+point in space. The following inequality holds for any data point p: adist(p, Q) ≥
+f (|pq|−|q1q|, . . . , |pq|−|qnq|), where |pq| denotes the Euclidean distance between
+By the triangular inequality, for each query point qi we have that:
+|pqi| + |qiq| ≥|pq| ⇒|pqi| ≥|pq| −|qiq|. Due to the monotonicity of f :
+adist(p, Q) = f (|pq1|, . . . , |pqn|) ≥f (|pq| −|q1q|, . . . , |pq| −|qnq|).
+ACM Transactions on Database Systems, Vol. 30, No. 2, June 2005.
+D. Papadias et al.
+Pruning of nodes in SPM.
+As shown in the proof of correctness, Lemma 3.2 ensures that the following
+heuristic for pruning intermediate nodes is safe, that is, it only discards nodes
+that cannot contain qualifying ANNs.
+Heuristic 1. Let q be the centroid of Q and best dist be the distance of the
+best ANN found so far. Node N can be pruned if:
+f (mindist(N, q) −|q1q|, . . . , mindist(N, q) −|qnq|) ≥best dist,
+where mindist (N, q) is the minimum distance between the MBR of N and the
+centroid q, and best dist is the aggregate distance of the current ANN. For sum,
+the inequality of Heuristic 1 becomes:
+(mindist(N, q) −|qiq|) ≥best dis ⇔
+n · mindist(N, q) ≥best dist +
+Figure 8(a) shows an example, where n
+i=1 |qiq| = 6 and best dist = 16. Since
+3·mindist (N1, q) = 30 ≥best dist+n
+i=1 |qiq| = 22, node N1 is pruned. On the
+other hand, N2 has to be visited because it passes Heuristic 1 (i.e., 3 · mindist
+(N2, q) = 18 < 22). For max, Heuristic 1 takes the form:
+i=1(mindist(N, q) −|qiq|) ≥best dist ⇔
+mindist(N, q) ≥best dist + minn
+As an example, consider Figure 8(b), where minn
+i=1|qiq| = 2 and best dist =
+max (4, 5, 7) = 7 (note that the centroids are different for each function). Node
+N1 is pruned since mindist (N1, q) = 9 ≥best dist + minn
+i=1|qiq| = 9, but node
+N2 is visited because mindist (N2, q) = 5 < 9. For min, the pruning condition
+translates to:
+i=1(mindist(N, q) −|qiq|) ≥best dist ⇔
+mindist(N, q) ≥best dist + maxn
+which explains (in the unweighted case) the choice of q as the query point that
+minimizes maxn
+i=1|qiq|. In the example of Figure 8(c), q1 is selected because it
+leads to the lowest maximum distance (=3), and therefore to the highest pruning power of the heuristic. Assuming that the ANN found so far has best dist =
+min(4, 5, 7) = 4, both N1 and N2 are pruned because mindist (N1, q) = 11 ≥
+best dist + maxn
+i=1|qiq| = 7 and mindist (N2, q) = 7 ≥7.
+ACM Transactions on Database Systems, Vol. 30, No. 2, June 2005.
+Aggregate Nearest Neighbor Queries in Spatial Databases
+The SPM algorithm.
+Based on the above observations, it is straightforward to implement SPM
+using the depth-ﬁrst or best-ﬁrst paradigms. Figure 9 shows the pseudocode
+of DF SPM. Starting from the root of the R-tree (for P), entries are sorted in a
+list according to their mindist from the query centroid q and are visited (recursively) in this order. Once the ﬁrst entry Nj with f (mindist(Nj, q) −|q1q|, . . . ,
+mindist(Nj, q) −|qnq|) ≥best dist is found, the subsequent ones in the list are
+pruned. Note that the order according to mindist (Nj, q) is the same as the order
+according to f (mindist(Nj, q) −|q1q|, . . . , mindist(Nj, q) −|qnq|), since |qiq| are
+constants and f is monotonic. Thus, SPM is similar to a conventional algorithm
+that retrieves the NNs of the centroid q; the difference is in the termination
+condition that is now based on aggregate, instead of conventional, distance.
+Proof of Correctness
+LEMMA 3.3.
+SPM correctly reports the point of P with the smallest aggregate
+distance from Q.
+It sufﬁces to prove that Heuristic 1 is safe, or, equivalently, that SPM
+does not prune any nodes that may contain a better NN (than the one already
+found). For all points p in a node N, it holds that |pq| ≥mindist(N, q) ⇒
+|pq| −|qiq| ≥mindist(N, q) −|qiq|∀i. Thus, due to the monotonicity of f :
+f (|pq| −|q1q|, . . . , |pq| −|qnq|) ≥f (mindist(N, q) −|q1q|, . . . , mindist(N, q) −
+|qnq|). A node is pruned by Heuristic 1 if and only if f (mindist(N, q)−|q1q|, . . . ,
+mindist(N, q) −|qnq|) ≥best dist. By combining the two inequalities, for each
+p in N: f (|pq| −|q1q|, . . . , |pq| −|qnq|) ≥best dist. By Lemma 3.2, this implies that adist(p, Q) ≥best dist for all points p in N, and, therefore, N can be
+safely pruned. All the above inequalities (including Lemma 3.2) hold for positive
+weights; thus, the proof of correctness also captures weighted functions.
+3.3 Minimum Bounding Method
+SPM visits the nodes and points around the aggregate centroid using the triangular inequality to prune the search space. Depending on the distance of the
+centroid and the query points, Heuristic 1 may lead to unnecessary node visits.
+ACM Transactions on Database Systems, Vol. 30, No. 2, June 2005.
+D. Papadias et al.
+Example of Heuristic 3.
+The minimum bounding method (MBM) avoids this problem by using directly
+the aggregate distance between each node N and all query points: amindist
+(N, Q) = f (mindist(N, q1), . . . , mindist(N, qn).
+Algorithm.
+Starting from the root of the R-tree for dataset P, MBM visits
+only nodes that may contain candidate points. We ﬁrst discuss heuristics for
+pruning nodes that cannot contain any results.
+Heuristic 2.
+Let best dist be the distance of the best ANN found so far. A
+node N can be safely pruned if:
+amindist(N, Q) ≥best dist
+For sum, the inequality of Heuristic 2 becomes n
+i=1 mindist (N, qi) ≥best dist.
+Figure 10 shows a set of query points Q = {q1, q2} and its current best NN for
+sum(best dist = 5). N2 is pruned because mindist (N2, q1) + mindist(N2, q2) =
+6 ≥best dist = 5. For max, the pruning condition becomes maxn
+i=1 mindist
+(N, qi) ≥best dist, that is, N2 is pruned because mindist (N2, q1) = 5 ≥best
+dist = 3. For min, Heuristic 2 transforms to minn
+i=1 mindist(N, qi) ≥best dist,
+that is, N2 must be visited because mindist(N, q2) = 1 < best dist = 2.
+Heuristic 2 requires multiple distance computations (one for each query point).
+In order to save unnecessary computations, it is applied only for nodes that
+pass Heuristic 3.
+Heuristic 3.
+Let M be the MBR of Q, and best dist be the aggregate distance
+of the best ANN found so far. A node N cannot contain qualifying points if:
+amindist(N, M) ≥best dist
+where amindist(N, M) = f (mindist(N, M), . . . , mindist(N, M)), i.e., mindist
+(N, M) appears n times as parameter of f .
+In Figure 10, since amindist(N1, M) = 2 · mindist(N1, M) = 6 ≥best dist =
+5, N1 can be pruned. In other words, even if there is a data point p at the
+upper-right corner of N1 and all the query points were lying at the lower right
+corner of Q, it would still be the case that adist(p, Q) > best dist. In the cases of
+(unweighted) max and min, Heuristic 3 takes the same form: mindist(N, M) ≥
+best dist, but the values of best dist differ. For instance, in Figure 10, best
+dist = 3 for max, whereas best dist = 2 for min. In both cases N1 can be
+pruned because mindist(N1, M) = 3 ≥best dist. The concept of Heuristic 3
+also applies to the leaf entries; when a point p is encountered, we ﬁrst compute
+amindist(p, M) from p to the MBR of Q. If amindist(p, M) ≥best dist = f (mindist(p, M), . . . , mindist(p, M)), p is discarded since it
+cannot be closer than the best NN.
+Because Heuristic 3 requires a single distance computation for each node
+under consideration, it is used as a fast ﬁlter step before the application of
+Heuristic 2. Note that node N2 (in Figure 10) passes Heuristic 3 (assuming sum),
+although it cannot contain qualifying points. Heuristics 2 and 3 can be used
+with both the depth-ﬁrst and best-ﬁrst traversal paradigms. Figure 11 shows
+DF MBM, where nodes are visited recursively according to amindist(Nj, Q).
+Proof of Correctness
+LEMMA 3.4.
+MBM correctly reports the point of P with the minimum aggregate distance from Q.
+In order to prove the correctness of MBM it sufﬁces to show that
+pruning is safe. For every point p in N it holds that |pqi| ≥mindist(N, M) for
+each qi. Due to the monotonicity of f
+: adist(p, Q) = f (|pq1|, . . . , |pqn|) ≥
+f (mindist(N, M), . . . , mindist(N, M)) = amindist(N, M). Therefore, for all
+points in a node N pruned by Heuristic 3 it holds that adist(p, Q)
+amindist(N, M) ≥best dist. Similarly, for Heuristic 2, since mindist(N, qi) is
+the minimum distance between N and query point qi ∈Q : adist(p, Q) ≥
+amindist(N, Q) ≥best dist for all points p in N. Hence, Heuristic 2 is also
+safe because N cannot contain a better ANN than the current one. It is easy to
+verify that the proof of correctness captures the existence of weights.
+3.4 Discussion
+The extension of all methods to k(>1) ANNs is similar to that of conventional
+NN algorithms (see Section 2.1). In particular, the k current (candidate) neighbors are maintained in a list of k pairs <p, adist(p, Q)> (sorted on adist(p, Q))
+and best dist equals the distance of the kth NN. Whenever a better neighbor is
+ACM Transactions on Database Systems, Vol. 30, No. 2, June 2005.
+D. Papadias et al.
+Incremental BF SPM.
+found, it is inserted in the list and the last element is removed. All algorithms
+can be used in any dimensionality. However, similar to other variations of nearest neighbor search, they are expected to suffer from the dimensionality curse
+[Korn et al. 2001]. Furthermore, since the performance of R-trees deteriorates
+fast with the number of dimensions and we focus on spatial data, in the sequel
+we assume 2D spaces. In addition, each method can be extended to other distance metrics: (i) MQM simply requires the incremental retrieval of NNs according to the new metric, (ii) SPM requires that the metric satisﬁes the triangular
+inequality, whereas (iii) MBM requires simple modiﬁcations of the amindist
+deﬁnitions. Zero weights are trivially captured by removing the corresponding
+query points from the query set. On the other hand, none of the proposed methods can handle negative weights because in this case the aggregate distance of
+an object may decrease as its Euclidean distance increases invalidating the termination conditions (e.g., in correspondence with shortest path computation,
+Dijkstra’s algorithm can only be applied for nonnegative edge costs).
+Both SPM and MBM can be implemented using best-ﬁrst traversal by following the framework of conventional NN search (see Figure 4). Furthermore,
+all the proposed algorithms (including MQM and the ones presented in subsequent sections) can output ANNs incrementally by using a result heap RH
+to store the discovered points on ascending aggregate distance. Each point
+is reported when de-heaped from RH. For instance, incremental MQM can
+output all points p with adist(p, Q) smaller than or equal to the current
+threshold T since they are guaranteed to be better than any not-yet discovered point. Similarly, incremental SPM reports all points p from RH such that
+adist(p, Q) ≤f (|pjq| −|q1q|, . . . , |pjq| −|qnq|), where pj is the last discovered
+point. Lemma 3.2 guarantees that for each subsequent point pk : adist(pk, Q) ≥
+f (|pkq| −|q1q|, . . . , |pkq| −|qnq|), and therefore (due to the monotonicity of
+f ) : adist(pk, Q) ≥f (|pjq| −|q1q|, . . . , |pjq| −|qnq|) ≥adist(p, Q). Figure 12
+shows the pseudo code for incremental SPM (the other algorithms are similar
+and omitted).
+The incremental output of the results is important for a memory-resident
+ANN algorithm because, as shown in Section 5.1, it permits its incorporation
+as a module for processing disk-resident queries. Furthermore, the incremental
+property allows more general queries involving additional preferences. Assume
+ACM Transactions on Database Systems, Vol. 30, No. 2, June 2005.
+Aggregate Nearest Neighbor Queries in Spatial Databases
+Generalized ANN including nonspatial preferences.
+that each data point p (i.e., facility) has some nonspatial attribute(s) pA and
+the goal is to ﬁnd the facility that minimizes F(adist(p, Q), pA), where F is
+a monotone function (possibly including nonnegative weights for the relative
+importance of adist(p, Q) and pA). For example, if pA is the fee for using p, we
+want the facility that leads to the minimum overall cost (i.e., combined aggregate distance and fee). Figure 13 shows a generalized algorithm that reports
+the data points in ascending order of overall cost assuming that the minimum
+possible value of pA is vmin (vmin can be negative). The points discovered by an
+incremental ANN method are inserted into a heap. Every time a point pj is
+inserted, all points p such that F(adist(p, Q), pA) ≤F(adist(pj, Q), vmin) are
+de-heaped and reported, because they are guaranteed to have lower cost than
+any not-yet discovered point (given that the weights are nonnegative). Alternatively, if the data points can be efﬁciently retrieved in ascending order of the pA
+values , we can integrate
+the partial result with incremental MQM using the threshold, or some other
+related, algorithm [Fagin et al. 2001].
+Finally, note that a simple way to process memory-resident queries is to
+(i) scan the data ﬁle, (ii) compute the aggregate distance of each point, and
+(iii) return the k points with the minimum distance. This ﬁle scan method
+(FSM) is general since it can deal with negative weights, any function, distance
+metric and dimensionality. Furthermore, it performs sequential page accesses,
+whereas the proposed methods incur random node visits. Nevertheless, it is
+nonincremental and, as we show in the experimental evaluation, it is usually
+very expensive due to the CPU overhead (for computing the aggregate distance
+of all data points).
+4. PERFORMANCE ANALYSIS
+This section presents a performance study on ANN retrieval, which (i) provides
+insight into the characteristics of the proposed algorithms, and thus promotes
+our understanding about their behavior; (ii) leads to models that can be utilized
+by query optimizers. To facilitate analysis, we present the main results with two
+assumptions: (i) data points distribute uniformly in the data space (without loss
+of generality, we assume each axis has range ); (ii) all queries have the same
+weight (i.e., they are equally important). We later remove these constraints
+and deal with general settings. Our derivation utilizes some previous formulae
+describing several properties of R-trees.
+ACM Transactions on Database Systems, Vol. 30, No. 2, June 2005.
+D. Papadias et al.
+The search regions for sum ANN.
+Property 1 [Theodoridis et al. 2000; Bohm 2000].
+For uniform data, the node
+MBRs at the same level of the tree have approximately equal sizes. Speciﬁcally,
+at the jth level, each MBR is a square with side length sj equal to:
+where |P| is the data cardinality, f the node fan-out ,
+and d (= 2 in the following discussion) is the dimensionality. We assume that
+leaves are at level 0.
+Property 2 [Tao et al. 2004].
+The number nspInt(sj, r) of level- j nodes whose
+MBRs intersect a circle with radius r can be computed as:
+nspInt(sj, r) =
+(sj + r√π)2
+where sj is given in Equation (4.1).
+Property 3 [Berchtold et al. 1997; Papadopoulos and Manolopoulos 1997;
+Bohm 2000].
+Any exact algorithm for processing a conventional k NN query
+q, must access all nodes whose MBRs intersect a search region (SR) deﬁned
+by a circle centered at q with radius |pbestq|, where pbest is the kth NN of q. In
+other words, the query cost equals h−1
+j=0 nspInt(sj, |pbestq|), where h is the height
+of the tree, and nspInt(sj, |pbestq|) is given in Eq. (4.2).
+Section 4.1 elaborates the search regions for ANN retrieval and derives
+adistbest, that is, the expected aggregate distance of the kth ANN (pbest) of Q.
+Sections 4.2 and 4.3 develop cost models for MQM, SPM, and MBM. Finally,
+Section 4.4 discusses the application of the models to arbitrary data and queries.
+4.1 Optimal Search Regions
+Similar to previous work on conventional NN queries [Berchtold et al. 1997;
+Papadopoulos and Manolopoulos 1997; Bohm 2000], we ﬁrst derive the search
+region SR, the area of the data space that may contain candidate results. In
+particular, the SR is deﬁned by its shape and extent, which depends on the
+expected adistbest of the best2 ANN pbest. Consider the sum ANN query with Q =
+{q1, q2} of Figure 14(a) and k = 1. Then, adistbest = adist(pbest, Q) = |pbestq1| +
+2Note that pbest is the ﬁnal ANN, whereas best NN (used in the description of the algorithms) is
+the best aggregate neighbor discovered so far, that is, pbest is the last best NN before termination.
+The same relation holds between adistbest and best dist.
+ACM Transactions on Database Systems, Vol. 30, No. 2, June 2005.
+Aggregate Nearest Neighbor Queries in Spatial Databases
+The search regions for max and min ANN.
+|pbestq2|. The shaded area corresponds to the SR containing all possible points
+px satisfying adist(px, Q) ≤adistbest. For n = 2, the boundary of SR is the
+ellipse |pxq1| + |pxq2| = adistbest. For n > 2, the search region is no longer
+bounded by an ellipse, but has an irregular shape that depends on the query
+cardinality and distribution. Figures 14(b)–14(d) illustrate the SR for (sum)
+ANN queries with n = 4, 8, 16 query points, respectively.
+Any ANN algorithm for processing Q must access all nodes that intersect
+the SR of Q. To understand this, assume that pbest has been found; before
+it can be returned as the best ANN, however, we must ascertain that there
+does not exist another point with even smaller adist. For this purpose, a node
+(e.g., N1 in Figure 14(a)) whose MBR is disjoint with the SR, can be safely
+pruned from consideration (all points px in N1 lie outside the SR, and hence,
+adist(px, Q) > adist(pbest, Q)). On the other hand, a node that intersects the
+SR must be visited because it may contain potential candidates. For example,
+although both points in N2 fall outside SR (i.e., they have larger aggregate
+distance than pbest), this cannot be veriﬁed without retrieving the content of N2.
+The concept of SR extends to other aggregation types (e.g., min, max). In
+general, SR is the locus of points px satisfying the inequality adist(px, Q) ≤
+adistbest, based on the corresponding aggregate function. For k-ANN, the SR
+contains exactly the k-ANNs and its boundary crosses the kth best ANN.
+Figure 15(a) demonstrates the SR for max (assuming n = 2, k = 1), which is
+the intersection of two circles with radii adistbest(=maxn
+i=1|pbestqi| = |pbestq2|)
+centered at q1, q2, respectively. Node N, for example, should not be visited
+(even though it intersects the circle of q2) because, for any point px in its MBR,
+adist(px, Q) = |pxq1| > adistbest. Figure 15(b) illustrates the SR for min, which
+is the union of two circles (centered at q1, q2) with radii adistbest = |pbestq1| =
+i=1 |pbestqi|.
+Let CQ be the minimum enclosing circle that contains all points of Q, and q
+be the center of CQ. The following lemma provides the shape of the SR.
+LEMMA 4.1.
+When Q contains an inﬁnite number of points uniformly distributed in CQ, the SR is a circle centered at q for sum and max.
+Since n →∞, every point in CQ is a query. To prove that the SR is a
+circle, it sufﬁces to show that the adist of any two points p1 and p′
+1, which are
+equally distant to the center q, is identical. Let q1 be a query point. Since there
+are inﬁnite query points in CQ, we can ﬁnd a “mirror” q′
+1 (see Figure 16) such
+that (i) |p1q1| = |p′
+1|, (ii) angle ̸ p1 qq1 (i.e., bounded by segments p1q and qq1)
+ACM Transactions on Database Systems, Vol. 30, No. 2, June 2005.
+D. Papadias et al.
+Proof of Lemma 4.1
+Shape of the SR for ﬁnite queries.
+equals ̸ p′
+1, and (iii) ̸ p1qp′
+1 = ̸ q1qq′
+1. Following the above methodology, we
+can derive for each qi ∈Q the corresponding mirror q′
+i ∈Q such that (i) |p1qi| =
+i| and (ii) if qi ̸= q j, then q′
+j. Hence, adist(p1, Q) = adist(p′
+1, Q), thus
+completing the proof.
+Although Lemma 4.1 is quite restrictive since it requires that n →∞, for the
+sake of cost analysis, the SR can be well estimated (for sum and max but not
+for min) as a circle, even for relatively small n. For instance, in Figure 14, the
+SR (for sum) becomes more circular as n increases and almost forms a perfect
+circle for n = 8. In order to verify that this estimation is still valid even if the
+query points are nonuniform and have weights, we generated 16 query points
+following skewed distribution in a rectangle located at the center and covering
+10% of the data space. Each query is associated with a weight uniformly distributed in the range . The “concentric” shapes in Figures 17(a) (sum)
+and 17(b) (max) correspond to points that have the same aggregate distance,
+which can be approximated as circles centered at the aggregate centroid q.
+Now it remains to clarify the computation of adistbest, that is, the estimated
+aggregate distance of pbest. In the case of sum and max, let rSR be the radius
+of the (circular) SR that contains exactly k data points. Similar to the analysis
+of conventional NN queries, for uniform data in a unit space, the area covered by the SR is proportional to k; thus: πr2
+SR = k/|P| ⇒rSR =
+k/(π.|p|).
+Therefore, the expected adistbest can be obtained by generating an arbitrary
+ACM Transactions on Database Systems, Vol. 30, No. 2, June 2005.
+Aggregate Nearest Neighbor Queries in Spatial Databases
+Algorithm for predicting adistbest.
+point with distance
+k/(π.|p|) from q and computing its aggregate distance.
+Another interesting property (elaborated further in Section 6) is that the aggregate distance of a point p is expected to increase monotonically with the
+(Euclidean) distance |pq|.
+On the other hand, for min, the SR is the union of n circles centered at the
+query points. Assuming that the n circles that constitute the SR contain k data
+points and do not intersect each other, the area covered by each one equals
+k/(|P| · n), that is, the radius of the circle (also the value of adistbest) equals
+k/(π · |p|) · n. For instance, if k = 1, |P| = 105 and n = 64, the SR consists of
+64 tiny circles (with radius 2.23 × 10−4) distributed inside CQ. Note that given
+the small size of the individual circles, the assumption that they do not intersect
+is valid for most practical settings. Furthermore, Lemma 4.1 still holds for min
+and n →∞because the n circles essentially cover the entire SR.
+Based on the above discussion, the pseudocode of Figure 18 returns the estimated adistbest. Unlike conventional NN queries where the SR provides a tight
+lower bound for the number of node accesses (achieved by BF traversal), as
+discussed in the following sections, the cost for each ANN algorithm is higher
+and depends on the characteristics of the method.
+4.2 Cost Models for MQM and SPM
+MQM performs an incremental NN search for each query point qi(1 ≤i ≤n),
+and continuously updates its threshold ti, which equals the distance between qi
+and its last retrieved NN. The algorithm terminates when T = f (t1, t2, . . . , tn)
+reaches (or exceeds) adistbest. For uniform data, each query is expected to retrieve the same number of NNs (before termination) and the distance between
+a query point and its NN is roughly the same regardless of the query’s location [Berchtold et al. 1997]. As a result, the ﬁnal thresholds of all queries
+are approximately equal. We utilize this fact to predict ti based on the estimation of adistbest (as shown in Figure 18). For sum, when MQM terminates, n
+i=1ti≈adistsum
+best , and thus t1 ≈t2 ≈. . . ≈tn ≈adistsum
+best /n. For max,
+eventually, ti ≈f (t1, t2, . . . , tn) ≈adistsum
+best for all 1 ≤i ≤n. Similarly, for
+min, ti ≈f (t1, t2, . . . , tn) ≈adistsum
+The overhead of MQM equals the cost of n NN queries. By Property 3, the
+number of nodes accessed by each query is h−1
+j=0 nspInt(sj, t), where t is the
+expected threshold value computed as discussed above. Therefore, the total
+cost of MQM is:
+costMQM = n ·
+nspInt(sj, t)
+ACM Transactions on Database Systems, Vol. 30, No. 2, June 2005.
+D. Papadias et al.
+The search region for SPM.
+Before termination SPM must visit all data points in a circle centered at the
+centroid q with radius rSPM, determined as follows (recall the form of Heuristic
+1 for individual functions):
+i=1 |qqi|)/n
+best + minn
+best + maxn
+Thus, its cost can be estimated as costSPM = h−1
+j=0 nspInt(S j, rSPM). For instance, to predict the cost of a sum ANN query (the case of min/max is similar),
+the optimizer can compute rSPM by using the estimate of adistbest and calculating n
+i=1 |qqi|. SPM is expected to outperform MQM in most cases, especially
+for large n due to the linear increase of MQM’s cost with n. The only exception
+occurs for min retrieval and sparse query points. In this case, MQM is better
+because each of the (n) NN queries searches a very small area (with radius
+best ≈0), while SPM must access all the nodes intersecting a large circle
+(with radius adistmin
+best + maxn
+i=1|qqi|).
+Finally, note that the cost of SPM is sensitive to the selection of the
+query centroid. Consider, for instance, Figure 19 which shows a sum query
+Q = {q1, q2} and two MBRs N1, N2 (pbest lies in N2). Assuming that the centroid is q, the ﬁrst point discovered is indeed pbest. All the node MBRs (including N1) outside the dashed circle (centered at q with radius adist(pbest, Q) +
+i=1 |qqi|) can be pruned. On the other hand, if we select q1 as the centroid of SPM, the ﬁrst potential result is p1, which leads to the pruning region corresponding to the solid circle with radius adist(p1, Q) + n
+i=1 |q1q1|.
+SPM still needs to access N2 in order to discover pbest. The cost difference between q and q1 cannot be reﬂected by Eq. (4.4) since they both result in the same n
+i=1 |qq1| = |q1q2|. The implication is that a good aggregate centroid should, in addition to minimizing n
+i=1 |qqi|, also be close to
+ACM Transactions on Database Systems, Vol. 30, No. 2, June 2005.
+Aggregate Nearest Neighbor Queries in Spatial Databases
+Search region of MBM (sum).
+4.3 Cost Model for MBM
+Given an aggregate function f , MBM processes nodes N in ascending order
+of their amindist(N, Q) and terminates when the inequality amindist(N, Q) >
+adistbest holds for all nonprocessed nodes. In the sequel, we present the analysis
+for sum, max, min aggregates separately, due to their different characteristics.
+Analysis of sum.
+We ﬁrst deal with a related problem: given a MBR N
+with side length sj (i.e., the average node extent at tree level j computed by
+Eq. (4.1)) that distributes uniformly in the data space, what is the expected
+amindist(N, Q) as a function of mindist(N, q)? Figure 20 shows a quarter of
+the MBRs having the same mindist(N, q) = x. The locus of the lower-left corners of these MBRs constitutes arc AB (on the circle centered at q with radius
+x), plus a horizontal segment BC with length sj. We use θ to denote the angle bounded by the x-axis and the segment connecting q with the lower-left
+corner of N. Obviously, (for the demonstrated locus) θ uniformly distributes in
+range [0,̸ CqA], where ̸ CqA (denoted as ξ in the sequel) is the angle between
+segments Cq and qA and its value equals π/2 + tg−1(sj/x).
+Let mindist(θ, x, qi) be the mindist of a node N, whose location is decided
+by θ and x, with respect to a query point qi in CQ. Similarly, amindist(θ, x) is
+the sum of mindist(with respect to all query points) as a function of θ and x.
+Assuming that the query points distribute uniformly in CQ (with radius rQ), the
+average mindist(θ, x, qi) is 1/(π · r2
+Q) ∫qi∈CQ(mindist(θ, x, qi))dqi. Consequently,
+amindist(θ, x) = n/(π · r2
+Q) ∫qi∈CQ(mindist(θ, x, qi))dqi, leading to the following
+formula for the expected amindist(x) (i.e., the amindist of a node N, whose
+mindist from q is x):
+amindist(x)= 1
+amindist(θ, x)dθ =
+π · ξ · r2
+(mindist(θ, x, qi))dqidθ
+where ξ = π/2 + tg−1(sj/x). Although the above equation is obtained by considering a quarter of all MBRs satisfying mindist(N, q) = x, it also represents the
+overall expected amindist since the derivation for the other quarters is exactly
+the same (due to symmetry). Using Eq. (4.5), we could formulate the search
+ACM Transactions on Database Systems, Vol. 30, No. 2, June 2005.
+D. Papadias et al.
+Search region of MBM (max).
+region of MBM at the jth level as the circle whose radius3 rMBM−j satisﬁes
+amindist(rMBM−j) = adistbest. Deriving rMBM−j from Eq. (4.5), however, is nontrivial due to the fact that the solution cannot be written in closed form, but
+must be solved by numerical approaches that incur high cost.
+To remedy this problem, we propose an alternative method that efﬁciently
+obtains a rough estimate rMBM−j based on the half-narrowing technique [Press
+et al. 2002]. Speciﬁcally, an initial solution range [x−, x+] = [0, c · rQ] is
+selected, where c is a constant (in our experiments, c = 3). Then, we set
+xh = (x−+ x+)/2, and formulate a MBR N with side length sj such that
+(i) mindist(N, q) = xh, and (ii) the segment connecting q with the lowerleft corner of N is horizontal (i.e., θ = 0 in Figure 20). Next we compute
+amindist(N, Q) (i.e., using the actual query points in Q), and compare it
+with adistbest. If amindist(N, Q) > adistbest, the solution range is updated to
+[x−, x+] = [x−, xh]; otherwise, [x−, x+] = [xh, x+]. The new xh = (x−+ x+)/2 is
+calculated and the above process is repeated until amindist(N, Q) and adistbest
+differ by less than a certain threshold. The ﬁnal xh constitutes the value of
+rMBM−j for computing the cost of MBM: CostMBM
+j=0 nspInt(sj, rMBM−j). It is
+worth mentioning that the above half-narrowing method does not require uniform distribution of the query points in CQ. However, unlike the derivation
+based on Eq. (4.5), it is not rigorous, namely, it aims at quickly ﬁnding an approximation for rMBM−j (instead of providing a theoretically-sound estimate).
+Analysis of max.
+Similar to the sum case, we need to represent amindist(N,
+Q) as a function of mindist(N, q). Towards this, let us ﬁrst ﬁx the location of N
+such that (i) mindist(N, q) = x and (ii) the angle between the horizontal axis
+and the segment connecting q with the lower-left corner of N equals θ. As shown
+in Figure 21, we obtain a region ext (N, y) by extending N towards all directions
+by distance y (ext (N, y) is called the Minkowski region of N). Let qi be a query
+point uniformly distributed inside CQ. Then, mindist(N, qi) ≤y if and only if
+qi falls in ext (N, y), and hence, the probability p(x, y, θ) that mindist(N, qi) ≤
+y equals area(ext(N, y) ∩CQ)/area(CQ). Since amindist(N, Q) ≤y if and
+only if every query point qi satisﬁes mindist(N, qi) ≤y, the probability for
+amindist(N, Q) to be no more than y is p(x, y, θ)n.
+3Note that the radius rMBM−j differs at various levels of the tree because, as shown in Figure 20,
+it depends on the MBR extent sj at each level.
+ACM Transactions on Database Systems, Vol. 30, No. 2, June 2005.
+Aggregate Nearest Neighbor Queries in Spatial Databases
+Recall that, so far, we have ﬁxed N at angle θ; thus, the probability that
+amindist(x) ≤y (provided that mindist(N, q) = x) can be obtained by integrating p(x, y, θ)n over all θ, or formally: (1/ξ) ∫ξ
+0 p(x, y, θ)ndθ, where ξ =
+π/2 + tg−1(sj/x), as derived earlier using Figure 20. Thus:
+amindist(x) =
+area(ext(N, y,θ)∩CQ)
+The level- j search region of MBM under max is a circle centered at q with
+radius rMBM−j that satisﬁes amindist(rMBM−j) = adistbest, where amindist is
+represented in Eq. (4.6) and the average node extents are provided by Eq. (4.1).
+The cost of MBM is costMBM = h−1
+j=0 nspInt(sj, rMBM−j). Given adistbest, a quick
+estimate of rMBM−j can be obtained using the half-narrowing technique discussed earlier for the sum case.
+Analysis of min.
+In case of min, the probability Pacs−j that a level- j node N
+is accessed equals the probability that ext (N, adistbest) covers any of the n query
+points, where ext (N, adistbest) is the region extended from N (see Figure 21)
+after replacing y with adistbest =
+k/(π · |P| · n). In order to derive Pacs−j, we
+ﬁrst consider Pacs−j(p), which equals the probability that ext(N(p), adistbest)
+covers any query point, provided that the center of N locates at point p. As
+derived in the analysis for the max case, the probability for one query point
+to fall into ext(N(p), adistbest) is area (ext(N(p), adistbest) ∩CQ)/area(CQ). As a
+result, the probability that a query point is not covered by ext(N(p), adistbest)
+equals [1−area(ext(N(p), adistbest)∩CQ)/area(CQ)]. Therefore, Pacs−j(p) can be
+represented as: Pacs−j(p) = 1 −[1 −area(ext(N(p), adistbest) ∩CQ)/area(CQ)]n.
+Having obtained Pacs−j(p), Pacs−j can be computed by integrating Pacs−j(p)
+over all possible positions p for the center of N, which constitute a square
+with the same center as the data space, but side length 1 −sj (where sj is
+the size of a node at the jth tree level). Therefore, Pacs−j = 1/(1 −sj)2 ∫p∈DS
+Pacs−j(p)dp.
+The above formula of Pacs−j can be simpliﬁed using the following observation. For most locations p (i.e., the center of N), Pacs−j(p) = 0 because ext(N(p),
+adistbest) simply does not intersect CQ at all. As a result, the integral range
+“p ∈DS” can be shrunk to the area in which Pacs−j(p) ̸= 0. To illustrate
+this, Figure 22 shows the centers A, B, C of 3 MBRs whose extended regions ext(N(A), adistbest), ext(N(B), adistbest), ext(N(C), adistbest) are tangent
+with CQ. Arc ABC (the dashed curve) shows a quarter of the boundary for
+the actual shape of the shrunk integral region where Pacs−j(p) ̸= 0. Since such
+an actual shape is irregular, in our implementation, we approximate it using the circle centered at q with radius rQ + adistbest (we denote the circle as
+ext(CQ, rQ + adistbest)).
+To verify that this approximation does not cause signiﬁcant error, observe
+that, for any point p in the region not captured by ext(CQ, adistbest) (the area
+between the boundary of ext(CQ, adistbest) and arc ABC), Pacs−j(p) has very
+low value, since the intersection of ext(N(B), adistbest) and CQ is very small.
+ACM Transactions on Database Systems, Vol. 30, No. 2, June 2005.
+D. Papadias et al.
+Approximate integral region.
+Therefore, Pacs−j can be accurately represented using Eq. (4.7).
+p∈ext(CQ,adistbest)
+1 −area(ext(N(P), adistbest) ∩CQ)
+The cost of MBM is costMBM = h−1
+j=0(|P|/f j+1 · Pacs−j), where |P|/f j+1 is the
+number of level j nodes ( f is the average node fan-out). Finally, although the
+above analysis is based on the assumption that queries distribute uniformly
+inside CQ, it can be easily adapted to general query distribution with the following changes: Pacs−j(p) = 1 if N(p) (i.e., the center of N lies at location p)
+covers any of the actual query points in Q, and 0 otherwise.
+4.4 Capturing Weighted Queries and Arbitrary Data Distribution
+As demonstrated in Figure 17, if the queries are associated with weights, the SR
+region can still be approximated as a circle for sum and max queries, permitting
+the direct application of algorithm estimate adistbest (Figure 18). Estimating
+adistbest for min, however, is more complicated. In this case, SR is still the
+union of n circles, but with different sizes. Speciﬁcally, the radius ri of each
+circle is such that ri ≈adistbest/wi based on the intuition that search around
+each query point terminates when adistbest is reached. Given the fact that the
+sum of the areas of all circles equals k/|P|, we have n
+i=1 π · (adistbest/wi)2.
+Therefore, adistbest =
+k/(|P| · n
+i=1 (π/wi)2) (i.e., line 5 in Figure 18 should be
+replaced with this estimate), and as a corollary, ri =
+k/(|P| · n
+i=1 (π/wi)2)/wi.
+Similarly, the cost of MQM consists of the overhead of n NN queries such that
+adistbest ≈w1 · t1 ≈w2 · t2 ≈· · · ≈wn · tn. For sum, wi · ti = adistbest/n, while for
+max and min, wi ·t1 = adistbest. Hence, costsum
+j=0 nspInt(sj, adistbest/
+(wi · n)) and costmax
+j=0 nspInt(sj, adistbest/wi). The
+analysis of SPM follows exactly that in Section 4.2, that is, costSPM
+i=0 nspInt(si, rSPM), where rSPM is given in Eq. (4.4). Assuming that all weights
+ACM Transactions on Database Systems, Vol. 30, No. 2, June 2005.
+Aggregate Nearest Neighbor Queries in Spatial Databases
+are in the range [0, W], for MBM (sum) we ﬁrst modify Eq. (4.5) as follows:
+amindist(x) =
+π · W · ξ · r2
+(mindist(θ, x, qi))dqidθdw
+For max, the only change is that the probability for amindist(N, Q), as a function of x and θ, to be no more than y is n
+i=1 p(x, y/wi, θ). For min, the MBM
+formulas are the same as in the unweighted case.
+Nonuniform data can be processed using multidimensional histograms that
+divide the data space into a set of (disjoint) rectangular buckets. Each bucket b
+stores the number of points nb in its extent ab. Given an ANN query q, we obtain
+the nb and ab of those buckets that intersect its bounding circle CQ. Then, the
+query cost is computed using directly the uniform model, by setting the dataset
+cardinality  nb/  ab. The intuition is that the “local” distribution inside a
+small region is almost uniform. Furthermore, the nodes accessed in processing
+q are mostly around CQ, or equivalently, for the purpose of query estimation,
+the data outside CQ can be ignored without causing signiﬁcant error.
+5. ANN ALGORITHMS FOR DISK-RESIDENT QUERY SETS
+For disk-resident query sets, we consider that, in addition to monotone, the
+aggregate function f is also decomposable. Formally, f is decomposable, if
+it can be computed by another function g as follows: f (x1, x2, . . . , xn) =
+g( f (x1, . . . , xκ), f (xκ+1, . . . , xn)) where κ can be any integer between 1 and n.
+Most practical aggregate functions, including sum, max and min, satisfy this
+property. For example, in case of sum, g = f = sum, that is, adist(p, Q) =
+qi∈Q1 |pqi| + 
+qj∈Q2 |pq j| for any partition of Q into two sets Q1 and Q2.
+Similarly, (i) for max: adist(p, Q) = max(maxqi∈Q1|pqi|, maxqj∈Q2|pq j|) (i.e.,
+g = f = max) and (ii) for min: adist(p, Q) = min(minqi∈Q1|pqi|, minqj∈Q2|pq j|)
+(i.e., g =
+= min).4 It can be easily veriﬁed that decomposability also
+holds for weighted versions of these functions, for example, 
+qi∈Q wi · |pqi| =
+qi∈Q1 wi ·|pqi|+
+qj∈Q2 w j ·|pq j|. Sections 5.1 and 5.2 present two algorithms
+for ANN queries based on MQM and MBM, respectively. Section 5.3 concludes
+with a discussion about alternative methods.
+5.1 File—Multiple Query Method
+MQM can be applied directly for disk-resident Q with, however, very high cost
+due to the large number of individual queries that must be performed (as discussed in Section 4.2, its cost increases linearly with the cardinality of Q). In order to overcome this problem, we propose F-MQM (ﬁle-multiple query method).
+F-MQM initially splits Q into blocks {Q1, Q2, . . . , Qm} such that each Qi ﬁts
+in memory. For every block, it computes the ANN (according to the f function)
+4Although for sum, max and min, it holds that f = g, this is not necessarily true for other decomposable functions. For example, count(x1, x2, . . . , xn) = sum(count(x1, . . . , xκ), count(xκ+1, . . . , xn)) = n.
+Furthermore, note that if f is monotonic, g must also be monotonic.
+ACM Transactions on Database Systems, Vol. 30, No. 2, June 2005.
+D. Papadias et al.
+The F-MQM algorithm.
+using one of the main memory algorithms, and combines their results using
+MQM (this time, according to the g function).
+Algorithm.
+The complication of F-MQM is that once the ANN of a block
+has been retrieved, we cannot directly compute its global aggregate distance
+(i.e., with respect to all query points). Instead, we follow a lazy approach: ﬁrst,
+we ﬁnd the ANN p1 of the ﬁrst block Q1; then, we load in memory the second block Q2 and retrieve its ANN p2. At the same time, we also compute
+the distance between p1 and Q2, whose current aggregate distance becomes
+curr dist(p1) = g(adist(p1, Q1), adist(p1, Q2)). Similarly, when we load Q3, we
+update the current distances of p1 and p2 taking into account the objects of the
+third block. After the end of the ﬁrst round, we only have one data point (p1)
+whose global distance with respect to all query points has been computed. This
+point is the ﬁrst best NN.
+The process is repeated in a round robin fashion and at each step a new global
+distance is derived. For instance, when we read again the ﬁrst block (to retrieve
+its second ANN), the distance of p2 (ﬁrst ANN of Q2) is completed with respect
+to all blocks. Between p1 and p2, the point with the minimum global distance
+becomes the best NN. The threshold tj for each block Q j equals adist(pj, Q j),
+where pj is the last aggregate neighbor of Q j. The global threshold T is the
+value of function g on the individual thresholds, i.e., T = g(t1, t2, . . . , tm).
+F-MQM terminates when T becomes equal or larger than the global distance
+of the best ANN found so far.
+Figure 23 illustrates the pseudocode for F-MQM. The method for retrieving
+the ANN of individual blocks should be incremental because the termination
+condition is not known in advance. In our implementation, we apply BF MBM
+due to its superior performance (see experimental evaluation). Weighted
+queries simply require the corresponding adist and g functions for each case.
+For the min function and k > 1, instead of retrieving ANNs for each query
+block Qi in a round-robin fashion, we compute in each step the next ANN
+ACM Transactions on Database Systems, Vol. 30, No. 2, June 2005.
+Aggregate Nearest Neighbor Queries in Spatial Databases
+of the block Qi that corresponds to the minimum threshold ti because it
+leads to the earliest termination (the same optimization is used for MQM on
+memory-resident queries).
+Proof of Correctness
+LEMMA 5.1.
+F-MQM correctly reports the point of P with the minimum aggregate distance from Q.
+The proof is similar to that of MQM. In particular, F-MQM terminates when T = f (t1, . . . , tn) ≥adistbest, where adistbest is the minimum
+aggregate distance of all the points discovered by the algorithm. For all nonencountered points p ∈P it holds that adist(p, Q j) ≥tj for each 1 ≤j ≤m because, otherwise, p would have been discovered by the incremental ANN search
+for some query block. Due to the monotonicity and decomposability properties:
+adist(p, Q) = g( f (p, Q1), . . . , f (p, Qm)) ≥g(t1, . . . , tm) = T ≥adistbest. Thus,
+adist(p, Q) ≥adistbest and p cannot belong to the result. The proof can be easily
+applied in the presence of weights.
+5.2 File—Minimum Bounding Method
+Next we describe F-MBM, an adaptation of the minimum bounding method.
+The basic differences with respect to MBM are: (i) there exist multiple (instead
+of one) query MBRs and (ii) each aggregate distance computation (for data
+points) incurs I/O overhead since Q is disk-resident. The ﬁrst fact necessitates
+an alternative pruning strategy, while the second one motivates heuristics for
+eliminating data points without having to compute their complete distances.
+Algorithm.
+First, the points of Q are sorted by their Hilbert value and are
+inserted in pages according to this order. Each block Qi consists of a number
+of consecutive pages that ﬁt in memory. Due to the proximity preservation of
+Hilbert sorting (or any other space ﬁlling curve), each block MBR Mi is expected
+to be relatively small compared to the MBR of the entire Q. We keep in memory
+the MBRs Mi (but not their contents) and, depending on f, some additional
+aggregate information for the points in each block, for example, for sum we
+also maintain in memory the number ni of points in each Qi. Then, F-MBM
+descends the R-tree of P (using DF or BF traversal), only visiting nodes that
+may contain qualifying points. Given that we have the values of Mi for each
+query block in memory, we identify qualifying nodes as follows.
+Heuristic 4.
+Let best dist be the aggregate distance of the best ANN found
+so far and Mi be the MBR of block Qi. A node N can be safely pruned if:
+g(amindist(N, M1), . . . , amindist(N, Mm)) ≥best dist
+amindist(N, Mi) =
+f (mindist(N, Mi), . . . , mindist(N, Mi)), that is,
+mindist(N, Mi) appears ni times as parameter of f , where ni is the cardinality
+of Qi. Figure 24 shows an example for sum, where ﬁve query points are split
+into two blocks with MBRs M1, M2 and best dist = 20. According to Heuristic
+4, N is pruned because: sum(2 · mindist(N, M1) + 3 · mindist(N, M2)) = 20 ≥
+best dist, and it cannot contain a better ANN. On the other hand, for max:
+ACM Transactions on Database Systems, Vol. 30, No. 2, June 2005.
+D. Papadias et al.
+Example of Heuristic 4.
+Example of Heuristic 5.
+max(mindist(N, M1), mindist(N, M2)) = 4 < best dist = 8 and N has to be
+visited. For min: min(mindist(N, M1), mindist(N, M2)) = 4 ≥best dist = 1
+and N is pruned.
+When a leaf node N is reached, we have to compute the global aggregate
+distance of its data points with all blocks. Heuristic 4 also applies for data points;
+that is, p ∈N can be pruned if: g(amindist(p, M1), . . . , amindist(p, Mm)) ≥
+best dist, thus, avoiding the distance computations with respect to all query
+points. For points that pass this heuristic, we initially set the current distance
+curr dist(p) to 0. Then, for each new block Qi(1 ≤i ≤m) that is loaded in
+memory, curr dist(p) is updated to g(curr dist(p), adist(p, Qi)). We reduce the
+CPU overhead of the distance computations based on the following heuristic.
+Heuristic 5.
+Let curr dist(p) be the accumulated distance of data point p
+with respect to blocks Q1, . . . , Qi−1. Then, p can be safely excluded from further
+consideration if:
+g(curr dist(p), amindist(p, Mi), . . . , amindist(p, Mm)) ≥best dist,
+where amindist(p, Mi) =
+f (mindist(p, Mi), . . . , mindist(p, Mi)). Figure 25
+shows an example of Heuristic 5 in the sum case, where the ﬁrst block Q1 has
+been processed and curr dist(p) = adist(p, Q1) = 5+3. Point p is not compared
+with the query points of Q2, since 8+3·mindist(pj, M2) = 20 ≥best dist = 20;
+that is, p cannot lead to closer aggregate distance than the current result.
+For max: max(curr dist(p), amindist(p, M2)) = max(5, 4) < best dist = 8 and
+ACM Transactions on Database Systems, Vol. 30, No. 2, June 2005.
+Aggregate Nearest Neighbor Queries in Spatial Databases
+The F-MBM algorithm.
+adist(p, Q2) must be computed. For min: min(curr dist(p), amindist(p, M2)) =
+min(3, 4) ≥best dist = 1 and p is pruned.
+The handling of weights is straightforward. The only difference occurs in
+the case of weighted sum, where for each block Qi, instead of the cardinality ni, we store the sum of weights of points in it: Wi = 
+qj∈Qi w j. Then
+amindist(N, Mi) = Wi · mindist(N, Mi) and the inequality of Heuristic 4 takes
+the form of m
+i=1 Wi · mindist(N, Mi) ≥best dist. Similarly, the pruning criterion of Heuristic 5 becomes curr dist(p)+m
+λ=1 Wλ·mindist(N, Mλ) ≥best dist.
+Figure 26 shows the pseudocode of DF F-MBM. Starting from the root of the
+R-tree of P, entries are sorted in a list by g(amindist(N, M1), . . . , amindist
+(N, Mm)), and visited (recursively) in this order. The intuition is that a small
+value of g(amindist(N, M1), . . . , amindist(N, Mm)) is likely to lead to neighbors
+with small global distance, increasing the effectiveness of Heuristic 4. Once the
+ﬁrst node that fails Heuristic 4 is found, all subsequent nodes in the sorted list
+can also be pruned. For leaf nodes, if a point violates Heuristic 5, it is removed
+from the list and is not compared with subsequent blocks.
+Proof of Correctness
+LEMMA 5.2.
+F-MBM correctly reports the point of P with the minimum aggregate distance from Q.
+First, we show that for every point p in a pruned node N it holds
+that adist(p, Q) ≥best dist:
+adist(p, Q) = g(adist(p, Q1), . . . , adist(p, Qm))
+decomposability of f
+≥g(amindist(p, M1), . . . , amindist(p, Mm))
+∀1 ≤i ≤m adist(p, Qi) ≥amindist(p, Mi)—monotonicity of g
+≥g(amindist(N, M1), . . . , amindist(N, Mm))
+∀1 ≤i ≤m amindist(p, Mi) ≥amindist(p, Mi)—monotonicity of g
+≥best dist
+deﬁnition of Heuristic 4
+ACM Transactions on Database Systems, Vol. 30, No. 2, June 2005.
+D. Papadias et al.
+Shortcomings of Hilbert sorting for F-MQM.
+The version of Heuristic 4 for points (lines 9–11) is also safe since adist(p, Q) ≥
+g(amindist(p, Mi), . . . , amindist(p, Mm)) ≥best dist. In addition, the proof
+applies to Heuristic 5 (based on the monotonicity of f, g and the fact that
+adist(p, Qi) ≥amindist(N, Mi)∀1 ≤i ≤m) and holds in the presence of
+5.3 Discussion
+Several function-speciﬁc optimizations are possible for both F-MQM and
+F-MBM. In the case of min F-MQM, for instance, we can terminate the search
+for a block if the corresponding local threshold exceeds best dist, even if the
+query has not retrieved any ANN. For F-MBM, the ﬁrst leaf node visited during
+the processing of a sum query, requires reading the entire query set. Gradually,
+as best dist decreases, so does the number of blocks that need to be loaded since
+numerous data points can be pruned just by using the block MBRs (instead of
+their contents). Because blocks that are far away from the node are likely to
+prune numerous data points (thus, saving the distance computations for these
+points with respect to other blocks), we can load each block Qi in descending order of amindist(N, Mi). Furthermore, we could compute the aggregate
+distances for points in multiple nodes by loading the query set only once. For
+generality, we do not focus on such function-speciﬁc optimizations.
+In Papadias et al. , before the application of F-MQM, we perform
+Hilbert sorting on the query ﬁle in order to obtain blocks with small MBRs
+(i.e., similar to F-MBM). Interestingly, this approach is worse than the one presented here (i.e., without Hilbert sorting). Figure 27 demonstrates this with an
+example where there exist four query blocks with disjoint MBRs, whose union
+covers the entire universe. For sum and max, the ANN pi of each block Qi lies
+somewhere near the centroid of Mi. On the other hand, the best ANN (pbest)
+lies near the center of the data space. Thus, it is likely that each incremental
+ANN query will retrieve a large number of points before pbest is discovered as
+an ANN of some block. On the other hand, if the query points in each block
+distribute in the entire data space, their individual ANNs are likely to be near
+the center, leading to the early discovery of pbest. Furthermore, as in the case
+of (main-memory) MQM, F-MQM may perform redundant computations, if it
+encounters the same data point as a nearest neighbor of different query blocks.
+A possible optimization is to keep the id of each point discovered so far, and
+ignore it if it is encountered later through another block (i.e., continue with the
+next ANN of the block). This however, may not be possible if the main memory
+size is limited.
+ACM Transactions on Database Systems, Vol. 30, No. 2, June 2005.
+Aggregate Nearest Neighbor Queries in Spatial Databases
+Similar to MQM and MBM, SPM can also be applied to disk-resident queries.
+The difference in this case is that the computation of the aggregate centroid
+may require multiple passes of Q. For instance, the gradient descent method
+(used for sum) needs to compute the aggregate distance for each new centroid
+in order to evaluate if it constitutes an improvement over the previous one.
+Likewise, the derivation of the minimum enclosing circle (for max) must also
+read Q several times. In order to avoid these problems, we can use directly the
+geometric centroid for both sum and max. Nevertheless, F-SPM, similar to F-
+MBM, has to scan Q when the aggregate distance of a data point is computed.
+Heuristic 5 can be applied in this case, to eliminate points without computing
+their complete aggregate distance. Since the relative performance of F-SPM and
+F-MBM is expected to be similar as in the case of memory-resident queries, we
+omit it from the experimental evaluation.
+Assuming that Q is also indexed by an R-tree, in Papadias et al. ,
+we propose GCP, an adaptation of the incremental closest pairs algorithm (see
+Section 2.1), for the sum function. GCP can be easily extended to any monotonic
+and decomposable function, but it is efﬁcient only for f = min, since the ANN is
+the data point p1 in the ﬁrst output pair < p1, qi >. For other functions (such as
+sum), where the computation of adist(p, Q) requires all the individual distances
+|pqi|∀qi ∈Q, GCP incurs very high cost and extreme space requirements for
+managing the heap (usually in the same order as the cartesian product P × Q).
+Therefore, we do not consider this algorithm further.
+Finally, note that ANN for disk-resident queries is essentially a join problem
+that can be answered by computing the aggregate distance of each tuple in P
+(with respect to all points in Q) and then returning the k best tuples. Thus,
+it can be processed by a straightforward application of the block nested loops
+(BNL) algorithm. Speciﬁcally, given an input buffer of B main memory pages,
+BNL allocates B-1 pages to P and 1 page to Q. Let b be the number of resulting
+blocks (with size B-1 pages) of P. For every block of P, BNL scans Q, computing
+the aggregate distance of all points in the block, that is, it reads P only once
+and scans Q a total of b times. Compared to the previous algorithms, BNL may
+have better I/O performance for a small number of blocks5 because (i) F-MQM
+may access the same R-tree node of P and load the same query block multiple
+times (through different queries or for each neighbor retrieved), while (ii) F-
+MBM has to scan Q every time a leaf node of the data R-tree is visited. On
+the other hand, the CPU cost of BNL is likely to be high because the algorithm
+involves |P| · n distance computations. BNL is experimentally compared with
+F-MQM and F-MBM in Section 7.2.
+6. APPROXIMATE ANN ALGORITHMS
+In general, if both the data and the query sets are large, the processing of
+ANN queries incurs high cost since in the worst case it may lead to |P| · n
+distance computations and multiple reads of the query ﬁle (or accesses to
+the same R-tree node in the case of F-MQM). In this section, we compromise
+5If P ﬁts in memory BNL reads Q exactly once, therefore, it is expected to have the best performance
+for memory-resident datasets and disk-resident queries.
+ACM Transactions on Database Systems, Vol. 30, No. 2, June 2005.
+D. Papadias et al.
+Metric amindistA.
+accuracy for efﬁciency, by proposing methods for fast but approximate ANN
+retrieval.
+The ﬁrst method is based on coalescing the query points in a smaller set that
+ﬁts in memory. Consider, for instance, that the available memory can accommodate n′ < n query points. The coalescing approximate method (CAM) reads the
+ﬁrst n′ query points in memory, which constitute the initial set Q′ = {q′
+1, . . . , q′
+such that q′
+i = qi. Each subsequent point q j, n′ < j ≤n, is combined with the
+closest q′
+i (in terms of the Euclidean distance). In particular, the combination
+replaces q′
+i with a new point that lies on the line segment q jq′
+i and its distance
+from the two end-points is inversely proportional to w j and w′
+i (i.e., biased towards the more important one). The weight of the new point becomes w j + w′
+After the process terminates, the ANNs are retrieved by a memory-resident
+algorithm using the revised set Q′. Note that CAM is sensitive to the order
+according to which the query points are considered. Techniques based on clustering or k-medoids could potentially lead to a Q′ that better preserves the
+distribution of the original query set. However, such methods require reading
+Q several times and incur prohibitive cost (as shown in Section 7.3, CAM is
+already very expensive for large query sets).
+Before we proceed with the second method, we deﬁne amindistA(N, Q) as
+the minimum adist of all possible points in a node N. For sum and max,
+amindistA(N, Q) ≥amindist(N, Q). As an example, consider the sum query
+Q = {q1, q2} in Figure 28(a), where amindist(N, Q) = |p1q1| + |p2q2| (obtained
+using two points p1, p2 in N), while amindistA(N, Q) = |pq1| + |pq2|, that is,
+the point p achieving amindistA lies on the smallest ellipse that has q1, q2 as
+its foci, and intersects N. Similarly, for max (Figure 28(b)), amindistA(N, Q) =
+|pq1| = |pq2| > amindist(N, Q) = max(|p1q1|, |p2q2|) = |p2q2|, that is, point p
+lies on the perpendicular bisector of segment q1q2.
+Assuming that we can compute amindistA, we can obtain a tight MBR-based
+heuristic a follows: if amindistA(N, Q) < best dist, visit N; otherwise, reject
+it. The combination of best-ﬁrst traversal with this heuristic would lead to
+an I/O optimal6 method (for the same reasons that BF is optimal for conventional NN queries). However, for sum and max, the point p in N minimizing
+amindistA(N, Q) cannot be computed exactly. In the case of sum, ﬁnding p
+is equivalent to locating the Fermat–Weber point, but this time in a region
+6MBM is optimal for min because amindistA(N, Q) = minn
+i=1mindist(N, qi) = amindist(N, Q).
+ACM Transactions on Database Systems, Vol. 30, No. 2, June 2005.
+Aggregate Nearest Neighbor Queries in Spatial Databases
+constrained by the node MBR, which, as discussed in Section 3.2, can only be
+solved numerically (i.e., approximately). Similarly, for max, ﬁnding p is equivalent to obtaining the minimum enclosing circle whose center lies in the node
+Motivated by the above observations we propose an algorithm for sum and
+max based on approximations of amindistA. As discussed in Section 4.1, for both
+functions, the SR can be regarded as a circle centered at the centroid q. Furthermore, the aggregate distance adist(p, Q) of a point p increases monotonically
+with |pq|. Thus, we can obtain a rather accurate estimation of amindistA(N, Q)
+as follows. If N contains q we set amindistA(N, Q) = adist(q, Q) because
+the query centroid is assumed to minimize the aggregate distance. Otherwise,
+amindistA(N, Q) = adist(p, Q) where p is the point minimizing mindist(N, q)
+(i.e., p is the point at the boundary of N that is closest to q). We call the resulting
+algorithm A-SPM (for approximate SPM) because the order of node traversal is
+the same as that of SPM (i.e., according to mindist from q), but the termination
+condition is different (A-SPM terminates after it retrieves the k conventional
+NNs of q, potentially missing some actual ANNs).
+A-SPM, similar to CAM, ﬁrst reads the query ﬁle in order to obtain the
+centroid q (or the geometric centroid, in order to avoid multiple reads of Q).
+Then, it simply retrieves the k Euclidean NNs of q. Finally, A-SPM and CAM
+have to read the query ﬁle again in order to compute the aggregate distance
+of the results. Assuming typical values of k (i.e., the k NNs ﬁt in memory), all
+aggregate distance computations can be combined in a single scan of Q. Both
+algorithms are applicable to sum and max but not min because (i) a data point p
+retrieved by CAM, may not be close to any real query point (although p is close
+to some point of Q′), and (ii) A-SPM is based on the assumption of a single SR
+around q, whereas (as discussed in Section 4.1) the SR of min consists of n small
+circles. A trivial approximation method for min, would simply select a random
+subset Q′ ⊆Q of query points that ﬁt in memory, and return the ANN of Q′.
+Naturally, both approximate algorithms may incur error because (i) for CAM,
+Q′ is only a coarse estimation of Q; (ii) for A-SPM, the SR is not exactly a circle
+and q may not be the point with the minimum aggregate distance. However,
+it is difﬁcult to provide guarantees for the quality of the approximation since
+the error depends on factors, such as the distribution of the query points (and
+their weights), that cannot be quantiﬁed. In the next section, we experimentally
+evaluate the efﬁciency of all algorithms and the accuracy of the approximation.
+7. EXPERIMENTAL EVALUATION
+We evaluate the efﬁciency of the proposed algorithms with a Pentium 3 GHz
+CPU assuming a page size of 4 KBytes. We use a uniform dataset (UNI)
+with 106 points, and the real datasets of Figure 29: LA and TS available at
+www.rtreeportal.org. The datasets are indexed by R∗-trees [Beckmann et al.
+1990] with a capacity of 204 entries per node. All algorithmic implementations are based on best-ﬁrst traversal. Section 7.1 focuses on memory-resident
+queries, Section 7.2 on disk-resident queries, and Section 7.3 evaluates approximate algorithms.
+ACM Transactions on Database Systems, Vol. 30, No. 2, June 2005.
+D. Papadias et al.
+Real datasets.
+Actual and estimated I/O cost vs. cardinality n of Q (UNI, AQ = 8%, k = 4).
+7.1 Evaluation of Memory-Resident Queries
+We compare MQM, SPM, MBM and the simple ﬁle scan method (FSM), discussed in Section 3.4, using workloads of 100 (unweighted) queries on UNI and
+LA. For UNI, the query points follow zipf distribution (parameter a = 0.8) in
+a circle CQ. For LA, the query points are uniformly distributed in CQ. Each
+workload has two parameters: the number n of query points and the area AQ
+of CQ. The only change between two queries in the same workload is the position of the center of CQ, which distributes uniformly in the data space. The
+reported cost corresponds to the average of all queries in the workload. For the
+LA dataset, we apply a regular grid [Theodoridis et al. 2000] of size 100 × 100
+to keep statistics7 about the data distribution (to be used by the cost models as
+discussed in Section 4.4). For UNI, our models are applied directly to produce
+the estimated number of node accesses.
+First, we study the effect of the cardinality n of Q, by ﬁxing AQ to 8% of the
+data space and the number k of retrieved ANNs to 4. Figures 30 and 31 show
+7We use the grid approach because of its simplicity. More sophisticated multidimensional histograms (e.g., Acharya et al. ) are expected to produce better results under limited memory.
+ACM Transactions on Database Systems, Vol. 30, No. 2, June 2005.
+Aggregate Nearest Neighbor Queries in Spatial Databases
+Actual and estimated I/O cost vs. cardinality n of Q (LA, AQ = 8%, k = 4).
+CPU cost vs. cardinality n of Q (UNI, AQ = 8%, k = 4).
+the actual and estimated I/O cost (R-tree node accesses for MQM, SPM, MBM
+and page accesses for FSM), for UNI and LA, respectively. MQM is the worst
+method for sum and max due to the multiple NN queries, some of which access
+the same nodes and retrieve the same points. As predicted by the models of
+Section 4 its cost increases linearly with n, whereas the query cardinality has
+little or no effect on the other algorithms. On the other hand, for low values of n
+and the min function, MQM outperforms SPM (and FSM) because it searches
+a few, very small circles (around the query points) as opposed to a large circle deﬁned by the pruning condition: mindist(N, q) ≥best dist + maxn
+of SPM. Nevertheless, SPM is still insensitive to n and eventually surpasses
+MBM is the best method in all cases. Its cost increases with n only for min,
+because in this case heuristic 2 becomes minn
+i=1mindist(N, qi) ≥best dist, that
+is, a node is visited if it is close to any query point. The results are similar
+for both Figures 30 and 31 despite the different data and query distributions,
+suggesting the generality of the above observations. The cost models capture
+the performance accurately; the relative error is usually around 5%–10% and
+it does not exceed 20% in any case. The inaccuracy is slightly larger for LA due
+to the error introduced by the grid histogram.
+Figures 32 (UNI) and 33 (LA) measure the CPU time of all algorithms under
+the same setting as Figures 30 and 31. The main difference is that now the overhead of FSM, SPM and MBM increases with n for all functions. This happens
+because, although the number of accesses may remain approximately the same
+for different values of n, the CPU cost for computing the aggregate distance of
+the data points is proportional to n. The relative performance of the algorithms
+ACM Transactions on Database Systems, Vol. 30, No. 2, June 2005.
+D. Papadias et al.
+CPU cost vs. cardinality n of Q (LA, AQ = 8%, k = 4).
+Actual and estimated I/O cost vs. area AQ of Q (UNI, n = 64, k = 4).
+Actual and estimated I/O cost vs. area AQ of Q (LA, n = 64, k = 4).
+is the same as the previous experiments. In the rest of the subsection, we omit
+the CPU diagrams since they are similar to the ones for I/O cost in all cases.
+In order to measure the effect of the area covered by Q, we set n = 64, k = 4
+and vary AQ from 2% to 32% of the data space. As shown in Figures 34
+(UNI) and 35 (LA), the I/O cost of MQM, SPM and MBM increases with AQ for
+sum and max. For MQM, the termination condition is that the global threshold
+T (i.e., sum/max of thresholds for each query point) should exceed best dist,
+which increases with the query area. For SPM and MBM, the reason is the
+degradation of the pruning power of the heuristics. In the min case, however,
+only SPM is affected signiﬁcantly by AQ because the factor maxn
+i=1|qiq| involved
+in the pruning heuristic increases with the query size. The cost of FSM is obviously independent of AQ.
+In Figures 36 (UNI) and 37 (LA), we set n = 64, AQ = 8% and vary the
+number k of retrieved neighbors from 1 to 16. The value of k does not inﬂuence
+ACM Transactions on Database Systems, Vol. 30, No. 2, June 2005.
+Aggregate Nearest Neighbor Queries in Spatial Databases
+Actual and estimated I/O cost vs. number k of ANNs (UNI, n = 64, AQ = 8%).
+Actual and estimated I/O cost vs. number k of ANNs (LA, n = 64, AQ = 8%).
+Overall cost vs. buffer size (UNI, n = 64, k = 4, AQ = 8%).
+Overall cost vs. buffer size (LA, n = 64, k = 4, AQ = 8%).
+the cost of any method signiﬁcantly, because in most cases all neighbors are
+found in a few leaf nodes.
+Figures 38 (UNI) and 39 (LA) study the total running time in the presence
+of an LRU buffer that can accommodate 0% to 20% of the cumulative number
+ACM Transactions on Database Systems, Vol. 30, No. 2, June 2005.
+D. Papadias et al.
+of pages in the R-tree of P. We set n = 64, k = 4, AQ = 8% and measure the
+sum of I/O and CPU costs, charging 10 milliseconds for each page fault. The
+percentage of the overhead corresponding to I/O appears above each column.
+SPM and MBM do not beneﬁt from the existence of the buffer, since they process
+each node of the R-tree of P at most once. The cost of FSM is also constant
+because it reads each page of P exactly once and it incurs a ﬁxed amount (i.e.,
+|P| ·n) of aggregate distance computations. On the other hand, MQM improves
+signiﬁcantly for larger buffer sizes because of the locality of node visits for
+conventional NN queries. The experiment conﬁrms again the superiority of
+MBM under all settings and functions. Thus, it is the method of choice for
+centralized databases indexed by R-trees (or other data-partition methods).
+MQM could be used for distributed systems, where each query point is processed
+locally and the individual results are combined to produce the ﬁnal output. SPM
+does not have any obvious advantages over MBM, but as discussed in Section
+6 and veriﬁed in 7.3, it motivates an effective approximate algorithm. Finally,
+FSM is applicable for nonincremental processing on nonindexed datasets.
+7.2 Evaluation of Disk-Resident Queries
+For this set of experiments, we use TS and LA alternatively as query (Q) and
+data (P) sets. We compare F-MQM, F-MBM, and BNL assuming that the main
+memory can accommodate 50,000 data points (i.e., 196 pages). P is indexed
+by an R∗-tree (except for the case of BNL) and Q is stored as a ﬂat ﬁle (LA
+occupies 5136 and TS 762 pages). The I/O cost corresponds to the sum of R-tree
+node visits and page accesses for reading Q. When P = LA (1,314,620 points),
+there are 27 data blocks and the cost of BNL is 5136 + 27 · 762, whereas, if
+P = TS (194,971 points) the number of blocks is 4 and the cost of BNL becomes
+762 + 4 · 5136 (these costs are independent of the query parameters). F-MQM
+applies MBM to compute the ANN of each block because, as shown in Section
+7.1, it is the most efﬁcient method for memory-resident queries. The I/O in the
+diagrams also includes the cost of sorting Q (according to Hilbert values) in
+Since now the query cardinality n is ﬁxed to that of the corresponding dataset,
+we perform experiments by varying the relative data spaces of P and Q. First,
+we assume that the spaces of P and Q have the same centroid, but the area
+AQ of Q varies between 2% and 32% of the data space of P (similar to the
+experiments of Figures 34 and 35, but now the query points are enclosed by
+an MBR instead of a circle). Figure 40 (41) shows the I/O cost as a function of
+query size assuming that the query dataset is TS (LA) and k = 4. In general,
+BNL has the lowest cost for sum and max (except for very small AQ) because
+it reads the data ﬁle only once. F-MQM is the best method for min since it
+retrieves the ANN of the block that corresponds to the minimum threshold,
+leading to the earliest termination of the algorithm. For sum, F-MBM outperforms F-MQM because it can prune nodes N “far” from the query centroid
+based on Heuristic 4: sum(amindist(N, M1), . . . , amindist(N, Mm)) ≥best dist.
+Especially, for the case that Q = LA (Figure 41), each of the 27 query blocks
+occupies a small part of the data space (due to Hilbert sorting), enhancing the
+ACM Transactions on Database Systems, Vol. 30, No. 2, June 2005.
+Aggregate Nearest Neighbor Queries in Spatial Databases
+I/O cost vs. area AQ of Q (P = LA, Q = TS, k = 4).
+I/O cost vs. area AQ of Q (P = TS, Q = LA, k = 4).
+CPU cost vs. area AQ of Q (P = LA, Q = TS, k = 4).
+pruning power of the heuristic. In case of max, the relative performance of the
+two methods depends on the problem: F-MBM is better for Q = LA (for the
+reason mentioned above), but worse than F-MQM for Q = TS (since there exist
+only 4 query blocks and the pruning power of the heuristic is lower).
+Figures 42 and 43 compare the CPU costs of the methods for the same settings as Figures 40 and 41, respectively. In this case, BNL is the worst algorithm
+due to the exhaustive distance computations for all data-query point pairs. Similar to I/O diagrams, F-MQM is again the best method for min. For sum and max,
+the winner depends on the cardinality of the query dataset: (i) when Q = TS, it is
+F-MQM since it efﬁciently combines the ANNs of only 4 blocks and (ii) when Q =
+LA, the winner is F-MBM because of the enhanced pruning power of Heuristic 4
+and the higher cost of F-MQM (for combining the results of 27 groups).
+In order to further investigate the effect of the relative data space positions,
+for the next set of experiments we assume that both datasets lie in spaces of the
+ACM Transactions on Database Systems, Vol. 30, No. 2, June 2005.
+D. Papadias et al.
+CPU cost vs. area AQ of Q (P = TS, Q = LA, k = 4).
+I/O cost vs. overlap area (P = LA, Q = TS, k = 4).
+I/O cost vs. overlap area (P = TS, Q = LA, k = 4).
+same size, and vary their overlap area from 0% (i.e., P and Q are totally disjoint)
+to 100% (i.e., on top of each other). Intermediate values are obtained by starting
+from the 100% case and shifting the query dataset on both axes. Figure 44 (45)
+shows the cost of the algorithms assuming that Q = TS (LA). For sum and
+max, F-MQM is the best method for 0% overlap, but its cost grows fast with the
+overlap area. To explain this, let us consider the 0% overlap case assuming that
+the query space starts at the upper-right corner of the data space. The nearest
+neighbors of all query blocks must lie near this upper-right corner, since such
+points minimize the aggregate distance. Therefore, F-MQM can ﬁnd the best
+ANN relatively fast, and terminate when all the points in or near the corner
+have been encountered. On the other hand, as the overlap area increases, so
+does the number of data points that need to be considered. F-MBM is not very
+sensitive to the overlap area since, intuitively, its performance depends more
+on the relative position of R-tree nodes with respect to the query blocks. BNL
+is the best algorithm for sum and max in the case of overlap areas exceeding
+25%, whereas F-MQM is the winner in the remaining settings.
+ACM Transactions on Database Systems, Vol. 30, No. 2, June 2005.
+Aggregate Nearest Neighbor Queries in Spatial Databases
+CPU cost vs. overlap area (P = LA, Q = TS, k = 4).
+CPU cost vs. overlap area (P = TS, Q = LA, k = 4).
+Overall cost vs. buffer size (P = LA, Q = TS, k = 4, AQ = 8%).
+Figures 46 and 47 show the CPU cost vs. the overlap area. Similar to Figures
+42 and 43, BNL has the highest CPU overhead and F-MQM the lowest cost for
+min. For sum and max the winner is F-MQM if Q = TS, and F-MBM when
+Q = LA. We also performed experiments by varying the number of neighbors
+retrieved, while keeping the other parameters ﬁxed. As in the case of mainmemory queries, k does not have a signiﬁcant effect on the performance (and
+the diagrams are omitted).
+In Figure 48 (49), we measure the overall cost (including I/O and CPU time)
+in the presence of an LRU buffer, for P = LA (TS), Q = TS (LA) and k = 4. The
+spaces of P and Q have the same centroid and AQ is set to 8%. The buffer is
+dedicated to disk pages of P. Caching is pointless for Q, because it is always
+scanned linearly. Similar to Figures 38 and 39, the buffer size varies between 0%
+and 20% of the total number of pages in P, and each page fault corresponds to
+10 milliseconds. The percentage above each column indicates the I/O overhead.
+The performance of F-MBM (BNL) is independent of the buffer size, because
+ACM Transactions on Database Systems, Vol. 30, No. 2, June 2005.
+D. Papadias et al.
+Overall cost vs. buffer size (P = TS, Q = LA, k = 4, AQ = 8%).
+it accesses each page of P at most once (exactly once). On the other hand,
+F-MQM improves slightly when a buffer is available, but the enhancement is
+negligible because its I/O cost is largely dominated by reading the query set Q.
+As opposed to algorithms for memory-resident queries, which are I/O bound,
+for disk resident queries often the CPU-time corresponds to a large part of the
+total cost (i.e., 97–98% for BNL, 85–97% for F-MQM and the min function).
+In summary, unlike the case of main-memory queries, where there is a clear
+winner (MBM), the best method for disk-resident queries depends on the problem characteristics. F-MQM is always preferable for min, and performs well
+for max given few query blocks. F-MBM is best for sum and to a lesser extend
+for max, especially for large query sets. BNL has balanced performance and
+could be the method of choice for sum and max, if the data and query sets cover
+the same space. An important observation from the above experiments refers
+to the high cost of the disk-resident queries, which motivates the approximate
+algorithms, evaluated in the next section.
+7.3 Evaluation of Approximate Algorithms
+For approximate algorithms, in addition to performance, we have to evaluate
+the quality of approximation. Let p′
+best be the kth ANN retrieved by an approximate algorithm andadist′best be its aggregate distance. We deﬁne the error as:
+(adist′best −adistbest)/adistbest, where adistbest is the aggregate distance of the
+actual kth ANN (note that adist′best ≥adistbest). CAM and A-SPM are compared on disk-resident queries using the datasets LA and TS alternatively as
+query points. Both algorithms read Q twice: the ﬁrst time for computing Q′
+(CAM) or the geometric centroid (A-SPM) and the second time for computing
+the actual aggregate distance of the retrieved ANNs.
+Figures 50 and 51 illustrate the I/O cost as a function of the area AQ of Q.
+Similar to Figures 40 and 41, we assume that the data spaces of P and Q have
+the same centroid, but the MBR of Q ranges between 2% and 32% of the data
+space of P. The two methods have almost the same overhead because their
+I/O cost is dominated by reading Q and the node accesses to the data R-tree
+have little effect on performance. The diagram also includes the error of the
+algorithms at the top of the corresponding column. A-SPM incurs small error
+for sum (maximum value 6.51%) because the SR can be well approximated by a
+circle around the geometric centroid. The quality of approximation is lower for
+Q = LA due to the higher skeweness of the dataset (compared to TS). On the
+ACM Transactions on Database Systems, Vol. 30, No. 2, June 2005.
+Aggregate Nearest Neighbor Queries in Spatial Databases
+I/O cost vs. area AQ of Q (P = LA, Q = TS, k = 4).
+I/O cost vs. area AQ of Q (P = TS, Q = LA, k = 4).
+CPU cost vs. area AQ of Q (P = LA, Q = TS, k = 4).
+other hand, CAM is better for max because the SR has a more irregular shape
+(see Figure 17).
+The last experiment (Figures 52 and 53) measures the CPU time of the
+approximate algorithms. A-SPM is better than CAM because ﬁnding the Euclidean NNs of q involves processing just a few nodes, whereas coalescing
+query points is CPU-intensive. Especially for Q = LA (Figure 53), the CPU
+overhead of CAM exceeds that of the best exact algorithm (Figure 43) and the
+method is ineffective. In general, A-SPM is far more efﬁcient (and, for sum, more
+accurate). CAM should be used only for max, provided that the query dataset
+is relatively small.
+ACM Transactions on Database Systems, Vol. 30, No. 2, June 2005.
+D. Papadias et al.
+CPU cost vs. area AQ of Q (P = TS, Q = LA, k = 4).
+8. CONCLUSIONS
+In this article, we propose the novel problem of aggregate nearest neighbor
+retrieval, a generalized form of NN search, where there are multiple query
+points and the optimization goal depends on an input function . ANN is important both as a standalone query type in spatial applications (e.g., GIS, VLSI),
+as well as a module for efﬁcient clustering-related methods. We provide algorithms for memory-resident queries and cost models that accurately predict
+their performance in terms of node accesses. As a second step, we also develop
+methods for disk-resident query sets and approximate retrieval. We evaluate
+all the proposed techniques through extensive experiments.
+In the future, we intend to explore the application of related techniques to
+variations of ANN search. Consider, for instance, that Q represents a set of
+facilities and the goal is to assign each object of P to a single facility so that the
+sum of distances (of each object to its nearest facility) is minimized. Additional
+constraints (e.g., a facility may serve at most k users) may further complicate
+the solutions. Similar problems have been studied in the context of clustering
+and resource allocation, but the existing methods are different from the ones
+presented in this article (as they do not rely on spatial indexing). Finally, we
+plan to study analytically ANN retrieval for disk-resident sets. In this case,
+the derivation of cost models is more complex than memory-resident queries
+because of the multiple reads of Q required by the processing techniques.

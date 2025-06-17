@@ -1,0 +1,606 @@
+Rethinking Semantic Segmentation from a Sequence-to-Sequence Perspective
+with Transformers
+Sixiao Zheng1*
+Jiachen Lu1
+Hengshuang Zhao2
+Xiatian Zhu3
+Zekun Luo4
+Yabiao Wang4
+Yanwei Fu1
+Jianfeng Feng1
+Tao Xiang3, 5
+Philip H.S. Torr2
+Li Zhang1†
+1Fudan University
+2University of Oxford
+3University of Surrey
+4Tencent Youtu Lab
+5Facebook AI
+ 
+Most recent semantic segmentation methods adopt
+a fully-convolutional network (FCN) with an encoderdecoder architecture. The encoder progressively reduces
+the spatial resolution and learns more abstract/semantic
+visual concepts with larger receptive ﬁelds. Since context
+modeling is critical for segmentation, the latest efforts have
+been focused on increasing the receptive ﬁeld, through either dilated/atrous convolutions or inserting attention modules. However, the encoder-decoder based FCN architecture remains unchanged. In this paper, we aim to provide
+an alternative perspective by treating semantic segmentation as a sequence-to-sequence prediction task. Speciﬁcally,
+we deploy a pure transformer (i.e., without convolution and
+resolution reduction) to encode an image as a sequence of
+patches. With the global context modeled in every layer of
+the transformer, this encoder can be combined with a simple
+decoder to provide a powerful segmentation model, termed
+SEgmentation TRansformer (SETR). Extensive experiments
+show that SETR achieves new state of the art on ADE20K
+(50.28% mIoU), Pascal Context (55.83% mIoU) and competitive results on Cityscapes. Particularly, we achieve the
+ﬁrst position in the highly competitive ADE20K test server
+leaderboard on the day of submission.
+1. Introduction
+Since the seminal work of , existing semantic segmentation models have been dominated by those based on
+fully convolutional network (FCN). A standard FCN segmentation model has an encoder-decoder architecture: the
+encoder is for feature representation learning, while the decoder for pixel-level classiﬁcation of the feature representa-
+*Work done while Sixiao Zheng was interning at Tencent Youtu Lab.
+†Li Zhang ( ) is the corresponding author with
+School of Data Science, Fudan University.
+tions yielded by the encoder. Among the two, feature representation learning (i.e., the encoder) is arguably the most
+important model component . The encoder,
+like most other CNNs designed for image understanding,
+consists of stacked convolution layers.
+Due to concerns
+on computational cost, the resolution of feature maps is reduced progressively, and the encoder is hence able to learn
+more abstract/semantic visual concepts with a gradually increased receptive ﬁeld. Such a design is popular due to two
+favorable merits, namely translation equivariance and locality. The former respects well the nature of imaging process which underpins the model generalization ability
+to unseen image data. Whereas the latter controls the model
+complexity by sharing parameters across space. However, it
+also raises a fundamental limitation that learning long-range
+dependency information, critical for semantic segmentation
+in unconstrained scene images , becomes challenging
+due to still limited receptive ﬁelds.
+To overcome this aforementioned limitation, a number
+of approaches have been introduced recently. One approach
+is to directly manipulate the convolution operation. This includes large kernel sizes , atrous convolutions ,
+and image/feature pyramids . The other approach is to
+integrate attention modules into the FCN architecture. Such
+a module aims to model global interactions of all pixels in
+the feature map . When applied to semantic segmentation , a common design is to combine the attention
+module to the FCN architecture with attention layers sitting
+on the top. Taking either approach, the standard encoderdecoder FCN model architecture remains unchanged. More
+recently, attempts have been made to get rid of convolutions
+altogether and deploy attention-alone models instead.
+However, even without convolution, they do not change the
+nature of the FCN model structure: an encoder downsamples the spatial resolution of the input, developing lowerresolution feature mappings useful for discriminating semantic classes, and the decoder upsamples the feature rep-
+ 
+resentations into a full-resolution segmentation map.
+In this paper, we aim to provide a rethinking to the semantic segmentation model design and contribute an alternative. In particular, we propose to replace the stacked convolution layers based encoder with gradually reduced spatial resolution with a pure transformer , resulting in
+a new segmentation model termed SEgmentation TRansformer (SETR). This transformer-alone encoder treats an
+input image as a sequence of image patches represented
+by learned patch embedding, and transforms the sequence
+with global self-attention modeling for discriminative feature representation learning. Concretely, we ﬁrst decompose an image into a grid of ﬁxed-sized patches, forming a
+sequence of patches. With a linear embedding layer applied
+to the ﬂattened pixel vectors of every patch, we then obtain
+a sequence of feature embedding vectors as the input to a
+transformer. Given the learned features from the encoder
+transformer, a decoder is then used to recover the original
+image resolution. Crucially there is no downsampling in
+spatial resolution but global context modeling at every layer
+of the encoder transformer, thus offering a completely new
+perspective to the semantic segmentation problem.
+This pure transformer design is inspired by its tremendous success in natural language processing (NLP) .
+More recently, a pure vision transformer or ViT has
+shown to be effective for image classiﬁcation tasks. It thus
+provides direct evidence that the traditional stacked convolution layer (i.e., CNN) design can be challenged and image
+features do not necessarily need to be learned progressively
+from local to global context by reducing spatial resolution.
+However, extending a pure transformer from image classi-
+ﬁcation to a spatial location sensitive task of semantic segmentation is non-trivial. We show empirically that SETR
+not only offers a new perspective in model design, but also
+achieves new state of the art on a number of benchmarks.
+The following contributions are made in this paper: (1)
+We reformulate the image semantic segmentation problem
+from a sequence-to-sequence learning perspective, offering an alternative to the dominating encoder-decoder FCN
+model design. (2) As an instantiation, we exploit the transformer framework to implement our fully attentive feature
+representation encoder by sequentializing images. (3) To
+extensively examine the self-attentive feature presentations,
+we further introduce three different decoder designs with
+varying complexities.
+Extensive experiments show that
+our SETR models can learn superior feature representations as compared to different FCNs with and without attention modules, yielding new state of the art on ADE20K
+(50.28%), Pascal Context (55.83%) and competitive results
+on Cityscapes. Particularly, our entry is ranked the 1st place
+in the highly competitive ADE20K test server leaderboard.
+2. Related work
+Semantic segmentation Semantic image segmentation has
+been signiﬁcantly boosted with the development of deep
+neural networks. By removing fully connected layers, the
+fully convolutional network (FCN) is able to achieve
+pixel-wise predictions. While the predictions of FCN are
+relatively coarse, several CRF/MRF based approaches are developed to help reﬁne the coarse predictions.
+To address the inherent tension between semantics and location , coarse and ﬁne layers need to be aggregated for
+both the encoder and decoder. This leads to different variants of the encoder-decoder structures for multilevel feature fusion.
+Many recent efforts have been focused on addressing
+the limited receptive ﬁeld/context modeling problem in
+FCN. To enlarge the receptive ﬁeld, DeepLab and Dilation introduce the dilated convolution.
+Alternatively, context modeling is the focus of PSPNet and
+DeepLabV2 . The former proposes the PPM module to
+obtain different region’s contextual information while the
+latter develops ASPP module that adopts pyramid dilated
+convolutions with different dilation rates.
+Decomposed
+large kernels are also utilized for context capturing.
+Recently, attention based models are popular for capturing
+long range context information. PSANet develops the
+pointwise spatial attention module for dynamically capturing the long range context. DANet embeds both spatial
+attention and channel attention. CCNet alternatively
+focuses on economizing the heavy computation budget introduced by full spatial attention. DGMN builds a dynamic graph message passing network for scene modeling
+and it can signiﬁcantly reduce the computational complexity. Note that all these approaches are still based on FCNs
+where the feature encoding and extraction part are based on
+classical ConvNets like VGG and ResNet . In this
+work, we alternatively rethink the semantic segmentation
+task from a different perspective.
+Transformer Transformer and self-attention models have
+revolutionized machine translation and NLP .
+Recently, there are also some explorations for the usage
+of transformer structures in image recognition. Non-local
+network appends transformer style attention onto the
+convolutional backbone. AANet mixes convolution and
+self-attention for backbone training. LRNet and standalone networks explore local self-attention to avoid
+the heavy computation brought by global self-attention.
+SAN explores two types of self-attention modules.
+Axial-Attention decomposes the global spatial attention into two separate axial attentions such that the computation is largely reduced. Apart from these pure transformer based models, there are also CNN-transformer hybrid ones. DETR and the following deformable version
+Linear Projection
+Transformer Layer
+Transformer Layer
+Layer Norm
+Layer Norm
+Multi-Head
+conv-conv-4x
+reshape-conv
+Figure 1. Schematic illustration of the proposed SEgmentation TRansformer (SETR) (a). We ﬁrst split an image into ﬁxed-size patches,
+linearly embed each of them, add position embeddings, and feed the resulting sequence of vectors to a standard Transformer encoder. To
+perform pixel-wise segmentation, we introduce different decoder designs: (b) progressive upsampling (resulting in a variant called SETR-
+PUP); and (c) multi-level feature aggregation (a variant called SETR-MLA).
+utilize transformer for object detection where transformer
+is appended inside the detection head.
+STTR and
+LSTR adopt transformer for disparity estimation and
+lane shape prediction respectively. Most recently, ViT 
+is the ﬁrst work to show that a pure transformer based image
+classiﬁcation model can achieve the state-of-the-art. It provides direct inspiration to exploit a pure transformer based
+encoder design in a semantic segmentation model.
+The most related work is which also leverages attention for image segmentation. However, there are several
+key differences. First, though convolution is completely removed in as in our SETR, their model still follows the
+conventional FCN design in that spatial resolution of feature
+maps is reduced progressively. In contrast, our sequence-tosequence prediction model keeps the same spatial resolution
+throughout and thus represents a step-change in model design. Second, to maximize the scalability on modern hardware accelerators and facilitate easy-to-use, we stick to the
+standard self-attention design. Instead, adopts a specially designed axial-attention which is less scalable to
+standard computing facilities. Our model is also superior in
+segmentation accuracy (see Section 4).
+3.1. FCN-based semantic segmentation
+In order to contrast with our new model design, let us
+ﬁrst revisit the conventional FCN for image semantic
+segmentation. An FCN encoder consists of a stack of sequentially connected convolutional layers. The ﬁrst layer
+takes as input the image, denoted as H×W ×3 with H×W
+specifying the image size in pixels. The input of subsequent layer i is a three-dimensional tensor sized h × w × d,
+where h and w are spatial dimensions of feature maps, and
+d is the feature/channel dimension. Locations of the tensor in a higher layer are computed based on the locations of
+tensors of all lower layers they are connected to via layerby-layer convolutions, which are deﬁned as their receptive
+ﬁelds. Due to the locality nature of convolution operation,
+the receptive ﬁeld increases linearly along the depth of layers, conditional on the kernel sizes (typically 3 × 3). As
+a result, only higher layers with big receptive ﬁelds can
+model long-range dependencies in this FCN architecture.
+However, it is shown that the beneﬁts of adding more layers
+would diminish rapidly once reaching certain depths .
+Having limited receptive ﬁelds for context modeling is thus
+an intrinsic limitation of the vanilla FCN architecture.
+Recently, a number of state-of-the-art methods suggest that combing FCN with attention mechanism
+is a more effective strategy for learning long-range contextual information. These methods limit the attention learning to higher layers with smaller input sizes alone due to its
+quadratic complexity w.r.t. the pixel number of feature tensors. This means that dependency learning on lower-level
+feature tensors is lacking, leading to sub-optimal representation learning. To overcome this limitation, we propose
+a pure self-attention based encoder, named SEgmentation
+TRansformers (SETR).
+3.2. Segmentation transformers (SETR)
+Image to sequence SETR follows the same input-output
+structure as in NLP for transformation between 1D sequences. There thus exists a mismatch between 2D image
+and 1D sequence. Concretely, the Transformer, as depicted
+in Figure 1(a), accepts a 1D sequence of feature embeddings
+Z ∈RL×C as input, L is the length of sequence, C is the
+hidden channel size. Image sequentialization is thus needed
+to convert an input image x ∈RH×W ×3 into Z.
+A straightforward way for image sequentialization is to
+ﬂatten the image pixel values into a 1D vector with size of
+3HW. For a typical image sized at 480(H) × 480(W) × 3,
+the resulting vector will have a length of 691,200. Given
+the quadratic model complexity of Transformer, it is not
+possible that such high-dimensional vectors can be handled
+in both space and time. Therefore tokenizing every single
+pixel as input to our transformer is out of the question.
+In view of the fact that a typical encoder designed for
+semantic segmentation would downsample a 2D image x ∈
+RH×W ×3 into a feature map xf ∈R
+16 ×C, we thus
+decide to set the transformer input sequence length L as
+256 . This way, the output sequence of the transformer can be simply reshaped to the target feature map xf.
+To obtain the HW
+256 -long input sequence, we divide an
+image x ∈RH×W ×3 into a grid of H
+16 patches uniformly, and then ﬂatten this grid into a sequence.
+further mapping each vectorized patch p into a latent Cdimensional embedding space using a linear projection
+function f: p −→e ∈RC, we obtain a 1D sequence of
+patch embeddings for an image x. To encode the patch spacial information, we learn a speciﬁc embedding pi for every
+location i which is added to ei to form the ﬁnal sequence input E = {e1 + p1, e2 + p2, · · · , eL + pL}. This way, spatial information is kept despite the orderless self-attention
+nature of transformers.
+Transformer Given the 1D embedding sequence E as
+input, a pure transformer based encoder is employed to
+learn feature representations. This means each transformer
+layer has a global receptive ﬁeld, solving the limited receptive ﬁeld problem of existing FCN encoder once and
+for all. The transformer encoder consists of Le layers of
+multi-head self-attention (MSA) and Multilayer Perceptron
+(MLP) blocks (Figure 1(a)). At each layer l, the input to self-attention is in a triplet of (query, key, value)
+computed from the input Zl−1 ∈RL×C as:
+query = Zl−1WQ, key = Zl−1WK, value = Zl−1WV , (1)
+where WQ/WK/WV ∈RC×d are the learnable parameters
+of three linear projection layers and d is the dimension of
+(query, key, value). Self-attention (SA) is then formulated as:
+SA(Zl−1) = Zl−1 + softmax( Zl−1WQ(ZWK)⊤
+)(Zl−1WV ).
+MSA is an extension with m independent SA operations
+and project their concatenated outputs: MSA(Zl−1) =
+[SA1(Zl−1); SA2(Zl−1); · · · ; SAm(Zl−1)]WO, where
+WO ∈Rmd×C. d is typically set to C/m. The output of
+MSA is then transformed by an MLP block with residual
+skip as the layer output as:
+Zl = MSA(Zl−1) + MLP(MSA(Zl−1)) ∈RL×C.
+Note, layer norm is applied before MSA and MLP
+blocks which is omitted for simplicity.
+{Z1, Z2, · · · , ZLe} as the features of transformer layers.
+3.3. Decoder designs
+To evaluate the effectiveness of SETR’s encoder feature
+representations Z, we introduce three different decoder designs to perform pixel-level segmentation. As the goal of
+the decoder is to generate the segmentation results in the
+original 2D image space (H × W), we need to reshape
+the encoder’s features (that are used in the decoder), Z,
+from a 2D shape of HW
+256 × C to a standard 3D feature map
+16 × C. Next, we brieﬂy describe the three decoders.
+(1) Naive upsampling (Naive) This naive decoder ﬁrst
+projects the transformer feature ZLe to the dimension of
+category number (e.g., 19 for experiments on Cityscapes).
+For this we adopt a simple 2-layer network with architecture: 1 × 1 conv + sync batch norm (w/ ReLU) + 1 × 1
+conv. After that, we simply bilinearly upsample the output to the full image resolution, followed by a classiﬁcation
+layer with pixel-wise cross-entropy loss. When this decoder
+is used, we denote our model as SETR-Na¨ıve.
+(2) Progressive UPsampling (PUP) Instead of one-step
+upscaling which may introduce noisy predictions, we consider a progressive upsampling strategy that alternates conv
+layers and upsampling operations. To maximally mitigate
+the adversarial effect, we restrict upsampling to 2×. Hence,
+a total of 4 operations are needed for reaching the full resolution from ZLe with size H
+16 . More details of this
+process are given in Figure 1(b). When using this decoder,
+we denote our model as SETR-PUP.
+(3) Multi-Level feature Aggregation (MLA) The third
+design is characterized by multi-level feature aggregation
+(Figure 1(c)) in similar spirit of feature pyramid network
+However, our decoder is fundamentally different because the feature representations Zl of every SETR’s
+layer share the same resolution without a pyramid shape.
+Speciﬁcally, we take as input the feature representations
+{Zm} (m ∈{ Le
+M , · · · , M Le
+M }) from M layers uniformly distributed across the layers with step Le
+M to the decoder. M streams are then deployed, with each focusing on
+Hidden size
+Table 1. Conﬁguration of Transformer backbone variants.
+Semantic FPN 
+Hybrid-Base
+Hybrid-Base
+Hybrid-DeiT
+SETR-Na¨ıve
+SETR-Na¨ıve-Base
+SETR-MLA-Base
+SETR-PUP-Base
+SETR-Na¨ıve-DeiT
+SETR-MLA-DeiT
+SETR-PUP-DeiT
+Table 2. Comparing SETR variants on different pre-training
+strategies and backbones.
+All experiments are trained on
+Cityscapes train ﬁne set with batch size 8, and evaluated using the
+single scale test protocol on the Cityscapes validation set in mean
+IoU (%) rate. “Pre” denotes the pre-training of transformer part.
+“R” means the transformer part is randomly initialized.
+one speciﬁc selected layer. In each stream, we ﬁrst reshape
+the encoder’s feature Zl from a 2D shape of HW
+256 × C to a
+3D feature map H
+16 × C. A 3-layer (kernel size 1 × 1,
+3 × 3, and 3 × 3) network is applied with the feature channels halved at the ﬁrst and third layers respectively, and the
+spatial resolution upscaled 4× by bilinear operation after
+the third layer. To enhance the interactions across different streams, we introduce a top-down aggregation design
+via element-wise addition after the ﬁrst layer. An additional
+3 × 3 conv is applied after the element-wise additioned feature. After the third layer, we obtain the fused feature from
+all the streams via channel-wise concatenation which is then
+bilinearly upsampled 4× to the full resolution. When using
+this decoder, we denote our model as SETR-MLA.
+4. Experiments
+4.1. Experimental setup
+We conduct experiments on three widely-used semantic
+segmentation benchmark datasets.
+Cityscapes densely annotates 19 object categories in
+images with urban scenes. It contains 5000 ﬁnely annotated
+images, split into 2975, 500 and 1525 for training, validation and testing respectively. The images are all captured at
+a high resolution of 2048 × 1024. In addition, it provides
+19,998 coarse annotated images for model training.
+Pre Backbone ADE20K Cityscapes
+SETR-MLA-DeiT 1K
+SETR-PUP-DeiT 1K
+Table 3. Comparison to FCN with different pre-training with
+single-scale inference on the ADE20K val and Cityscapes val set.
+ADE20K is a challenging scene parsing benchmark
+with 150 ﬁne-grained semantic concepts. It contains 20210,
+2000 and 3352 images for training, validation and testing.
+PASCAL Context provides pixel-wise semantic labels for the whole scene (both “thing” and “stuff” classes),
+and contains 4998 and 5105 images for training and validation respectively. Following previous works, we evaluate on
+the most frequent 59 classes and the background class (60
+classes in total).
+Implementation details Following the default setting
+(e.g., data augmentation and training schedule) of public
+codebase mmsegmentation , (i) we apply random resize
+with ratio between 0.5 and 2, random cropping (768, 512
+and 480 for Cityscapes, ADE20K and Pascal Context respectively) and random horizontal ﬂipping during training
+for all the experiments; (ii) We set batch size 16 and the total iteration to 160,000 and 80,000 for the experiments on
+ADE20K and Pascal Context. For Cityscapes, we set batch
+size to 8 with a number of training schedules reported in Table 2, 6 and 7 for fair comparison. We adopt a polynomial
+learning rate decay schedule and employ SGD as the
+optimizer. Momentum and weight decay are set to 0.9 and
+0 respectively for all the experiments on the three datasets.
+We set initial learning rate 0.001 on ADE20K and Pascal
+Context, and 0.01 on Cityscapes.
+Auxiliary loss As we also ﬁnd the auxiliary segmentation loss helps the model training.
+Each auxiliary loss head follows a 2-layer network.
+auxiliary losses at different Transformer layers: SETR-
+Na¨ıve (Z10, Z15, Z20), SETR-PUP (Z10, Z15, Z20, Z24),
+SETR-MLA (Z6, Z12, Z18, Z24). Both auxiliary loss and
+main loss heads are applied concurrently.
+Multi-scale test We use the default settings of mmsegmentation . Speciﬁcally, the input image is ﬁrst scaled to
+a uniform size. Multi-scale scaling and random horizontal
+ﬂip are then performed on the image with a scaling factor
+(0.5, 0.75, 1.0, 1.25, 1.5, 1.75). Sliding window is adopted
+for test (e.g., 480 × 480 for Pascal Context). If the shorter
+side is smaller than the size of the sliding window, the image is scaled with its shorter side to the size of the sliding
+Figure 2. Qualitative results on ADE20K: SETR (right column)
+vs. dilated FCN baseline (left column) in each pair. Best viewed
+in color and zoom in.
+FCN (160k, SS) 
+ResNet-101
+FCN (160k, MS) 
+ResNet-101
+CCNet 
+ResNet-101
+Strip pooling 
+ResNet-101
+DANet 
+ResNet-101
+OCRNet 
+ResNet-101
+UperNet 
+ResNet-101
+Deeplab V3+ 
+ResNet-101
+SETR-Na¨ıve (160k, SS)
+SETR-Na¨ıve (160k, MS)
+SETR-PUP (160k, SS)
+SETR-PUP (160k, MS)
+SETR-MLA (160k, SS)
+SETR-MLA (160k, MS)
+SETR-PUP-DeiT (160k, SS)
+SETR-PUP-DeiT (160k, MS) 1K
+SETR-MLA-DeiT (160k, SS)
+SETR-MLA-DeiT (160k, MS) 1K
+Table 4. State-of-the-art comparison on the ADE20K dataset.
+Performances of different model variants are reported. SS: Singlescale inference. MS: Multi-scale inference.
+window (e.g., 480) while keeping the aspect ratio. Synchronized BN is used in decoder and auxiliary loss heads. For
+training simplicity, we do not adopt the widely-used tricks
+such as OHEM loss in model training.
+Baselines We adopt dilated FCN and Semantic
+FPN as baselines with their results taken from .
+Our models and the baselines are trained and tested in the
+same settings for fair comparison. In addition, state-of-theart models are also compared. Note that the dilated FCN is
+with output stride 8 and we use output stride 16 in all our
+models due to GPU memory constrain.
+SETR variants Three variants of our model with different decoder designs (see Sec. 3.3), namely SETR-Na¨ıve,
+and SETR-MLA. Besides, we use two variants of the encoder “T-Base” and “T-Large” with 12 and 24
+layers respectively (Table 1). Unless otherwise speciﬁed,
+we use “T-Large” as the encoder for SETR-Na¨ıve, SETR-
+PUP and SETR-MLA. We denote SETR-Na¨ıve-Base as the
+model utilizing “T-Base” in SETR-Na¨ıve.
+Though designed as a model with a pure transformer
+encoder, we also set a hybrid baseline Hybrid by using a
+Figure 3. Qualitative results on Pascal Context: SETR (right
+column) vs. dilated FCN baseline (left column) in each pair. Best
+viewed in color and zoom in.
+FCN (80k, SS) 
+ResNet-101
+FCN (80k, MS) 
+ResNet-101
+DANet 
+ResNet-101
+EMANet 
+ResNet-101
+SVCNet 
+ResNet-101
+Strip pooling 
+ResNet-101
+GFFNet 
+ResNet-101
+APCNet 
+ResNet-101
+SETR-Na¨ıve (80k, SS)
+SETR-Na¨ıve (80k, MS)
+SETR-PUP (80k, SS)
+SETR-PUP (80k, MS)
+SETR-MLA (80k, SS)
+SETR-MLA (80k, MS)
+SETR-PUP-DeiT (80k, SS)
+SETR-PUP-DeiT (80k, MS)
+SETR-MLA-DeiT (80k, SS)
+SETR-MLA-DeiT (80k, MS)
+Table 5. State-of-the-art comparison on the Pascal Context
+dataset. Performances of different model variants are reported.
+SS: Single-scale inference. MS: Multi-scale inference.
+ResNet-50 based FCN encoder and feeding its output feature into SETR. To cope with the GPU memory constraint
+and for fair comparison, we only consider ‘T-Base” in Hybrid and set the output stride of FCN to 1/16. That is, Hybrid is a combination of ResNet-50 and SETR-Na¨ıve-Base.
+Pre-training We use the pre-trained weights provided by
+ViT or DeiT to initialize all the transformer layers and the input linear projection layer in our model. We
+denote SETR-Na¨ıve-DeiT as the model utilizing DeiT 
+pre-training in SETR-Na¨ıve-Base. All the layers without
+pre-training are randomly initialized.
+For the FCN encoder of Hybrid, we use the initial weights pre-trained on
+ImageNet-1k. For the transformer part, we use the weights
+pre-trained by ViT , DeiT or randomly initialized.
+We use patch size 16 × 16 for all the experiments. We
+perform 2D interpolation on the pre-trained position embeddings, according to their location in the original image
+for different input size ﬁne-tuning.
+Evaluation metric Following the standard evaluation protocol , the metric of mean Intersection over Union
+(mIoU) averaged over all classes is reported. For ADE20K,
+Figure 4. Qualitative results on Cityscapes: SETR (right column) vs. dilated FCN baseline (left column) in each pair. Best viewed in
+color and zoom in.
+FCN (40k, SS) 
+ResNet-101
+FCN (40k, MS) 
+ResNet-101
+FCN (80k, SS) 
+ResNet-101
+FCN (80k, MS) 
+ResNet-101
+PSPNet 
+ResNet-101
+DeepLab-v3 (MS)
+ResNet-101
+NonLocal 
+ResNet-101
+CCNet 
+ResNet-101
+ResNet-101
+Axial-DeepLab-XL (MS)
+Axial-ResNet-XL
+Axial-DeepLab-L (MS)
+Axial-ResNet-L
+SETR-PUP (40k, SS)
+SETR-PUP (40k, MS)
+SETR-PUP (80k, SS)
+SETR-PUP (80k, MS)
+Table 6. State-of-the-art comparison on the Cityscapes validation set. Performances of different training schedules (e.g., 40k
+and 80k) are reported. SS: Single-scale inference. MS: Multiscale inference.
+additionally pixel-wise accuracy is reported following the
+existing practice.
+4.2. Ablation studies
+Table 2 and 3 show ablation studies on (a) different variants of SETR on various training schedules, (b) comparison to FCN and Semantic FPN , (c) pre-training
+on different data, (d) comparison with Hybrid, (e) compare to FCN with different pre-training. Unless otherwise
+speciﬁed, all experiments on Table 2 and 3 are trained on
+Cityscapes train ﬁne set with batch size 8, and evaluated
+using the single scale test protocol on the Cityscapes validation set in mean IoU (%) rate. Experiments on ADE20K
+also follow the single scale test protocol.
+From Table 2, we can make the following observations:
+(i) Progressively upsampling the feature maps, SETR-
+PSPNet 
+ResNet-101
+DenseASPP 
+DenseNet-161
+BiSeNet 
+ResNet-101
+PSANet 
+ResNet-101
+DANet 
+ResNet-101
+OCNet 
+ResNet-101
+CCNet 
+ResNet-101
+Axial-DeepLab-L 
+Axial-ResNet-L
+Axial-DeepLab-XL 
+Axial-ResNet-XL
+SETR-PUP (100k)
+Table 7. Comparison on the Cityscapes test set. ‡: trained on
+ﬁne and coarse annotated data.
+PUP achieves the best performance among all the variants on Cityscapes. One possible reason for inferior performance of SETR-MLA is that the feature outputs of different transformer layers do not have the beneﬁts of resolution pyramid as in feature pyramid network (FPN) (see
+Figure 5). However, SETR-MLA performs slightly better
+than SETR-PUP, and much superior to the variant SETR-
+Na¨ıve that upsamples the transformers output feature by
+16× in one-shot, on ADE20K val set (Table 3 and 4). (ii)
+The variants using “T-Large” (e.g., SETR-MLA and SETR-
+Na¨ıve) are superior to their “T-Base” counterparts, i.e.,
+SETR-MLA-Base and SETR-Na¨ıve-Base, as expected. (iii)
+While our SETR-PUP-Base (76.71) performs worse than
+Hybrid-Base (76.76), it shines (78.02) when training with
+more iterations (80k). It suggests that FCN encoder design
+can be replaced in semantic segmentation, and further con-
+ﬁrms the effectiveness of our model. (iv) Pre-training is critical for our model. Randomly initialized SETR-PUP only
+gives 42.27% mIoU on Cityscapes. Model pre-trained with
+DeiT on ImageNet-1K gives the best performance on
+Cityscapes, slightly better than the counterpart pre-trained
+Figure 5. Visualization of output feature of layer Z1, Z9, Z17, Z24
+of SETR trained on Pascal Context. Best viewed in color.
+Figure 6. Examples of attention maps from SETR trained on Pascal Context.
+with ViT on ImageNet-21K. (v) To study the power
+of pre-training and further verify the effectiveness of our
+proposed approach, we conduct the ablation study on the
+pre-training strategy in Table 3. For fair comparison with
+the FCN baseline, we ﬁrst pre-train a ResNet-101 on the
+Imagenet-21k dataset with a classiﬁcation task and then
+adopt the pre-trained weights for a dilated FCN training for
+the semantic segmentation task on ADE20K or Cityscapes.
+Table 3 shows that with ImageNet-21k pre-training FCN
+baseline experienced a clear improvement over the variant
+pre-trained on ImageNet-1k.
+However, our method outperforms the FCN counterparts by a large margin, verifying that the advantage of our approach largely comes
+from the proposed sequence-to-sequence modeling strategy
+rather than bigger pre-training data.
+4.3. Comparison to state-of-the-art
+Results on ADE20K Table 4 presents our results on
+the more challenging ADE20K dataset.
+MLA achieves superior mIoU of 48.64% with single-scale
+(SS) inference. When multi-scale inference is adopted, our
+method achieves a new state of the art with mIoU hitting
+50.28%. Figure 2 shows the qualitative results of our model
+and dilated FCN on ADE20K. When training a single model
+on the train+validation set with the default 160,000 iterations, our method ranks 1st place in the highly competitive
+ADE20K test server leaderboard.
+Results on Pascal Context Table 5 compares the segmentation results on Pascal Context.
+Dilated FCN with the
+ResNet-101 backbone achieves a mIoU of 45.74%.
+Using the same training schedule, our proposed SETR signiﬁcantly outperforms this baseline, achieving mIoU of
+54.40% (SETR-PUP) and 54.87% (SETR-MLA). SETR-
+MLA further improves the performance to 55.83% when
+multi-scale (MS) inference is adopted, outperforming the
+nearest rival APCNet with a clear margin. Figure 3 gives
+some qualitative results of SETR and dilated FCN. Further visualization of the learned attention maps in Figure 6
+shows that SETR can attend to semantically meaningful
+foreground regions, demonstrating its ability to learn discriminative feature representations useful for segmentation.
+Results on Cityscapes Tables 6 and 7 show the comparative results on the validation and test set of Cityscapes respectively. We can see that our model SETR-PUP is superior to FCN baselines, and FCN plus attention based approaches, such as Non-local and CCNet ; and its
+performance is on par with the best results reported so far.
+On this dataset we can now compare with the closely related
+Axial-DeepLab which aims to use an attentionalone model but still follows the basic structure of FCN.
+Note that Axial-DeepLab sets the same output stride 16 as
+ours. However, its full input resolution is
+much larger than our crop size 768 × 768, and it runs more
+epochs (60k iteration with batch size 32) than our setting
+(80k iterations with batch size 8). Nevertheless, our model
+is still superior to Axial-DeepLab when multi-scale inference is adopted on Cityscapes validation set. Using the ﬁne
+set only, our model (trained with 100k iterations) outperforms Axial-DeepLab-XL with a clear margin on the test
+set. Figure 4 shows the qualitative results of our model and
+dilated FCN on Cityscapes.
+5. Conclusion
+In this work, we have presented an alternative perspective for semantic segmentation by introducing a sequenceto-sequence prediction framework. In contrast to existing
+FCN based methods that enlarge the receptive ﬁeld typically with dilated convolutions and attention modules at the
+component level, we made a step change at the architectural
+level to completely eliminate the reliance on FCN and elegantly solve the limited receptive ﬁeld challenge. We implemented the proposed idea with Transformers that can model
+global context at every stage of feature learning.
+with a set of decoder designs in different complexity, strong
+segmentation models are established with none of the bells
+and whistles deployed by recent methods. Extensive experiments demonstrate that our models set new state of the
+art on ADE20, Pascal Context and competitive results on
+Cityscapes. Encouragingly, our method is ranked the 1st
+place in the highly competitive ADE20K test server leaderboard on the day of submission.
+Acknowledgments
+This work was supported by Shanghai Municipal Science and Technology Major Project (No.2018SHZDZX01),
+ZJLab, and Shanghai Center for Brain Science and Brain-
+Inspired Technology.

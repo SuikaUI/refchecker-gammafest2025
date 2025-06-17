@@ -1,0 +1,482 @@
+Unsupervised Anomaly Detection for X-Ray
+Diana Davletshina1⋆, Valentyn Melnychuk1, Viet Tran1, Hitansh Singla1,
+Max Berrendorf2, Evgeniy Faerman2, Michael Fromm2, Matthias Schubert2
+1 Ludwig-Maximilians-Universität München, Munich, Germany
+{d.davletshina,v.melnychuk,viet.tran,hitansh.singla}@campus.lmu.de
+2 Lehrstuhl für Datenbanksysteme und Data Mining, Ludwig-Maximilians-Universität
+München, Munich, Germany
+{berrendorf,faerman,fromm,schubert}@dbs.ifi.lmu.de
+Abstract. Obtaining labels for medical (image) data requires scarce
+and expensive experts. Moreover, due to ambiguous symptoms, single
+images rarely suﬃce to correctly diagnose a medical condition. Instead,
+it often requires to take additional background information such as the
+patient’s medical history or test results into account. Hence, instead of
+focusing on uninterpretable black-box systems delivering an uncertain
+ﬁnal diagnosis in an end-to-end-fashion, we investigate how unsupervised
+methods trained on images without anomalies can be used to assist doctors
+in evaluating X-ray images of hands. Our method increases the eﬃciency
+of making a diagnosis and reduces the risk of missing important regions.
+Therefore, we adopt state-of-the-art approaches for unsupervised learning
+to detect anomalies and show how the outputs of these methods can be
+explained. To reduce the eﬀect of noise, which often can be mistaken
+for an anomaly, we introduce a powerful preprocessing pipeline. We
+provide an extensive evaluation of diﬀerent approaches and demonstrate
+empirically that even without labels it is possible to achieve satisfying
+results on a real-world dataset of X-ray images of hands. We also evaluate
+the importance of preprocessing and one of our main ﬁndings is that
+without it, most of our approaches perform not better than random. To
+foster reproducibility and accelerate research we make our code publicly
+available on GitHub3.
+Introduction
+Deep Learning techniques are ubiquitous and achieving state-of-the-art performance in many areas. However, they require vast amounts of labeled data as
+witnessed by the marvelous boost in image recognition after the publication
+of the large scale ImageNet data set . In medical applications, labels are
+expensive to acquire. While anyone can decide whether an image depicts a dog
+or a cat, deciding whether a medical image shows abnormalities, is a highly
+⋆The ﬁrst four authors have equal contribution.
+3 
+ 
+Davletshina et al.
+diﬃcult task requiring specialists with years of training. Another specialty of
+medical applications is that a simple classiﬁcation decision does often not suﬃce.
+End-to-end deep learning solutions tend to be hard to interpret, preventing
+their application in an area as sensitive as deciding for a treatment. Moreover,
+additional patient information such as the patient’s medical history, and clinical
+test results are often crucial to a correct diagnosis. Integrating this information
+into an end-to-end pipeline is diﬃcult and makes results even less interpretable.
+Thus, the motivation for our work is to let doctors decide about the ﬁnal diagnosis
+and treatment and develop a system, which can provide hints for doctors where
+to pay more attention to.
+Hence, in this work, we investigate how we can support doctors to faster
+assess X-ray images, and reduce the chance of overlooking suspicious regions. To
+this end, we demonstrate how state-of-the-art unsupervised methods, such as
+Autoencoders (AE) or Generative Adversarial Networks (GANs), can be used for
+anomaly detection on X-ray images. As this dataset is noisy, and this is a general
+problem for a lot of real-world datasets, we present a sophisticated preprocessing
+pipeline to obtain better training data. Afterwards, we train several unsupervised
+models, and explain for each, how to obtain several image-level anomaly scores.
+For some of them, it is even natural to obtain pixel-wise annotations, highlighting
+anomalous regions. One of our main ﬁndings is that accurate data preprocessing
+is indispensable. The advantage of using autoencoders is that they naturally
+can provide pixel-level anomaly heatmaps, which can be used to understand
+model decisions. In contrast, GAN-based approaches seem to be able to cope
+with more noisy data, yet being only able to produce image-wise anomaly scores.
+We envision that this methodology can be easily installed in clinical daily routine
+to support doctors in quickly assessing X-ray images and spotting candidate
+regions for anomalies.
+In this work, we focus on a subset of the MURA dataset containing only
+hand images. In total, we have 5,543 images of 2,018 studies of 1,945 patients.
+Each study is labeled as negative or positive, where positive means that there was
+an anomaly diagnosed in this study. There are 521 positive studies, with a total
+of 1,484 images. Figure 1 shows some examples from the dataset. In summary,
+our contributions are as follows:
+1. We present a powerful preprocessing pipeline for the MURA dataset ,
+enabling the construction of a high-quality training set.
+2. We extensively survey unsupervised Deep Learning methods, and present
+approaches on how to obtain image-level and even pixel-level anomaly scores.
+3. We show extensive experiments on a real-world dataset evaluating the inﬂuence of proper preprocessing as well as the usability of the anomaly scores.
+To foster reproducibility, we will make our code public in the camera-ready
+The rest of the paper is structured as follows: In Section 2 we describe our
+approach. We start with the description of data preprocessing in 2.1 and describe
+anomaly detection approaches along with anomaly scores in section 2.2. We
+Unsupervised Anomaly Detection for X-Ray Images
+discuss related work in section 3. Finally, Section 4 shows quantitative and
+qualitative experimental results on image-level and pixel-level anomaly detection.
+Fig. 1. A few examples from the used subset of the MURA dataset containing X-ray
+images of hands demonstrating the large variety of image quality.
+Davletshina et al.
+Unsupervised Anomaly Detection
+Preprocessing
+Real-life data is often noisy. This is especially problematic for unsupervised
+approaches for anomaly detection. On the one hand, it is necessary to remove
+noise to make sure that it is not recognized as an anomaly. On the other hand,
+it is crucial that the data denoising process does not mistake anomalies for
+noise and does not remove them. After experimenting a lot, we end up with the
+preprocessing pipeline depicted in Figure 2. We distinguish oﬄine and online
+processing steps, where the oﬄine processing is done once and then stored to disk
+to save time, whereas the online preprocessing is done on-the-ﬂy while loading
+the data. The individual steps are described in detail subsequently.
+Hand Center
+Localization
+Segmentation
+Augmentation
+Normalization
+Fig. 2. The full image preprocessing pipeline. Steps highlighted in green are performed
+once and the result is stored to disk. Steps highlighted in orange are done on-the-ﬂy.
+Cropping The ﬁrst step in our pipeline is to detect the X-ray image carrier
+in the image. To this end, we apply OpenCV’s contour detection using Otsu
+binarization , and retrieve the minimum size bounding box, which does not
+need to be axis-aligned. This works suﬃciently well as long as the majority of the
+image carrier is within the image (cf. Figure 3). However, the approach might fail
+for heavily tilted images or those where larger parts of the image carrier reach
+beyond the image border.
+Hand Localization To further improve the detection of hands, and in particular
+split the images where two hands are depicted on one image, we manually labeled
+approximately 150 bounding boxes in the images. Using this small dataset, we
+ﬁne-tune a pre-trained single shot multibox detector (SSD) with MobileNet
+as taken from TensorFlow. An exemplary results can be seen in Figure 3.
+Foreground Segmentation In a ﬁnal step, foreground segmentation is performed
+using Photoshop’s "select subject" method in batch processing mode. Thereby,
+we obtain a pixel-wise mask, roughly encompassing the scanned hand.
+Unsupervised Anomaly Detection for X-Ray Images
+Fig. 3. Result of image carrier detection with OpenCV (left side). The ﬁrst image
+shows the original image with a detected rectangle. Next to it is the extracted image.
+The right image shows the result of running object detection on an image containing
+two hands. We extract the image of both hands separately such that our preprocessed
+data set does not contain images with more than one hand.
+Data Augmentation Due to GPU memory constraints, the images for BiGAN and
+α-GAN are resized to 128 pixels on the longer image side while maintaining aspect
+ratio before applying the augmentation. For the auto-encoder models, this is not
+necessary. Afterwards, standard data augmentation methods (horizontal/vertical
+ﬂipping, channel-wise multiplication, rotation, scaling) using the imgaug4 library
+are applied before ﬁnally padding the images to 512x512 (AE + DCGAN) or
+128x128 (BiGAN + αGAN) pixels.
+In this section, we describe the diﬀerent model types we trained in a fully
+unsupervised / self-supervised fashion on the train data part comprising only
+images from patients without attested anomalies. We also describe how to obtain
+anomaly scores from the trained models. In the appendix we additionally provide
+details about the architecture for every model.
+Autoencoders
+We studied diﬀerent auto-encoder architectures for the task at hand. Common
+among them is their usage of a reconstruction loss, i.e. the input to the network is
+also used as the target, and we evaluate how well the input is reconstructed. As the
+information has to pass through an informational bottleneck, the model cannot
+simply copy the input data, but instead has to perform a form of compression,
+extracting features which suﬃce to reconstruct the image suﬃciently well. Hence,
+we have an encoder part of the network (E), which transforms the input x
+non-linearly to a latent space representation z. Analogously, there is a decoder
+D that transforms an input z from latent space back to and element ˆx in the
+input space.
+4 
+Davletshina et al.
+For simplicity, we describe the general loss formulation using a vector input
+x ∈Rn instead of a two-dimensional pixel-matrix. In its simplest form, the
+reconstruction loss is given as the mean over pixel-wise squared diﬀerences. Let
+x, ˆx = D(E(x)) ∈Rn, then
+L(x, ˆx) = 1
+(xi −ˆxi)2 = 1
+As we are only interested in detecting anomalies on the hand part of the
+image, we consider a variant of this loss, named masked reconstruction loss, where
+only those pixels are considered that belong to the mask. Let m ∈{0, 1}n be the
+mask, where mi = 1 if and only if the position i belongs to the hand. Then,
+LM(x, ˆx, m) =
+∥m ⊙(x −ˆx)∥2
+where ⊙denotes the Hadamard product (i.e. element-wise multiplication). In the
+following, we describe the architectures of the network in more detail.
+In a convolutional auto-encoder (CAE), we implement encoder and decoder
+as fully convolutional neural networks (CNNs). In general, the encoder is built
+as a sequence of repeated convolution blocks. We apply Batch Normalization
+ between every convolution and the respective activation, and use ReLU 
+as activation function. A detailed model description is given in the appendix.
+Similarly, the decoder consists of repeated blocks of transposed convolutions.
+As before, we apply batch normalization before every activation function. As
+bottleneck size, we use a spatial resolution of 16 × 16 and 512 channels.
+Variational AE (VAE) is a generative model, which maps an input to a
+Gaussian distribution in latent space, characterized by its mean and covariance
+(µ(x), Σ(x)), instead of mapping it to a ﬁxed latent representation. The covariance
+matrix is usually restricted to a diagonal matrix. For reconstruction, a sample
+z ∼N(µ(x), Σ(x)) is drawn, and passed through the decoder sub-network. To
+avoid very small values in Σ, and thereby approaching a delta distribution, i.e.
+traditional AE, an additional loss term is introduced as the Kullback-Leibler
+divergence (KLD) between N(µ(x), Σ(x)) and the standard normal distribution
+Anomaly Detection Scores The rationale behind using AE for anomaly
+detection is that as the AE is trained on normal data only, it has not seen
+anomalies during training, and hence will fail to reproduce them. Due to the
+convolutional nature of the network, the error is even expected to occur stronger
+in regions close to the anomaly, and less strong further apart. If the receptive
+ﬁeld is small enough, those regions outside of it are not aﬀected at all. Hence, we
+can use the reconstruction error in two ways:
+Unsupervised Anomaly Detection for X-Ray Images
+1. Pixel-wise to obtain a heatmap highlighting regions that were hardest to
+reconstruct. If there is an anomaly, we expect the highest error in that region.
+We show an example for such in the qualitative results, Figure 5.
+2. Aggregated over all pixels (under the mask) to obtain an image-wise score.
+As for aggregation, we explore diﬀerent aggregation strategies. In the simplest
+case, we just average over all locations. By using only the highest k values
+to compute the mean, we can obtain a score that is more sensitive towards
+regions of high reconstruction error (i.e. anomalous regions).
+We aim for using auto-encoder architectures which are strong enough to successfully reconstruct normal hands, without risking to learn identity mappings
+by allowing too wide bottlenecks. While the architecture should generalize over
+all normal hands, a too strong generalization might cause the eﬀect that also
+anomalies can be reconstructed suﬃciently well.
+A Generative Adversarial Network (GAN) comprises two sub-networks, a
+generator G, and a discriminator D, which can be seen as antagonists in a twoplayer game. The generator takes random noise as input and generates samples in
+the target domain. The discriminator takes real data points, as well as generated
+ones, and has to distinguish between real and fake data. The sub-networks are
+trained alternatingly, and if successful, the generator can afterwards be used to
+sample from the (approximated) data distribution, and the discriminator can be
+used to decide whether a sample is drawn from the given data distribution.
+Deep Convolutional GAN (DCGAN) is an extension of the original GAN
+architecture to convolutional neural networks. Similarly to the CAE, the two
+networks contain convolutions (discriminator) and transposed convolutions (generator) instead of the fully connected layers of the originally proposed GAN
+architecture.
+BiGAN / ALI extends DCGAN by an encoder E, which encodes the real
+image into latent space5. The discriminator is now provided with both, the real
+and fake image, as well as their latent codes, i.e. D((G(z), z), (x, E(x))).
+α-GAN comprises four sub-networks:
+– An encoder E(x) which transforms a real image into a latent representation.
+– A code-discriminator CO(z) which distinguishes between the latent representations produced by the encoder and random noise used as generator
+– A generator G(z) which generates an image from either the randomly sampled
+z, or the encoded image E(x).
+5 In the paper E is called Gz(x) as opposed to the generator G = Gx(z)
+Davletshina et al.
+– A discriminator D(x) which distinguishes between reconstructed real images
+G(E(x)), and generated images G(z).
+In addition to the classiﬁcation losses for both discriminators, a reconstruction
+loss is applied for the auto-encoder formed by the encoder-generator pair. Hence,
+the code-discriminator gives the encoder the incentive to transform the inputs to
+match the random distribution, similarly as in VAE through the KL-divergence.
+Likewise, the discriminator motivates matching the data distribution in the image
+Anomaly Detection Scores For the GAN models, we generally use the discriminator’s output as the anomaly score. When converged, the discriminator
+should be able to distinguish between images belonging to the data manifold,
+i.e. images of hands without any anomalies, and those which lie outside, such
+as those containing anomalous regions. For αGAN we use the mean over code
+discriminator and discriminator probability.
+Related Work
+With the rapid advancement of deep learning methods, they have also found
+their way into medical imaging, cf. e.g. . Despite the limited availability
+of labels in medical contexts, supervised methods make up the vast majority.
+Very likely, this is due to the easier trainability, but possibly also because the
+interpretability of the results so far has often been secondary. Sato et al. 
+use a 3D CAE for a pathology detection method in CT scans of brains. The
+CAE is trained solely on normal images, and at test time, the MSE between
+the image and its reconstruction is taken as the anomaly score. Uzunova et
+al. use VAE for medical 2D and 3D CT images. Similarly, they use MSE
+reconstruction loss as the anomaly score. Besides the KL-divergence in latent
+space, they use a L1 reconstruction loss for training, which produced less smooth
+output. GANomaly and its extension with skip-connections uses an AE and
+maps the reconstructed input back to the latent space. The anomaly score is
+computed in latent space between original and reconstructed input. They apply
+their methods on X-Ray security imagery to detect anomalous items in baggage.
+Recently, there have been a lot of publications using the currently popular GANs.
+For example, uses a semi-supervised approach for anomaly detection in
+chest X-ray images. They replace the standard discriminator classiﬁcation into
+real and fake, with a three-way classiﬁcation into real-normal, real-abnormal,
+and fake. While this allows training with fewer labels, it still requires them for
+training. Schlegl et al , train a DC-GAN on slices of OCT scans, where the
+original volume is cut along the x-z axis, and the slices are further randomly
+cropped. At test time, they use gradient descent to iteratively solve the inverse
+problem of obtaining a latent vector that produces the image. Stopping after
+a few iterations, the L1 distance between the generated image and the input
+image is considered as residual loss. To summarize, the focus of recent work for
+Unsupervised Anomaly Detection for X-Ray Images
+anomaly detection approaches lies either in applying existing methods for a new
+type of data or adapting unsupervised methods for anomaly detection. Instead,
+we provide an extensive evaluation of state-of-the-art unsupervised learning
+approaches that can be directly used for anomaly detection. Furthermore, we
+evaluate the importance of diﬀerent preprocessing steps and compare methods
+with regard to explainability.
+Experiments
+We demonstrate the capability of our preprocessing pipeline and all described
+models in experiments on a subset of the MURA dataset containing only X-ray
+images of hands. 3,062 images are stored in a single-channel PNG image, and
+2,481 are stored with three RGB channels. However, all images look like gray-scale
+images, which is why we convert all 3-channel images to a single channel. The
+longest side of the images is always 512 pixels in size. The smaller side ranges
+from 160 to 512, with the majority between 350 and 450.
+validation
+Fig. 4. Visualization of the applied data split scheme. "n" denotes patients which do
+not have a abnormal study ("negative"), "p" the contrary ("positive"). Notice that the
+training part of the split does not contain any images of anomalies, i.e. we do not use
+anomalous images for training.
+As our approach is unsupervised, we train only on negative images, i.e. images
+without an anomaly. Furthermore, to avoid test leakage, we split the data by
+patient, and not by study or image, to ensure that we do not have an image of a
+patient in the training data, and another image of the same patient in the test
+or validation data. To this end, we proceed as follows: Let P be the set of all
+patients, and P + be the set of patients with a study that is labeled as abnormal.
+The rest of the patients is denoted by P −:= P \ P +. For the test and validation
+set, we aim at having balanced classes. Therefore, we distribute P + evenly at
+random across test and validation. Afterwards, we randomly sample the same
+number of patients without known anomalies for test and validation and use the
+rest of the patients for training. The procedure is visualized in Figure 4. In total,
+we end up with 2,554 training images, 1,494 validation images, and 1,495 test
+Davletshina et al.
+We trained all models on a machine with one NVIDIA Tesla V100 GPU
+with 16GiB of VRAM, 20 cores and 360GB of RAM. Following , we train
+our models from scratch and do not use transfer learning from large image
+classiﬁcation datasets. We performed a manual hyper-parameter search on the
+validation set and selected the best-performing models per type with respect to
+Area-under-Curve for the Receiver-Operator-Curve (ROC-AUC). We report the
+ROC-AUC on the test set.
+Quantitative Results
+Table 1. Quantitative results for all models. We report ROC-AUC on the test set for
+the best conﬁguration regarding validation set ROC-AUC. All numbers are mean and
+standard deviation across four separate trainings with diﬀerent random seeds. For each
+model we report results for various anomaly scores: Mean Squared Error (MSE), L1,
+Kullback–Leibler Divergence (KLD), Discriminator Probability (D). Top-200 denotes
+the case, when only 200 pixels with the highest error are taken into consideration.
+.460 ± .033
+.504 ± .034
+.466 ± .022
+.510 ± .021
+.501 ± .013
+.570 ± .019
+MSE (top-200)
+.466 ± .013
+.448 ± .025
+.486 ± .015
+.473 ± .018
+.506 ± .039
+.553 ± .023
+.488 ± .031
+.491 ± .013
+.470 ± .046
+.496 ± .045
+.520 ± .026
+.533 ± .014
+.432 ± .033
+.446 ± .016
+.438 ± .033
+.438 ± .016
+.435 ± .014
+.483 ± .009
+.432 ± .033
+.446 ± .016
+.438 ± .034
+.437 ± .016
+.438 ± .011
+.488 ± .011
+L1 (top-200)
+.438 ± .017
+.472 ± .010
+.440 ± .025
+.471 ± .013
+.428 ± .013
+.481 ± .010
+.432 ± .033
+.446 ± .016
+.438 ± .033
+.438 ± .016
+.435 ± .014
+.483 ± .009
+.432 ± .033
+.446 ± .016
+.438 ± .033
+.438 ± .016
+.436 ± .013
+.486 ± .010
+MSE (top-200)
+.438 ± .017
+.472 ± .010
+.440 ± .025
+.471 ± .013
+.428 ± .013
+.481 ± .010
+.497 ± .018
+.491 ± .041
+.493 ± .015
+.493 ± .025
+.530 ± .027
+.527 ± .022
+.471 ± .021
+.438 ± .039
+.491 ± .042
+.522 ± .017
+MSE (top-200)
+.471 ± .011
+.459 ± .030
+.475 ± .033
+.508 ± .026
+.508 ± .007
+.534 ± .016
+.549 ± .006
+.522 ± .019
+Code-Disc. (C)
+.500 ± .000
+.500 ± .001
+.500 ± .000
+.500 ± .000
+.476 ± .029
+.466 ± .022
+.442 ± .013
+.528 ± .018
+MSE (top-200)
+.465 ± .031
+.446 ± .018
+.422 ± .016
+.533 ± .013
+.503 ± .022
+.534 ± .022
+.607 ± .016
+.584 ± .012
+.503 ± .022
+.534 ± .022
+.607 ± .016
+.584 ± .012
+Apart from the performance of single models, we also evaluate the importance
+of the preprocessing steps. Therefore, we evaluate the models on the raw data,
+the data after cropping the hand regions, as well as on the fully preprocessed data.
+We also vary whether histogram equalization is applied before the augmentation
+or not. We summarize the quantitative results in Table 1 showing the mean
+and standard deviation across four runs. There is a clear trend in preprocessing:
+All models have their best runs in the fully preprocessed setting, emphasizing
+the importance of our preprocessing pipeline for noisy datasets. Interestingly,
+without foreground segmentation, i.e. only by cropping the single hands, the
+results appear to be worse than on the raw data. While histogram equalization is
+a contrast enhancement method in particular useful to improve human perception
+Unsupervised Anomaly Detection for X-Ray Images
+of low-contrast images, it seems to improve the results for AE-based models
+consistently. For BiGAN and αGAN our experiments did not ﬁnish until the
+deadline. As they comprise AE components we expect to see an improvement
+there. On raw and also cropped data we frequently observe ROC-AUC values
+smaller than 45%. Hence, we might be able to improve the ROC-AUC score
+by ﬂipping the anomaly decision. Partially, we attribute this also to the rather
+unstable results for these models. Regarding the aggregation of reconstruction
+error, we observe that using only the top-k loss values across all pixels does
+not improve the result. We attribute that partially to not tuning enough across
+diﬀerent values for k, as we only used k = 200 for all models, which may be too
+few pixels to detect some anomalies. Due to the lack of pixel-level annotation,
+we did not investigate this issue so far. In total, we obtain the best ROC-AUC
+score with 60.7% for α-GAN using the discriminator probability. CAE however
+also achieves 57% ROC-AUC and additionally can naturally provide pixel-level
+anomaly scores yielding higher interpretability.
+Qualitative Results
+In addition to the numerical results we also showcase some qualitative results.
+For all methods with reconstruction loss, i.e. all AE as well as α-GAN, we can
+generate heatmaps visualizing the pixel-wise losses. Thereby, we can highlight
+regions that could not be reconstructed well. Following our assumption, these
+regions should be the anomalous regions. In Figure 5, we can see prototypical
+examples produced by CAE. The upper image shows a hand contained in a study
+which was labeled as normal. We can see that the reconstruction error does not
+occur concentrated, but is rather spread widely across the hand. The maxima
+seem to occur around joints, which due to their more complex structure are likely
+to be harder to reconstruct. Compared to the lower image, which shows a study
+labeled as abnormal, we see a clear highlighting at the middle ﬁnger. Visible also
+for a non-expert, we can spot metal parts in the X-ray image at the very same
+location. For those anomalies which could be validated by a person without a
+medical background, the highlighted regions seem to correspond largely to those
+anomalous regions.
+Conclusion
+In this paper, we investigated methods for unsupervised anomaly detection in
+X-ray images. To this end, we surveyed two families of unsupervised models,
+auto-encoders and GANs, regarding their applicability to derive anomaly scores.
+In addition, we provide a sophisticated multi-step preprocessing pipeline. In
+our experiments, we compare the methods against each other, and furthermore,
+reveal that the preprocessing is crucial for most models to obtain good results
+on real-world data. For the auto-encoder family, we study the interpretability
+of pixel-wise losses as anomaly heatmap and verify that in cases of anomalies
+which a non-expert can detect (e.g. metal pieces in the hand), these heatmaps
+Davletshina et al.
+Fig. 5. Example heatmaps of reconstruction error of CAE. The left image-pair shows a
+hand from a study labeled as normal hand. Here we can see that the reconstruction
+error is relatively wide spread. The right image pair shows an abnormal hand, where
+the abnormality is clearly highlighted.
+Unsupervised Anomaly Detection for X-Ray Images
+closely match the anomalous regions. As future work, we envision the extension to
+broader datasets such as the full MURA dataset, as well as obtaining pixel-level
+anomaly scores for the GAN based models. To this end, methods from the ﬁeld
+of explainable AI, such as grad-CAM or LRP can be applied to the
+discriminator to obtain heatmaps similarly to those of the AE models. Moreover,
+we see the potential for diﬀerent model architectures closer tailored to the speciﬁc
+problem and data type, as well as the possibility of building an ensemble model
+using the diﬀerent ways how to extract anomaly scores from single models, or
+even across diﬀerent model types.
+Acknowledgement
+We would like to thank Franz Pﬁster and Rami Eisaway from deepc (www.deepc.
+ai) for access to the data and support in understanding the use case. Part of
+this work has been conducted during a practical course at Ludwig-Maximilians-
+Unversität München funded by Z.DB. The infrastructure for the course was
+provided by the Leibniz-Rechenzentrum. This work has been funded by the
+German Federal Ministry of Education and Research (BMBF) under Grant No.
+01IS18036A. The authors of this work take full responsibilities for its content.

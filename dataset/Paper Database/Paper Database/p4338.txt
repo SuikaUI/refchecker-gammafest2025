@@ -1,0 +1,1331 @@
+IEEE TRANSACTIONS ON PATTERN ANALYSIS AND MACHINE INTELLIGENCE
+Exploiting Unlabeled Data in CNNs by
+Self-supervised Learning to Rank
+Xialei Liu, Joost van de Weijer, and Andrew D. Bagdanov
+Abstract—For many applications the collection of labeled data is expensive laborious. Exploitation of unlabeled data during training is
+thus a long pursued objective of machine learning. Self-supervised learning addresses this by positing an auxiliary task (different, but
+related to the supervised task) for which data is abundantly available. In this paper, we show how ranking can be used as a proxy task
+for some regression problems. As another contribution, we propose an efﬁcient backpropagation technique for Siamese networks
+which prevents the redundant computation introduced by the multi-branch network architecture.
+We apply our framework to two regression problems: Image Quality Assessment (IQA) and Crowd Counting. For both we show how to
+automatically generate ranked image sets from unlabeled data. Our results show that networks trained to regress to the ground truth
+targets for labeled data and to simultaneously learn to rank unlabeled data obtain signiﬁcantly better, state-of-the-art results for both
+IQA and crowd counting. In addition, we show that measuring network uncertainty on the self-supervised proxy task is a good measure
+of informativeness of unlabeled data. This can be used to drive an algorithm for active learning and we show that this reduces labeling
+effort by up to 50%.
+Index Terms—Learning from rankings, image quality assessment, crowd counting, active learning.
+INTRODUCTION
+Training large deep neural networks requires massive
+amounts of labeled training data. This fact hampers their
+application to domains where training data is scarce and
+the process of collecting new datasets is laborious and/or
+expensive. Recently, self-supervised learning has received
+attention because it offers an alternative to collecting labeled datasets. Self-supervised learning is based on the
+idea of using an auxiliary task (different, but related to the
+original supervised task) for which data is freely available
+and no annotation is required. As a consequence, selfsupervised learning can be much more scalable. In the
+self-supervised task is estimating the relative location of
+patches in images. Training on this task allows the network
+to learn features discriminative for semantic concepts. Other
+self-supervised tasks include generating color images from
+gray scale images and vice versa , , recovering a whole
+patch from the surrounding pixels by inpainting , and
+learning from equivalence relations .
+In this paper, we investigate the use of ranking as a
+self-supervised auxiliary task. In particular we consider
+regression problems in computer vision for which it is easy
+to obtain ranked data automatically from unlabeled data. By
+ranked data we mean that we know that for some samples the
+regression output is known to be larger (or smaller) than for
+some others. In these cases the unlabeled data, converted
+into ranked subsets of data, can be added in a multitask sense during training by minimizing an additional
+ranking loss. The main advantage of our approach is that
+X. Liu and J. van de Weijer are with the Computer Vision Center at the
+Universitat Aut`onoma de Barcelona.
+E-mail: , 
+Integration
+Communication
+University
+ 
+it allows adding large amounts of unlabeled data to the
+training dataset, and as a results train better deep neural
+networks. In addition, we show that the ranked subsets
+of images can be exploited to performing active learning
+by identifying which images, when labeled, will result in
+the largest improvement of performance of the learning
+algorithm (here a neural network). We consider two speciﬁc
+computer vision regression problems to demonstrate the
+advantages of learning from ranked data: Image Quality
+Assessment (IQA) and crowd counting. In Fig. 1 we give
+an overview of the general approach to use labeled and
+unlabeled (but ranked) data in a multi-task network.
+The ﬁrst regression problem we consider is No-Reference
+Image Quality Assesment (NR-IQA), where the task is to
+predict the perceptual quality of images without using the
+undistorted image (also called the reference image). This
+research ﬁeld has also seen large improvements in recent
+years due to the advent of Convolutional Neural Networks
+(CNNs) , , . The main problems these papers had to
+address is the lack of large datasets for IQA. However, the
+annotation process for IQA image datasets requires multiple
+human annotations for every image, and thus the collection
+process is extremely labor-intensive and costly. As a result,
+most available IQA datasets are too small to be effective
+for training CNNs. We show how to automatically generate
+rankings for the task of IQA, and how these rankings can be
+used to improve the training of CNNs for NR-IQA.
+The second regression problem we consider is crowd
+counting. Crowd counting is a daunting problem because
+of perspective distortion, clutter, occlusion, non-uniform
+distribution of people, complex illumination, scale variation,
+and a host of other scene-incidental imaging conditions.
+Techniques for crowd counting have also seen improvement
+recently due to the use of CNNs. These recent approaches
+include scale-aware regression models , multi-column
+ 
+IEEE TRANSACTIONS ON PATTERN ANALYSIS AND MACHINE INTELLIGENCE
+Rankingspeciﬁc
+Generation
+Regression
+Shared CNN
+Problem-speciﬁc
+Fig. 1. Self-supervised learning to rank. Our architecture is based on a shared CNN backbone (in white) to which we add problem-speciﬁc layers
+(in blue) that end in an output that solves the primary regression task, and layers (also in blue) that end in an output that solves a self-supervised
+ranking task (see Section 3). Self supervision is provided by a pair generation module that is able to generate pairs with known relative ranks.
+CNNs , and switching networks . As with most CNN
+architectures, however, these person counting and crowd
+density estimation techniques are highly data-driven. Even
+modestly deep architectures for visual recognition require
+massive amounts of labeled training data for learning. For
+person counting, the labeling burden is even more onerous
+than usual. Training data for person counting requires that
+each individual person be meticulously labeled in training
+images. It is for this reason that person counting and crowd
+density estimation datasets tend to have only a few hundred
+images available for training. As a consequence, the ability
+to train these sophisticated CNN-based models suffers. We
+show how ranked sets of images can be generated for the
+task of crowd counting, and how these can be exploited to
+train deep networks.
+In this work we study the use of ranking as a selfsupervised proxy task to leverage unlabeled data and improve the training of deep networks for regression problems. The contributions of the paper are:
+• We show that ranking tasks can be used as selfsupervised proxy tasks, and how this can be exploited
+to leverage unlabeled data for applications suffering
+from a shortage of labeled data.
+• We propose a method for fast Siamese backpropagation
+which avoids the redundant computation common to
+training multi-branch Siamese network architectures.
+Similar observations have been made others , 
+concurrently with our original work , .
+• We show that the ranking task on unlabeled data can
+be exploited as an active learning strategy to determine
+which images should be labeled to improve the performance of the network.
+• We demonstrate the advantages of the above contributes on two applications: Image Quality Assessment
+(IQA) and crowd counting. On both tasks we show
+how to effectively leverage unlabeled data and that this
+signiﬁcantly improves performance over the state-ofthe-art.
+This paper is an extension of our previous work on
+No-reference IQA and crowd counting . Beyond
+these previous works, here we propose a general framework
+for training from self-supervised rankings. In addition, we
+apply the multi-task approach from to the IQA problem, improving the results of our previous IQA method.
+We also include results on two new datasets for crowd
+counting, UCSD and WorldExpo’10. Finally, we show that
+self-supervised ranking tasks can also be used as a criterion
+for active learning. In this case the aim is to select which
+images to label from a large pool of unlabeled data. In
+experiments we show that this can signiﬁcantly reduce the
+required labeling effort.
+This paper is organized as follows. In the next section
+we review work from the literature related to our work.
+In section 3 we describe our general learning to rank
+framework for self-supervised learning. In section 4 we
+describe how to automatically generate rankings for image
+quality assessment. In section 5 we show how the proposed
+framework can be applied to the problem of crowd counting. In sections 6.1 and 6.2 we give extensive experimental
+evaluations for IQA and crowd counting, respectively. We
+conclude in section 7 with a discussion of our contributions
+and some indications of potential future research lines.
+RELATED WORK
+In this section we review work from the literature on learning from rankings, active learning, image quality assessment, and crowd counting.
+Learning from rankings
+Several works have studied how to learn to rank, and they
+focus on learning a ranking function from ground-truth
+rankings , . They learn a ranking function from
+ground-truth rankings by minimizing a ranking loss .
+This function can then be applied to rank test objects.
+The authors of adapt the Stochastic Gradient Descent
+method to perform pairwise learning to rank. This has
+been successfully applied to large datasets. However, these
+approaches are very different from ours in which we aim to
+learn from rankings.
+In a recent paper a method is proposed where the selfsupervised task is to learn to count. The authors propose
+two proxy tasks – scaling and tiling – which guide selfsupervised training. The network learn to count visual primitives in image regions. It is self-supervised by the fact that
+the number of visual primitives is not expected to change
+under scaling, and that the sum of all visual primitives
+in individual tiles should equal the total number of visual
+primitives in the whole image. Unlike our approach, they
+do not consider rankings of regions and their counts are
+typically very low (several image primitives). Also, their
+ﬁnal tasks do not involve counting but rather unsupervised
+learning of features for object recognition.
+LIU, VAN DE WEIJER, AND BAGDANOV: EXPLOITING UNLABELED DATA IN CNNS BY SELF-SUPERVISED LEARNING TO RANK
+Active learning
+Active learning is a machine learning procedure that
+reduces the cost of annotation by actively selecting the best
+samples to label among the abundantly available unlabeled
+data. Active learning is well-motivated in many modern
+machine learning problems where data may be abundant,
+but labels are scarce or expensive to obtain. Since massive
+amounts of data are required to train deep neural networks,
+informative samples are more valuable to annotate instead
+of annotating randomly picked samples. Active learning has
+been explored in many applications such as image classiﬁcation , object detection and image segmentation .
+There are several ways to approach the active learning
+problem. Uncertainty sampling is the simplest and most
+commonly used that samples the instance whose prediction
+is least conﬁdent. Margin sampling aims to correct for
+the shortcomings of uncertainty sampling by examining
+the difference between second and ﬁrst most likely labels
+for candidate samples. A more general strategy considers
+all prediction probabilities using entropy. Expected Model
+Change is a metric that measures change in gradient by
+calculating the length as an expectation over the possible
+labelings. However, these approaches only consider the
+uncertainty of instances and ignore the representatives of
+the underlying distribution. The method proposed in 
+addresses this issue by computing the similarity between
+the candidate instance and all other samples in the training
+set. Note that these active learning approaches are more
+about classiﬁcation problems, while we are primarily interested in regression.
+In this work we show how to apply active learning to
+image quality assessment and crowd counting – two tasks
+for which image annotation is expensive. Instead of using
+the above approaches, we measure the informativeness of
+unlabeled instances via mistakes made by the network on
+a self-supervised ranking proxy task. Performance on this
+proxy task is guaranteed to be consistent with the main
+task, and our hypothesis is that the instances with more
+mistakes on the proxy task vary more from the training set.
+Training on such instances should allows us to increase the
+generalizing capacity of neural networks.
+Image Quality Assessment
+We brieﬂy review the IQA literature related to our approach. We focus on recent deep learning based methods
+for distortion-generic, No-reference IQA since it is more
+generally applicable than the other IQA research lines.
+In recent years several works have used deep learning
+for NR-IQA , , . One of the main drawbacks of
+deep networks is the need for large labeled datasets, which
+are currently not available for NR-IQA research. To address
+this problem Kang et al. consider small 32 × 32 patches
+rather than images, thereby greatly augmenting the number
+of training examples. The authors of , follow the same
+pipeline. In the authors design a multi-task CNN to learn
+the type of distortions and image quality simultaneously.
+Bianco at al. propose to use a pre-trained network to
+mitigate the lack of training data. They extract features from
+a pre-trained model ﬁne-tuned on an IQA dataset. These
+features are then used to train an SVR model to map features
+to IQA scores.
+There are other works which, like us, apply rankings
+in the context of NR-IQA. Gao et al.
+ generate pairs
+in the dataset itself by using the ground truth scores with
+a threshold and combine different hand-crafted features to
+represent image pairs from the IQA dataset. Xu et al. 
+propose training a speciﬁc model for each distortion type
+in a multi-task learning model. Instead of using the ground
+truth in the dataset, they learn a ranking function. The most
+relevant work is from Ma et al. , which was published
+concurrently with our work on NR-IQA . Like us, they
+use learning-to-rank to deal with the extremely limited
+ground truth data for training. However, they generate pairing data by using other Full-reference IQA methods with a
+threshold like in , while our approach does not require
+other methods and operates in a self-supervised manner.
+Another difference is that we use a knowledge transfer
+technique for further ﬁne-tuning on the target dataset with
+the same network, which can be also learned in a multi-task,
+end-to-end way, while they train an independent regression
+model based on the feature representations to perform the
+prediction. In addition to these differences, we show results
+on a larger number of distortion types instead of only
+working on the four main distortions .
+In our paper, we propose a radically different approach
+to address the lack of training data: we use a large number of
+automatically generated rankings of image quality to train
+a deep network. This allows us to train much deeper and
+wider networks than other methods in NR-IQA which train
+directly on absolute IQA data.
+Crowd counting
+We focus on deep learning methods for crowd counting in
+still images. For a more complete review of the literature on
+crowd counting, including classical approaches, we refer the
+reader to .
+As introduced in the review of , CNN-based approaches can be classiﬁed into different categories based on
+the properties of the CNN. Basic CNNs incorporate only
+basic CNN layers in their networks. The approaches in ,
+ use the AlexNet network to map from crowd scene
+patches to global number of people by changing the output
+of AlexNet from 1000 to 1. The resulting network can be
+trained end-to-end. Due to the large variations of density
+in different images, recent methods have focused on scaleawareness. The method proposed in trains a multicolumn based architecture (MCNN) to capture the different
+densities by using different sizes of kernels in the network.
+Similarly, the authors of propose the Hydra-CNN architecture that takes different resolutions of patches as inputs
+and has multiple output layers (heads) which are combined
+in the end. Most recently, in the authors propose a
+switching CNN that can select an optimal head instead of
+combining the information from all network heads. Finally,
+context-aware models are networks that can learn from
+the context of images. In , the authors propose to
+classify images or patches into one of ﬁve classes: very high
+density, high density, medium density, low density and very
+low density. However, the deﬁnition of these ﬁve classes
+IEEE TRANSACTIONS ON PATTERN ANALYSIS AND MACHINE INTELLIGENCE
+varies across datasets and must be carefully chosen using
+knowledge of the statistics of each dataset.
+Although CNN-based methods have achieved great success in crowd counting, due to lack of labeled data it is
+still challenging to train deep CNNs without over-ﬁtting.
+The authors of propose to learn density map and
+global counting in an alternating sequence to obtain better
+local optima. The method in uses side information like
+ground-truth camera angle and height to help the network
+to learn. However, this side information is expensive to
+obtain and is not available in most existing crowd counting
+There is some interesting recent work on CNNs for
+crowd counting. CSRNet consists of two components:
+a convolutional neural network as 2D feature extractor
+and a dilated CNN for estimating a density map to yield
+larger receptive ﬁelds and to replace pooling operations.
+DecideNet starts by estimating the crowd density using
+detection and regression separately. It then assesses the
+reliability of these two estimates with an attention module.
+Shen et al. propose using a U-net structure to generate
+a high quality density map with an adversarial loss. Shi et
+al. formulate a single ConvNet as ensemble learning.
+Marsden et al. adapt object counting models to new
+visual domains like cell counting and penguins counting.
+Both works , propose generating a high resolution
+density map. Ierees et al. propose solving the problems of counting, density map estimation and localization
+simultaneously. Laradji et al. propose a detection-based
+method that does not need to estimate the size and shape of
+the objects.
+In our paper, we show how a large number of unlabeled
+crowd data can improve the training of crowd counting
+networks. We automatically generate rankings from the unlabeled images, which are used during the training process
+in the self-supervised proxy task.
+LEARNING FROM RANKINGS
+In this section we lay out a general framework for our
+approach, then describe how we use a Siamese network
+architecture to learn from rankings. In section 3.3 we show
+how backpropagation for training Siamese networks from
+ranked samples can be made signiﬁcantly more efﬁcient.
+Finally, in section 3.4 we show how the ranking proxy task
+can be used as an active learning algorithm to identify which
+are the most important images to label ﬁrst.
+Ranking as a self-supervised proxy task
+Regression problems consist of ﬁnding a mapping function
+between input variables and a continuous output variable.
+It is a vital area of research in machine learning, and
+many important problems in computer vision are regression
+problems. The mapping function is typically learned from a
+training dataset of labelled data which consists of pairs of
+input and output variables. The complexity of the mapping
+function that can be learned is limited by the number of
+labeled examples in the training set. In this article, we
+are interested in using deep convolutional neural networks
+(CNNs) as mapping functions, and images as input data.
+For some regression problems it can be easy to obtain a
+ranked dataset. Such a dataset contains relative information
+between pairs of input examples, describing which of the
+two is larger. For image quality assessment (IQA) it is easy
+to generate ranked images by applying different levels of
+distortions to an image. As an example, given a reference
+image we can apply various levels of Gaussian blur. The
+set of images which is thus generated can be easily ranked
+because we do know that adding Gaussian blur (or any
+other distortion) always deteriorates the quality score. Note
+that in such a set of ranked images we do not have any
+absolute IQA scores for any images – but we do know
+for any pair of images which is of higher quality. See Fig. 2
+(bottom) for an illustration of this.
+For the crowd counting problem, we can obtain ranked
+sets of images by comparing parts of the same image which
+are contained within each other: an image which is contained by another image will contain the same number or
+fewer persons than the larger image. This fact can be used
+to generate a large dataset of ranked images from unlabeled
+crowd images. See Fig. 4 (bottom) for an illustration of this
+process for crowd counting.
+In the following sections we will show that ranked data
+can be used to train networks for regression problems. We
+are especially interested in domains where the ranked data
+can be automatically generated from images of the problem
+domain without requiring any additional human labeling.
+This allows us to create large dataset of ranked data. We
+consider regression to be the principal task of the network,
+and we refer to the ranking task as a self-supervised proxy task.
+It is self-supervised since the ranking task is an additional
+task for which data is freely available and no annotation is
+Multi-task regression and ranking
+In this section, we formalize the problem of training from
+both labeled and ranked data for regression problems. We
+consider a regression problem where we have a dataset of
+observed data in pairs:
+D = {(x1, y1) , (x2, y2) ..., (xn, yn)} ,
+where xi are images and yi ∈R. The input images xi
+and target variables yi are assumed to be related by some
+unknown function f(xi) = yi. The aim is to ﬁnd a function
+ˆf(x; θ) with parameters θ that captures (and generalizes) the
+relationship between input x and output y. The parameters
+θ of the regression function ˆf are usually ﬁt by minimizing
+an empirical risk over training examples D, for example the
+squared Euclidean loss:
+( ˆf(xi; θ) −yi)2.
+In our formulation, ˆf is a deep Convolutional Neural Network (CNN), and minimizing Lreg is done with stochastic
+gradient descent (SGD). We refer to the regression task as
+the principal task, since the ﬁnal objective is to accurately
+estimate such a regression.
+We also assume that we have a function h(·, ϕ) which
+we can apply to input images. These functions are special
+LIU, VAN DE WEIJER, AND BAGDANOV: EXPLOITING UNLABELED DATA IN CNNS BY SELF-SUPERVISED LEARNING TO RANK
+in that the parameter space is ordered and that for any
+parameters ϕi, ϕj and any image x:
+ϕi ≤ϕj ⇒f(h(x; ϕi)) ≤f(h(x; ϕj)).
+What this means is that we have a partial order in the
+parameter space that induces an ordering in the proxy
+task space. An example of a possible function h would be
+adding an image distortion parameterized by a single scalar
+number: increasing this parameter in h implies decreasing
+image quality in h(x, ϕ). For crowd counting we can parameterize h using rectangular crops: if a rectangle ϕi is
+entirely contained in rectangle ϕj, then the number of persons
+in h(x; ϕi) is less than or equal to h(x; ϕj). In other words:
+f(h(x; ϕi)) ≤f(h(x; ϕj)).
+We can now apply this function h to generate an auxiliary dataset E consisting of ranked images. Importantly, the
+ordering of the parameter space and the application of h is
+independent of any labeling of training data. The dataset E
+could contain images xi which are present in dataset D but
+in addition it could also contain images not in D and for
+which we have no annotations. We can use any input data
+xi relevant to the domain in order to generate the dataset
+E of ranked images. Since f respects this ranking condition
+under application of functions h, we can use the h functions
+to generate training data for learning ˆf.
+From dataset E we can train a network by minimizing
+the ranking hinge loss according to:
+max(0, ˆf(h(z; ϕi); θ)−ˆf(h(z; ϕj); θ)+ε) (4)
+where ε is a margin, and z ∈E are (potentially unlabeled) images transformed into ranked images after applying
+h(·, ϕi) and h(·, ϕj) for ϕi ≤ϕj. Training a network with
+Eq. (4) yields a network which can rank images, and we will
+refer to the task of ranking as the self-supervised proxy task.
+The most common approach to minimizing losses like
+Lrank uses a Siamese network , which is a network with
+two identical branches connected to a loss module. The two
+branches share weights during training. Pairs of images and
+labels are the input of the network, yielding two outputs
+which are passed to the loss. The gradients of the loss
+function with respect to all model parameters are computed
+by backpropagation and updated by the stochastic gradient
+method (e.g. SGD). For problems where both labeled data
+(like in dataset D) and ranked data (like in dataset E) are
+present, we can optimize the network using both sources of
+data using a multi-task loss:
+L = Lreg + λLrank
+where λ is a tradeoff parameter that balances the relative
+weight of the losses. It is important to note here that we
+consider the same function ˆf(·; θ) for the regression and
+the ranking loss. In practice this means that the three networks, one for regression, and the two networks used in the
+Siamese network, have the same architecture and share their
+parameters.
+One could also consider different ways to combine both
+the labeled dataset and the ranking dataset. In earlier work
+we investigated using the ranking dataset to train initial
+weights of the network, after which we used the labeled
+data for ﬁne-tuning . This is the approach which is
+used by almost all self-supervised methods in computer
+vision , , , , . However, in we found this
+to be inferior to using the multi-task loss, and in this work
+only consider multi-task formulations like in Eq. (5).
+Efﬁcient Siamese backpropagation
+One drawback of Siamese networks is redundant computation. Consider all possible image pairs constructed from
+three images. In a standard implementation all three images
+are passed twice through the network, because they each
+appear in two pairs. Since both branches of the Siamese
+network are identical, we are essentially doing twice the
+work necessary since any image need only be passed once
+through the network. It is exactly this idea that we exploit to
+render backpropagation more efﬁcient for Siamese network
+training. In fact, nothing prevents us from considering all
+possible pairs in a mini-batch, with hardly any additional
+computation. We add a new layer to the network that
+generates all possible pairs in a mini-batch at the end of the
+network right before computing the loss. This eliminates
+the problem of pair selection and boosts efﬁciency. At the
+end of this section we discuss how our approach compares
+to works , published concurrently with ours and
+observed similar efﬁciency gains.
+To appreciate the speed-up of efﬁcient Siamese backpropagation consider the following. If we have one reference image distorted from which we have generated n
+ranked images using h, then for a traditional implementation of the Siamese network we would have to pass a
+total of n2 −n images through the network – which is
+twice the number of pairs you can generate with n images.
+Instead we propose to pass all images only once and consider
+all possible pairs only in the loss computation layer. This
+reduces computation to just n images passed through the
+network. Therefore, in this case the speed-up is equal to:
+= n −1. In the best scenario n is equal to the number
+of images in the mini-batch, and hence the speed-up of this
+method would be in the order of the mini-batch size. Due to
+the high correlation among the set of all pairs in a minibatch, we expect the ﬁnal speedup in convergence to be
+To simplify notation in the following, assume we have
+an image z and two transformation parameters ϕi ≤ϕj.
+Letting ˆyi = ˆf(h(z, ϕi); θ), the contribution to the ranking
+loss Lrank of these two images can be written as:
+g(ˆyi, ˆyj) = max(0, ˆyi −ˆyj + ε),
+The gradient of this term from Lrank with respect to the
+model parameters θ is:
+∇θg = ∂g(ˆyi, ˆyj)
+∇θˆyi + ∂g(ˆyi, ˆyj)
+This gradient of g above is a sum since the model parameters are shared between both branches of the Siamese
+network and ˆyi and ˆyj are computed using exactly the same
+parameters.
+IEEE TRANSACTIONS ON PATTERN ANALYSIS AND MACHINE INTELLIGENCE
+Considering all pairs in a mini-batch of size M, the loss
+Lrank from Eq. (4) can then be written as:
+g(ˆyi, ˆyj).
+The gradient of the mini-batch loss with respect to parameter θ can then be written as:
+∂g(ˆyi, ˆyj)
+∇θˆyi + ∂g(ˆyi, ˆyj)
+∇θˆyj. (9)
+We can now express the gradient of the loss function of the
+mini-batch in matrix form as:
+where 1M is the vector of all ones of length M. For a
+standard single-branch network, we would average the
+gradients for all batch samples to obtain the gradient of the
+mini-batch. This is equivalent to setting P to the identity
+matrix in Eq. (10) above. For Siamese networks where we
+consider all pairs in the mini-batch we obtain Eq. (9) by
+setting P to:
+∂g(ˆy1,ˆy2)
+· · · ∂g(ˆy1,ˆyM)
+∂g(ˆy1,ˆy2)
+· · · ∂g(ˆy2,ˆyM)
+∂g(ˆy1,ˆyM)
+For the ranking hinge loss we can write:
+if lij (ˆyi −ˆyj) + ε ≤0
+and lij is used to indicate the ordering of the ϕ parameters
+used to generate the M images to which ˆf was applied to
+derive outputs ˆyi and ˆyj:
+if ϕi > ϕj
+if ϕi and ϕj are not comparable.
+The above analysis works for different parameter settings
+ϕ on the same source image. When considering multiple
+source images in a mini-batch, only different parameter
+settings ϕ on the same image are considered comparable
+when deﬁning lij.
+Generally, the complexity of training Siamese networks
+is ameliorated via different pair sampling techniques.
+In , the authors propose a hard positive and hard negative mining strategy to forward propagate a set of pairs and
+sample the highest-loss pairs for backpropagation. However, hard mining comes with a high computational cost
+(they report an increase of up to 80% of total computation
+cost). In the authors propose semi-hard pair selection,
+arguing that selecting hardest pairs can lead to bad local
+minima. In the authors take a batch of pairs as input and
+choose the four hardest negative samples within the minibatch. In parallel with our work on fast backpropagation for
+Siamese networks , several similar methods have
+been developed , . To solve for bad local optima,
+ optimize a smooth upper bound loss function. This is
+implemented by considering all possible pairs in a minibatch after forwarding the images through the network.
+In , the N-pair Loss is proposed to compute pairwise
+similarity within the batch to construct N −1 negative
+examples instead of one in triplet loss. Hard negative class
+mining is applied to improve convergence speed. Both
+these works, like ours, prevent the redundant computation
+which is introduced by the multiple branches in the Siamese
+Active learning from rankings
+The objective of active learning is to reduce the cost of
+labeling by prioritizing the most informative samples for
+labeling ﬁrst. Rather than labeling randomly selected examples from a pool of unlabeled data, active learning methods
+analyze unlabeled data with the goal of identifying images
+considered difﬁcult and that therefore are more valuable if
+labeled. Especially for deep networks, which require many
+examples, as well as for applications for which labeling is
+very costly, active learning is an important and active area
+of research.
+We show here how the self-supervised proxy task can be
+leveraged for active learning. For this purpose we deﬁne a
+function C(xi) which estimates the certainty of the current
+network on a speciﬁc image xi. This estimate allows us to
+order the available unlabeled dataset according to certainty.
+Labeling the images for which the algorithm is uncertain is
+then expected to yield larger improvement in performance
+of the network than just randomly adding images.
+The certainty function C is deﬁned as:
+C(z; θ) = 1
+T( ˆf(h(z; ϕi); θ) < ˆf(h(z; ϕj); θ)) (15)
+where T(s) = 1 if predicate s is true or false otherwise,
+and K is the number of sampled parameter pairs (ϕi, ϕj)
+applied to each image z. As described in the previous
+section, the pairs of parameters ϕi ≤ϕj can be used to
+generate ranked images via the function h. Again, these
+pairs can be automatically computed and no annotation is
+By design, we know that 0 ≤C(xi) ≤1. Given an
+unlabeled dataset and a current state of the trained network
+ˆf(·, ˆθ), we perform the proxy task for a total of K times on
+each image and then compute C. We then label images starting from low conﬁdence to high conﬁdence. The process is
+detailed in Algorithm 1.
+IMAGE QUALITY ASSESSMENT BY LEARNING TO
+In this section we apply the framework proposed in the previous section to the problem of Image Quality Assessment
+(IQA) . IQA aims to automatically predict the perceptual
+quality of images. IQA estimates should be highly correlated
+LIU, VAN DE WEIJER, AND BAGDANOV: EXPLOITING UNLABELED DATA IN CNNS BY SELF-SUPERVISED LEARNING TO RANK
+Algorithm 1 : Active learning loop.
+= { (x1, y1) , . . . , (xn, yn) } : labeled samples
+= { z1, . . . , zm } : unlabeled samples
+: initial network parameters
+: number of active learning cycles
+: number of images added in each cycle
+for t = 1 : T
+←train(D, θt−1) // Train network on D.
+DS ←label(E, S, θt) // Evaluate Eq. (15) for all samples in E,
+// and Label S least conﬁdent samples.
+// Update labeled set.
+// Update unlabeled set.
+Shared CNN
+(VGG16 to FC7)
+GT Quality
+Assesments
+Generation
+Image quality assessment
+Degradation
+Fig. 2. Network architecture and ranked pair generation for IQA. Top:
+our network for no-reference IQA uses a VGG16 network pretrained on
+ImageNet. We decapitate the network and replace the original head with
+a new fully-connected layer generating a single output. Bottom: pairs
+with known ranking are generated by distorting images with standard,
+parametric distortions. Increasing the distortion level guarantees that the
+images are of progressively worse quality.
+with quality assessments made by a range of very many human evaluators (commonly referred to as the Mean Opinion
+Score (MOS) , ). We focus here on no-reference IQA
+(NR-IQA), which refers to the case where the undistorted
+image (called reference image) is not available during the
+quality assessment.
+The application of CNNs to IQA has resulted in signiﬁcant improvements compared to previous hand-crafted
+approaches , , . These methods had to train their
+networks on the small available datasets for IQA. Further
+improvements would be expected if larger datasets were
+made available. However, the annotation of IQA images
+is a labor intensive task, which requires multiple human
+annotators for every image. It is therefore an interesting
+application ﬁeld to evaluate our framework, since by adding
+ranking as a proxy task, we are able to add unlabeled data
+during the training process.
+We ﬁrst discuss existing datasets for IQA and how to
+automatically generate IQA rankings. Then we introduce
+the network which we train for the IQA task, together with
+some application-speciﬁc training choices.
+IQA datasets
+We perform experiments on two standard IQA datasets:
+• LIVE : Consists of 808 images generated from 29
+original images by distorting them with ﬁve types of
+distortion: Gaussian blur (GB), Gaussian noise (GN), JPEG
+compression (JPEG), JPEG2000 compression (JP2K) and
+fast fading (FF). The ground-truth Mean Opinion Score
+for each image is in the range and is estimated
+using annotations by 161 human annotators.
+• TID2013 : Consists of 25 reference images with 3000
+distorted images from 24 different distortion types at
+5 degradation levels. Mean Opinion Scores are in the
+range . Distortion types include a range of noise,
+compression, and transmission artifacts. See the original
+publication for the list of speciﬁc distortion types.
+Generating ranked image sets for IQA
+The IQA datasets LIVE and TID2013 are derived from only
+29 and 25 original images, respectively. Deep networks
+trained on so few original images will almost certainly have
+difﬁculty generalizing to other images. Here we show how
+to automatically generate rankings from arbitrary images
+which can be added during the training process (i.e. we
+show what function h in Eq. (4) we use to generate IQA
+rankings).
+Using an arbitrary set of images, we can synthetically
+generate deformations of these over a range of distortion intensities. As an example, consider Fig. 2 (bottom) where we
+have distorted an image with increasing levels of Gaussian
+noise. Although we do not know the absolute IQA score, we
+do know that images which are more distorted should have
+a lower score than images which are less distorted. This fact
+can be used to generate huge datasets of ranked images. We
+can use a large variety of images and distortions to construct
+the datasets of ranked images.
+We use the Waterloo dataset, which consists of
+4,744 high quality natural images carefully chosen from the
+Internet, to generate a large ranking dataset. To test on the
+LIVE database, we generate four types of distortions which
+are widely used and common: Gaussian Blur (GB), Gaussian
+Noise (GN), JPEG, and JP2K. We apply these distortions at
+ﬁve levels, resulting in a total of 20 distortions for all images
+in the Waterloo dataset. To test on TID2013, we generate 17
+out of a total of 24 distortions at ﬁve levels, yielding a total of
+85 distortions per image (see the Appendix for more details).
+There were seven distortions which we could not generate,
+however we found that adding the other distortions also
+resulted into improvements for the distortions for which we
+could not generate rankings.
+IQA network
+For the IQA problem we have a training dataset with images
+xi and ground truth image quality yi. After generating the
+ranked image dataset we can train an IQA network. As a
+CNN backbone we use the VGG-16 network, only changing
+the last layer to output a single IQA score. With respect to
+the basic architecture given in Fig. 1, here we specify the
+IEEE TRANSACTIONS ON PATTERN ANALYSIS AND MACHINE INTELLIGENCE
+architecture we use for IQA estimation as shown in Fig. 2
+(top). For the labeled data we use the Euclidean distance
+between the prediction of the network ˆyi and the ground
+truth as the regression loss:
+LIQA(yi, ˆyi) = 1
+(yi −ˆyi)2,
+and will optimize this loss jointly with the ranking loss
+Lrank as proposed in Eq. (5).
+We randomly sample sub-images from the original high
+resolution images. We do this instead of scaling to avoid
+introducing distortions caused by interpolation or ﬁltering.
+The size of sampled images is determined by each network.
+However, the large size of the input images is important
+since input sub-images should be at least 1/3 of the original
+images in order to capture context information. This is a
+serious limitation of the patch sampling approach , 
+that samples very small 32 × 32 patches from the original
+images. In our experiments, we sample 224 × 224 pixel
+images from original images varying from 300 to 700 pixels.
+CROWD COUNTING BY LEARNING TO RANK
+In this section, we adapt the proposed framework to the task
+of crowd counting. Perspective distortion, clutter, occlusion,
+non-uniform distribution of people, complex illumination,
+scale variation, and a host of other scene-incidental imaging conditions render person counting and crowd density
+estimation in unconstrained images an daunting problem.
+Techniques for crowd counting have been recently improved using Convolutional Neural Networks (CNNs). As
+with most CNN architectures, however, these person counting and crowd density estimation techniques are highly
+data-driven. For person counting, the labeling burden is
+even more onerous than usual. Training data for person
+counting requires that each individual person be meticulously labeled in training images. It is for this reason that
+person counting and crowd density estimation datasets tend
+to have only a few hundred images available for training.
+As a consequence, crowd counting networks are expected
+to beneﬁt from additional unlabeled data which is used to
+train a ranking proxy task.
+Crowd counting datasets
+We use two standard benchmark crowd counting datasets:
+• UCF CC 50 : This dataset contains 50 annotated images of different resolutions, illuminations and scenes. The
+variation of densities is very large among images from
+94 to 4543 persons with an average of 1280 persons per
+• ShanghaiTech : Consists of 1198 images with 330,165
+annotated heads. This dataset includes two parts: 482
+images in Part A which are randomly crawled from the
+Internet, and 716 images in Part B which are taken from
+busy streets. Both parts are further divided into training
+and evaluation sets. The training and test of Part A has
+300 and 182 images, respectively, whereas that of Part B
+has 400 and 316 images, respectively.
+Ground truth annotations for crowd counting typically
+consist of a set of coordinates which indicate the ’center’
+Algorithm 2 : Algorithm to generate ranked datasets.
+A crowd scene image, number of patches k
+and scale factor s.
+Choose an anchor point randomly from the
+anchor region. The anchor region is deﬁned
+to be 1/r the size of the original image, centered at the original image center, and with
+the same aspect ratio as the original image.
+Find the largest square patch centered at the
+anchor point and contained within the image
+boundaries.
+Crop k −1 additional square patches, reducing size iteratively by a scale factor s. Keep
+all patches centered at anchor point.
+Resize all k patches to input size of network.
+A list of patches ordered according to the
+number of persons in the patch.
+(typically head center of a person). To convert this data to
+crowd density maps we place a Gaussian with standard
+deviation of 15 pixels and sum these for all persons in the
+scene to obtain yi. This is a standard procedure and is also
+used in , .
+Generating ranked image sets for counting
+Here we show how to automatically generate the rankings
+from unlabeled crowd counting images. The main idea is
+based on the observation that all patches contained within a
+larger patch must have a fewer or equal number of persons
+than the larger one (see Fig. 4). This observation allows us to
+collect large datasets of crowd images with known relative
+ranks. Rather than having to painstakingly annotate each
+person we are only required to verify if the image contains
+a crowd. Given a crowd image we extract ranked patches
+according to Algorithm 2.
+To collect a large dataset of crowd images from the
+Internet we use two different approaches:
+• Keyword query: We collect a crowd scene dataset from
+Google Images by using different key words: Crowded,
+Demonstration, Train station, Mall, Studio, Beach, all of
+which have high likelihood of containing a crowd
+scene. Then we delete images not relevant to our
+problem by simple visual inspection. In the end, we
+collected 1,180 high resolution crowd scene images,
+which is about 24x the size of the UCF CC 50 dataset,
+2.5x the size of ShanghaiTech Part A, and 2x the size
+of ShanghaiTech Part B. Note that no other annotation of
+images is performed. Example images from this dataset
+are given in Fig. 3 (top row).
+• Query-by-example image retrieval: For each annotated
+benchmark dataset, we collect an unlabeled dataset
+using the training images as queries with the Google
+Images visual image search engine. We choose the ﬁrst
+ten similar images and remove irrelevant ones. For
+UCF CC 50 we collected 256 images, for ShanghaiTech
+Part A 2229 images, and for ShanghaiTech Part B 3819
+images. An example of images returned for a speciﬁc
+query image is given in Fig. 3 (bottom row).
+LIU, VAN DE WEIJER, AND BAGDANOV: EXPLOITING UNLABELED DATA IN CNNS BY SELF-SUPERVISED LEARNING TO RANK
+Fig. 3. Example images from the retrieved crowd scene dataset. (top) Representative images using key words as query. (bottom) Representative
+images using training image as query image (the query image is depicted on the left).
+Shared FCN
+(VGG16 to conv5)
+Convolution
+GT Density
+Generation
+Number of persons
+Network architecture and ranked pair generation for crowd
+counting. Top: our counting network uses a VGG16 network truncated at
+the ﬁfth convolutional layer (before maxpooling). To this network we add
+a 3 × 3 × 1 convolutional layer with stride 1 which should estimate local
+crowd density. A sum pooling layer is added to the ranking channel of the
+network to arrive at a scalar value whose relative rank is known. Bottom:
+image pairs with known relative ranks are generated by selectively
+cropping unlabeled crowd images so that successive crops are entirely
+contained in previous ones.
+Crowd density estimation network
+We ﬁrst explain the network architecture which is trained
+on available crowd counting datasets with ground truth
+annotations (see Fig. 4) . This network regresses to a crowd
+density image which indicates the number of persons per
+pixel (examples of such maps are given in Fig. 6). A
+summation of all values in such a crowd density image
+gives an estimate of the number of people in the scene. In
+the experimental section we consider this network as the
+baseline method to which we compare.
+Our baseline network is derived from VGG-16 pretrained on ImageNet. VGG-16 consists of 13 convolutional
+layers followed by three fully connected layers. We adapt
+the network to regress to person density maps by removing
+its three fully connected layers and the last max-pooling
+layer (pool5) to prevent further reduction of spatial resolution. In their place we add a single convolutional layer (a
+3 ×3 ×512 ﬁlter with stride 1 and zero padding to maintain
+same size) which directly regresses to the crowd density
+map. As the counting loss Lc we use the Euclidean distance
+between the estimated and ground truth density maps, as
+(yi −ˆyi)2
+where N is the number of images in a training batch, yi is
+ground truth person density map of the i-th image in the
+batch, and the prediction from the network as ˆyi.
+To further improve the performance of our baseline network, we introduce multi-scale sampling from the available
+labeled datasets during training. Instead of using the whole
+image as an input, we randomly sample square patches of
+varying size (from 56 to 448 pixels). In the experimental
+section we verify that this multi-scale sampling is important
+for good performance. Since we are processing patches
+rather than images we use ˆyi to refer to the estimate of patch
+i from now on. The importance of multi-scale processing of
+crowd data was also noted in .
+Finally, we add a summation layer to the network. This
+summation layer takes as an input the estimated density
+map and sums it to a single number (the estimate of the
+number of persons in the image). This output is used to
+compute the ranking loss (see Eq. (4)) for the unlabeled
+images in the ranked dataset. With respect to the basic
+architecture in Fig. 1, we use a sum polling layer as a ranking
+speciﬁc layer as shown in Fig. 4 (top).
+EXPERIMENTAL RESULTS
+In this section we report on an extensive set of experiments
+performed to evaluate the effectiveness of learning from
+rankings for Image Quality Assessment in section 6.1 and
+crowd counting in section 6.2. We use the Caffe deep
+learning framework in all the experiments.
+IEEE TRANSACTIONS ON PATTERN ANALYSIS AND MACHINE INTELLIGENCE
+Ablation study on the entire TID2013 database.
+RankIQA+FT (Random)
+RankIQA+FT (Hard)
+RankIQA+FT (Ours)
+MT-RankIQA (Random)
+MT-RankIQA (Hard)
+MT-RankIQA (Ours)
+Image Quality Assessment (IQA)
+We performed a range of experiments designed to evaluate
+the performance of our approach with respect to baselines
+and the state-of-the-art in IQA. These experiments make
+use of standard datasets (for benchmark evaluation) and
+an additional dataset used for generating ranked distorted
+image pairs as explained in section 4.
+We use Stochastic Gradient Descent (SGD) with an initial
+learning rate of 1e-4 for efﬁcient Siamese network training
+and 1e-6 for ﬁne-tuning. Training rates are decreased by
+a factor of 0.1 every 10,000 iterations for a total of 50,000
+iterations. For both training phases we use ℓ2 weight decay
+(weight 5e-4). For multi-task training, we use λ = 1 in
+Eq. (5) with a learning rate of 1e-6 on the LIVE dataset
+and 1e-5 on TID2013. We found λ = 1 to work well in
+initial experiments, but cross validating λ on held-out data
+is expected to improve results for speciﬁc datasets. During
+training we sample a single subimage from each training
+image per epoch. When testing, we randomly sample 30
+sub-images from the original images, as suggested in ,
+and pass all the trained models. The average of all outputs
+of the sub-regions is the ﬁnal score for each distorted image.
+Two evaluation metrics are traditionally used to evaluate
+the performance of IQA algorithms: the Linear Correlation
+Coefﬁcient (LCC) and the Spearman Rank Order Correlation
+Coefﬁcient (SROCC). LCC is a measure of the linear correlation between the ground truth and the predicted quality
+scores. Given N distorted images, the ground truth of i-th
+image is denoted by yi, and the predicted score from the
+network is ˆyi. The LCC is computed as:
+i=1(yi −y)(ˆyi −ˆy)
+i (yi −y)2
+i (ˆyi −ˆy)2
+where y and ˆy are the means of the ground truth and
+predicted quality scores, respectively.
+Given N distorted images, the SROCC is computed as:
+SROCC = 1 −6 PN
+i=1 (vi −pi)2
+N (N 2 −1)
+where vi is the rank of the ground-truth IQA score yi in the
+ground-truth scores, and pi is the rank of ˆyi in the output
+scores for all N images. The SROCC measures the monotonic relationship between ground-truth and estimated IQA.
+Ablation study
+In this experiment, we evaluate the effectiveness of using
+rankings to estimate image quality. We compare our multitask approach with different baselines: ﬁne-tuning the VGG-
+16 network initialized from ImageNet to obtain the mapping from images to their predicted scores (which we call
+Baseline in our experiments), and two other baselines from
+our previous work : VGG-16 (initialized pre-trained ImageNet weights) trained on ranking data (called RankIQA),
+and our RankIQA approach ﬁne-tuned on TID2013 after
+training using ranked pairs of images (called RankIQA+FT).
+In order to evaluate the effectiveness of our sampling
+method in the multi-task setting, we also report the accuracy
+for multi-task training (called MT-RankIQA) with different
+sampling methods: standard random pair sampling, and a
+hard-negative mining method similar to . For standard
+random pair sampling we randomly choose 36 pairs for
+each mini-batch from the training sets. For the hard negative
+mining strategy we start from 36 pairs in a mini-batch, and
+gradually increase the number of hard pairs every 5000
+iterations. For our method we pass 72 images in each minibatch. With these settings the computational costs for all
+three methods are equal, since at each iteration 72 images
+are passed through the network.
+We follow the experimental protocol used in HOSA .
+The entire TID2013 database including all types of distortions is divided into 80% training images and 20% testing
+images according to the reference images and their distorted
+versions. The results are shown in Table 1, where ALL
+means testing all distortions together. All the experiments
+are performed 10 times and the average SROCC is reported
+From Table 1, we can draw several conclusions. First, it
+is hard to obtain good results by training a deep network
+directly on IQA data. This is seen in the Baseline results and
+is due to the scarcity of training data. Second, competitive
+results are obtained using RankIQA without access to the
+ground truth of IQA dataset during training the ranking
+network, which strongly demonstrates the effectiveness of
+training on ranking data. The RankIQA-trained network
+alone does not provide accurate IQA scores (since it has
+never seen any) but does yield high correlation with the
+IQA scores as measured by SROCC. After ﬁne-tuning on the
+TID2013 database, we considerably improve performance
+for all sampling methods: with random sampling we improve on the baseline by 11%, while our efﬁcient sampling
+method further outperforms random sampling by 2.4% in
+terms of LCC (similar conclusions can be drawn from the
+SROCC results.
+Finally, in Table 1 we also compare the three optimization methods for multi-task training: random pair sampling,
+hard negative mining, and our proposed efﬁcient Siamese
+backpropagation. We see that our efﬁcient back-propagation
+strategy with multi-task setting obtains the best results,
+further improving the accuracy by 2.8% on LCC and 2.6%
+on SROCC with respect to RankIQA+FT. This clearly shows
+the beneﬁts of the proposed backpropagation scheme. In the
+next section, we use MT-RankIQA to refer to our method
+trained with the multi-task loss using our efﬁcient Siamese
+backpropagation method.
+To demonstrate the ability of our approach to generalize
+to unseen distortions, we trained our multi-task approach
+with different numbers of synthetic distortions as auxiliary
+data combined with all labeled data in the TID2013 dataset.
+All results are the average of three runs. As shown in
+LIU, VAN DE WEIJER, AND BAGDANOV: EXPLOITING UNLABELED DATA IN CNNS BY SELF-SUPERVISED LEARNING TO RANK
+Performance evaluation (SROCC) on the entire TID2013 database.
+BLIINDS-II 
+BRISQUE 
+CORNIA-10K 
+RankIQA 
+RankIQA+FT 
+MT-RankIQA
+BLIINDS-II 
+BRISQUE 
+CORNIA-10K 
+RankIQA 
+RankIQA+FT 
+MT-RankIQA
+Generalization to unseen distortions. Results of MT-RankIQA with
+different numbers of synthetic distortions as auxiliary data combined
+with all labeled data in the TID2013 dataset. Results show that also on
+the unseen distortions a signiﬁcant gain in performance is obtained.
+Overall LCC accuracy
+Average gain
+Seen distortions
+Unseen distortions
+7 distortions
+11 distortions
+15 distortions
+Table 3, adding more distortions results in increased overall
+performance on the test set. Note also that adding speciﬁc
+distortions not only consistently improves accuracy on seen
+distortions consistently, but also on unseen ones.
+Comparison with the state-of-the-art
+We compare the performance of our method with state-ofthe-art Full-reference IQA (FR-IQA) and NR-IQA methods
+on both TID2013 and LIVE dataset.
+Evaluation on TID2013.
+Table 2 includes results of stateof-the-art methods. We see that for several very challenging
+distortions (14 to 18), where all other methods fail, we obtain
+satisfactory results. For individual distortions, there is a
+huge gap between RankIQA and other methods on most
+distortions. The state-of-the-art method HOSA performs
+slightly better than our methods on 6 out of 24 distortions.
+For all distortions, RankIQA+FT achieves about 5% higher
+than HOSA, and about 3% more is gained by using multitask training. Our methods also perform well on distortions
+for which were unable to generate rankings. This indicates
+that different distortions share some common representation
+and training the network jointly on all distortions also
+improves results for the distortions for which we did not
+generate rankings.
+Evaluation on LIVE. As done in , , we randomly split
+the reference images and their distorted version from LIVE
+into 80% training and 20% testing sample and compute the
+average LCC and SROCC scores on the testing set after
+training to convergence. This process is repeated ten times
+and the results are averaged. These results are shown in
+LCC (above) and SROCC (below) evaluation on LIVE dataset. We
+divide approaches into full-reference (FR-) and no-reference (NR-) IQA.
+DIVINE 
+BLIINDS-II 
+BRISQUE 
+CORNIA 
+MT-RankIQA
+DIVINE 
+BLIINDS-II 
+BRISQUE 
+CORNIA 
+MT-RankIQA
+Table 4. For fair comparison with the state-of-the-art, we
+train our ranking model on four distortions (all but FF),
+but we ﬁne-tune our model on all ﬁve distortions in the
+LIVE dataset to compute ALL. As shown in Table 4 our
+approach improves by 0.4% and 1% in LCC and SROCC, respectively, the best NR-IQA results reported on ALL distortions. This indicates that our method outperforms existing
+work including the current state-of-the-art NR-IQA method
+SOM and DNN , and even achieves competitive
+results as state-of-the-art FR-IQA method DCNN which,
+being a full-reference approach, has the beneﬁt of having
+access to the high-quality original reference image.
+Active learning for IQA
+We demonstrate the effectiveness of active learning on the
+IQA problem (see Algorithm 1). As a dataset we consider all
+24 distortions for each of 19 reference images from TID2013,
+yielding a dataset of 456 image-distortion pairs. Each image
+is distorted for each distortion at ﬁve distortion levels.
+IEEE TRANSACTIONS ON PATTERN ANALYSIS AND MACHINE INTELLIGENCE
+Percentage of labeled data
+Active learning on TID2013 dataset
+Random selection
+Active learning selection
+Fig. 5. Active learning results on TID 2013. We plot LCC as a function
+of the percentage of labeled data used from the training set.
+During active learning we aim to select which images with
+what particular distortion are expected to most improve
+performance. We add all ﬁve distortion levels of the selected
+image with the particular distortion to the labeled pool. The
+active learning loop starts with 10% of this data labeled;
+hence the labeled samples D is 10% and the examples E consist of the remaining 90% of the data without labels. We then
+perform T = 9 active learning cycles. In each cycle S = 10%
+images with a particular distortion are added incrementally,
+using the full training set from the previous iteration to
+estimate informativeness for the remaining unlabeled data.
+We use K = 100 in the experiment, and compare results
+to a baseline of randomly adding 10% additional labeled
+samples at each step.
+Results for active learning are given in Fig. 5. It is clear
+that our active learning algorithm obtains results superior
+to random selection. When adding an additional 10% of
+data (using a total of 20% labeled data) we achieve similar
+accuracy as adding an additional 40% data (using a total of
+50% labeled data) with random selection, thereby reducing
+the labeling cost by 75% compared to the baseline.
+Crowd counting
+Here we report on a range of experiments evaluating our
+approach with respect to baselines and the state-of-the-art
+methods for crowd counting.
+We use SGD with a batch size of 25 for both ranking and
+counting, and thus a batch size of 50 for multi-task training.
+For the ranking plus ﬁne-tuning method, the learning rate
+is 1e-6 for both ranking and ﬁne-tuning. For multi-task
+training, we found that λ = 100 yielded good results on
+all datasets. Cross validating λ on held-out data is expected
+to improve results for speciﬁc datasets. Learning rates are
+decreased by a factor of 0.1 every 5,000 iterations for a total
+of 10K iterations. For both training phases we use ℓ2 weight
+decay with a weight of 5e-4. During training we sample one
+sub-image from each training image per epoch. We perform
+down-sampling of three scales and up-sampling of one scale
+on the UCF CC 50 dataset and only up-sampling of one
+scale on the ShanghaiTech dataset. The number of ranked
+Ablation study on UCF CC 50 with ﬁve-fold cross validation.
++ Pre-trained model
++ multi-scale
+Ranking+FT
+Multi-task (Random)
+Multi-task (Hard)
+Multi-task (Ours)
+crops k = 5, the scale factor s = 0.75, and the anchor region
+r = 8 (see Algorithm 2).
+Following existing work, we use the mean absolute
+error (MAE) and the mean squared error (MSE) to evaluate
+different methods. These are deﬁned as follows:
+(yi −ˆyi)2
+where N is the number of test images, yi is the ground truth
+number of persons in the ith image, and ˆyi is number of
+persons predicted by the network in the ith image.
+Ablation study.
+We begin with an ablation study on the UCF CC 50 dataset.
+The aim is to evaluate the relative gain of the proposed
+improvements and to evaluate the use of a ranking loss
+against the baseline. The ranked images in this experiment
+are generated from the Keyword dataset. The results are
+summarized in Table 5. We can immediately observe the
+beneﬁt of using a pre-trained ImageNet model in crowd
+counting, with a signiﬁcant drop in MAE of around 28%
+compared to the model trained from scratch. By using
+both multi-scale data augmentation and starting from a
+pre-trained model, another improvement of around 6% is
+The Ranking+FT method performs worse than directly
+ﬁne-tuning from a pre-trained ImageNet model. This is
+probably caused by the poorly-deﬁned nature of the selfsupervised task. To optimize this task the network could
+decide to count anything, e.g. ‘hats’, ‘trees’, or ‘people with
+red shirts’, or even just ‘edges’ – all of which would satisfy
+the ranking constraints that are imposed.
+Next, we compare the three sampling strategies for
+combining the ranking and counting losses for multi-task
+training. When using multi-task training with random pair
+sampling, the average MAE is reduced by about 15 points.
+Hard mining obtains about 5 points average MAE less than
+random sampling. However, our efﬁcient back-propagation
+approach reduces the MAE further to 279.6. This shows
+that by jointly learning both the self-supervised and crowd
+counting tasks, the self-supervised task is forced to focus
+on counting persons. Given its superior results, we consider
+only the “Multi-task” with efﬁcient back-propagation approach for the remainder of the experiments.
+Comparison with the state-of-the-art
+Evaluation on the UCF CC 50 dataset.
+A ﬁve-fold crossvalidation was performed for evaluating the methods. Re-
+LIU, VAN DE WEIJER, AND BAGDANOV: EXPLOITING UNLABELED DATA IN CNNS BY SELF-SUPERVISED LEARNING TO RANK
+Fig. 6. Examples of predicted density maps for the UCF CC 50 (Top row, true count: 3406 prediction: 3052) and ShanghaiTech datasets (Bottom
+row, true count: 361 prediction: 365). Left column: crowd image. Middle column: ground truth. Right column: prediction.
+MAE and MSE error on the UCF CC 50 dataset.
+Idrees et al. 
+Cross-scene 
+Onoro et al. 
+Walach et al. 
+Switching-CNN 
+CP-CNN 
+ACSCP 
+CSRNet 
+ic-CNN 
+Multi-task (Query-by-example)
+Multi-task (Keyword)
+sults are shown in Table 6. Our multi-task training method
+using the unlabeled Keyword Dataset reduces the MAE
+from 291.0 to 279.6, which is comparable to ACSCP 
+which was published at the same time as our original work.
+Our approach performs slightly worse than the state-of-theart methods CSRNet and ic-CNN (also published
+around the same time as our original work), but in general
+our model has fewer parameters than CSRNet and a simpler
+inference procedure compared to ic-CNN. However, the
+MSE of our method on UCF CC 50 dataset is worse than
+the state-of-the-art methods , , , but achieves
+competitive results compared to , . This indicates
+that our method and also work better in general
+but have more extreme outliers. Compared to training on
+the Keyword dataset, learning from the Query-by-example
+dataset is slightly worse, which might be because most
+images from UCF CC 50 are black and white with low
+resolution, which often does not lead to satisfactory query
+results. An example of prediction in UCF CC 50 using our
+network is shown in Fig. 6.
+MAE and MSE error on ShanghaiTech.
+Cross-scene 
+Switching-CNN 
+CP-CNN 
+ACSCP 
+CSRNet 
+ic-CNN 
+Ours: Multi-task (Query-by-example)
+Ours: Multi-task (Keyword)
+Evaluation on the ShanghaiTech dataset.
+Looking at
+Table 7, we can draw conclusions similar to those on
+UCF CC 50. We see here that using the Query-by-example
+Dataset further improves by about 2% on ShanghaiTech –
+especially for Part A, where our approach surpasses the
+state-of-the-art method , but is still slightly worse than
+CSRNet and ic-CNN . An example of prediction by
+our network on ShanghaiTech is given in Fig. 6. For comparison, we also provide the results of our baseline method
+(including ﬁne-tuning from a pre-trained model and multiscale data augmentation) on this dataset: MAE = 77.7
+and MSE = 115.9 on Part A, and MAE = 14.7 and
+MSE = 24.7 on Part B.
+Evaluation on the WorldExpo’10 dataset
+The World-
+Expo’10 dataset consists of 3980 frames of size 576×
+720 from 1132 video sequences captured by 108 surveillance
+cameras. The dataset is split into training set with 103 scenes
+and test set consisting of 5 different scenes. Regions of
+interest (ROIs) are provided for the whole dataset, which
+are used as a mask during testing. We consider training
+directly on the only ground truth labels as a baseline, and
+for our multi-task approach, when we test on one speciﬁc
+IEEE TRANSACTIONS ON PATTERN ANALYSIS AND MACHINE INTELLIGENCE
+MAE results on the WorldExpo’10 dataset.
+Switching-CNN 
+CP-CNN 
+ACSCP 
+CSRNet 
+ic-CNN 
+MAE and MSE error on the UCSD dataset.
+Cross-scene 
+Switching-CNN 
+ACSCP 
+CSRNet 
+scene, the rest of scenes in the test set are used to generate
+the ranked image set. We compare our multi-task training
+to the baseline and other state-of-the-art methods in Table 8.
+It is clear that our multi-task training approach outperforms
+the baseline in all ﬁve cases and achieves comparable results
+compared to other methods in terms of MAE.
+Evaluation on the UCSD dataset
+The UCSD dataset 
+has 2000 frames with a region of interest (ROI) varying
+from 11 to 46 persons per image. The resolution of each
+frame is ﬁxed and small (238 × 158), so we change the
+input of network to 112 × 112 by removing all layers after
+pool4 in VGG-16. Thus the output retains the same 1/16
+of input size. We follow the same settings as , using
+frames between 600 and 1400 as training set, and the rest
+as test set. In order to train our multi-task approach and
+compare fairly to other methods, we generate ranked sets
+using the frames from 1 to 600 and test on the frames from
+1401 to 2000 (and vice versa). We do not collect additional
+unlabeled data since the training and test set are from the
+same camera. Results are shown in Table 9. Our baseline
+performs similarly to the state-of-the-art methods , ,
+but slightly worse than ACSCP and MCNN . Our
+multi-task approach reduces the baseline MAE from 1.60 to
+1.17. Our multi-task approach works on less dense datasets
+like UCSD because, though the baseline might make incorrect predictions on patches with the almost same number
+of headcounts, our learning-to-rank branch can constrain it
+and ensure correct ranking predictions.
+Evaluation on the UCF-QNRF dataset.
+UCF-QNRF is
+a very challenging dataset consisting of 1,535 images with
+average of 815 people per image. The average resolution of
+images is much larger compared to other datasets, with images up to 6,000×9,000 pixels. We resize all images to have
+a maximum dimension of 1024 pixels without changing the
+aspect ratio. The Keyword Dataset is used as unlabeled data
+to for the multi-task learning. Results are shown in Table 10,
+which indicate that our technique consistently improves
+counting performance – even on datasets like UCF-QNRF
+with signiﬁcantly more labeled training samples. Compared
+MAE and MSE error on the UCF-QNRF dataset.
+Switching-CNN 
+CompositionLoss 
+Transfer learning across datasets. Models were trained on Part A of
+ShanghaiTech and tested on UCF CC 50.
+Counting only
+Multi-task
+to our baseline, the MAE is reduced from 137 to 124 and
+MSE is down to 196. Our method outperforms all other
+methods including CompositionLoss in MAE and performs slightly worse in MSE.
+Evaluation on transfer learning.
+As proposed in , to
+demonstrate the generalization of the learned model, we
+test our method in the transfer learning setting by using
+Part A of the ShanghaiTech dataset as the source domain
+and using UCF CC 50 dataset as the target domain. The
+model trained on Part A of ShanghaiTech is used to predict
+the crowd scene images from UCF CC 50 dataset, and the
+results can be seen in Table 11. Using only counting information improves the MAE by 12% compared to reported
+results in . By combining both ranking and counting
+datasets, the MAE decreases from 349.5 to 337.6, and MSE
+decreases from 475.7 to 434.3. In conclusion, these results
+show that our method signiﬁcantly outperforms the only
+other work reporting results on the task of cross-dataset
+crowd counting.
+Active learning for crowd counting
+We use the Shanghai Part A dataset to evaluate our active
+learning approach on Crowd counting. We use 10% of
+the training set as the initially labeled training samples D
+(and E the remaining 90%), and set S to add 10% of the
+training images in each of the T = 9 active learning cycles
+(see Algorithm 1). We use K = 100 in this experiment
+to evaluate ranking certainty. Again we compare to the
+baseline of randomly selecting images from E. The result is
+shown in Fig. 7. Our approach performs consistently better
+than random selection in terms of MAE. We obtain similar
+results with 20% of the training data as random approach
+does with 40% – reducing the labeling effort by 50%. These
+results also show that performance saturates after 60% and
+no further improvement is obtained by adding the last
+40% images considered least useful by the active learning
+algorithm. The results clearly show that our active learning
+method correctly identiﬁes the images, which when labeled,
+contribute most to an improved crowd counting network.
+CONCLUSION
+In this article we explored ranking as a self-supervised
+proxy task for regression problems. For many regression
+LIU, VAN DE WEIJER, AND BAGDANOV: EXPLOITING UNLABELED DATA IN CNNS BY SELF-SUPERVISED LEARNING TO RANK
+Percentage of labeled data
+Active learning on ShanghaiA dataset
+Random selection
+Active learning selection
+Fig. 7. Active learning results on Shanghai A. MAE is plotted as a
+function of the percentage of labeled data from the training set.
+problems the collection of supervised data is an expensive
+and laborious process. We showed, however, that there exist
+some problems for which it is easy to obtain ranked image
+sets, and that these ranked image sets can be exploited
+to improve the training of the network. In addition, we
+proposed a method for fast backpropagation for the ranking loss. This method removes the redundant computation
+which is introduced by the multiple branches of Siamese
+networks, and instead uses a single branch after which all
+possible pairs of the minibatch are combined (rather than
+just a selection of pairs).
+We applied the proposed framework to two regression
+problems: Image Quality Assessment and crowd counting.
+In the case of Image Quality Assessment, the ranked data
+sets are formed by adding increasing levels of distortions
+to images. For crowd counting, ranked sets are formed by
+comparing image crops which are contained within each
+other: a smaller image contained in another larger one will
+contain the same number or fewer persons than the larger
+image. Experimental results show that for both applications
+results improve signiﬁcantly when adding unlabeled data
+for the ranking task. In addition, we have shown that the
+best results are obtained when using our efﬁcient backpropagation method in a multi-task setting.
+We have also shown that the proxy task can be used as an
+informativeness measure for unlabeled images. The number
+of errors made on the proxy task can be used to drive an
+active learning algorithm to select the best images to label
+from a pool of unlabeled ones. These images, once added to
+the training set, will most improve the performance of the
+network. Experimental results show that, for both IQA and
+crowd counting, this method can reduce the labeling effort
+by a large margin.
+ACKNOWLEDGMENTS
+We acknowledge the Spanish project TIN2016-79717-R, the
+CHISTERA project M2CR and the CERCA
+Programme / Generalitat de Catalunya. Xialei Liu acknowledges the Chinese Scholarship Council (CSC) grant
+No.201506290018. We also acknowledge the generous GPU
+donation from NVIDIA.

@@ -1,0 +1,643 @@
+High-Resolution Image Synthesis with Latent Diffusion Models
+Robin Rombach1 *
+Andreas Blattmann1 ∗
+Dominik Lorenz1
+Patrick Esser
+Bj¨orn Ommer1
+1Ludwig Maximilian University of Munich & IWR, Heidelberg University, Germany
+ 
+By decomposing the image formation process into a sequential application of denoising autoencoders, diffusion
+models (DMs) achieve state-of-the-art synthesis results on
+image data and beyond. Additionally, their formulation allows for a guiding mechanism to control the image generation process without retraining. However, since these
+models typically operate directly in pixel space, optimization of powerful DMs often consumes hundreds of GPU
+days and inference is expensive due to sequential evaluations. To enable DM training on limited computational
+resources while retaining their quality and ﬂexibility, we
+apply them in the latent space of powerful pretrained autoencoders. In contrast to previous work, training diffusion
+models on such a representation allows for the ﬁrst time
+to reach a near-optimal point between complexity reduction and detail preservation, greatly boosting visual ﬁdelity.
+By introducing cross-attention layers into the model architecture, we turn diffusion models into powerful and ﬂexible generators for general conditioning inputs such as text
+or bounding boxes and high-resolution synthesis becomes
+possible in a convolutional manner. Our latent diffusion
+models (LDMs) achieve new state-of-the-art scores for image inpainting and class-conditional image synthesis and
+highly competitive performance on various tasks, including text-to-image synthesis, unconditional image generation
+and super-resolution, while signiﬁcantly reducing computational requirements compared to pixel-based DMs.
+1. Introduction
+Image synthesis is one of the computer vision ﬁelds with
+the most spectacular recent development, but also among
+those with the greatest computational demands.
+Especially high-resolution synthesis of complex, natural scenes
+is presently dominated by scaling up likelihood-based models, potentially containing billions of parameters in autoregressive (AR) transformers . In contrast, the promising results of GANs have been revealed to be
+mostly conﬁned to data with comparably limited variability
+as their adversarial learning procedure does not easily scale
+to modeling complex, multi-modal distributions. Recently,
+diffusion models , which are built from a hierarchy of
+denoising autoencoders, have shown to achieve impressive
+*The ﬁrst two authors contributed equally to this work.
+ours (f = 4)
+PSNR: 27.4 R-FID: 0.58
+DALL-E (f = 8)
+PSNR: 22.8 R-FID: 32.01
+VQGAN (f = 16)
+PSNR: 19.9 R-FID: 4.98
+Boosting the upper bound on achievable quality with
+less agressive downsampling. Since diffusion models offer excellent inductive biases for spatial data, we do not need the heavy spatial downsampling of related generative models in latent space, but
+can still greatly reduce the dimensionality of the data via suitable
+autoencoding models, see Sec. 3. Images are from the DIV2K 
+validation set, evaluated at 5122 px. We denote the spatial downsampling factor by f. Reconstruction FIDs and PSNR are
+calculated on ImageNet-val. ; see also Tab. 8.
+results in image synthesis and beyond ,
+and deﬁne the state-of-the-art in class-conditional image
+synthesis and super-resolution . Moreover, even
+unconditional DMs can readily be applied to tasks such
+as inpainting and colorization or stroke-based synthesis , in contrast to other types of generative models . Being likelihood-based models, they do not
+exhibit mode-collapse and training instabilities as GANs
+and, by heavily exploiting parameter sharing, they can
+model highly complex distributions of natural images without involving billions of parameters as in AR models .
+Democratizing High-Resolution Image Synthesis
+belong to the class of likelihood-based models, whose
+mode-covering behavior makes them prone to spend excessive amounts of capacity (and thus compute resources)
+on modeling imperceptible details of the data . Although the reweighted variational objective aims to address this by undersampling the initial denoising steps, DMs
+are still computationally demanding, since training and
+evaluating such a model requires repeated function evaluations (and gradient computations) in the high-dimensional
+space of RGB images. As an example, training the most
+powerful DMs often takes hundreds of GPU days (e.g. 150 -
+1000 V100 days in ) and repeated evaluations on a noisy
+version of the input space render also inference expensive,
+ 
+so that producing 50k samples takes approximately 5 days
+ on a single A100 GPU. This has two consequences for
+the research community and users in general: Firstly, training such a model requires massive computational resources
+only available to a small fraction of the ﬁeld, and leaves a
+huge carbon footprint . Secondly, evaluating an already trained model is also expensive in time and memory,
+since the same model architecture must run sequentially for
+a large number of steps (e.g. 25 - 1000 steps in ).
+To increase the accessibility of this powerful model class
+and at the same time reduce its signiﬁcant resource consumption, a method is needed that reduces the computational complexity for both training and sampling. Reducing
+the computational demands of DMs without impairing their
+performance is, therefore, key to enhance their accessibility.
+Departure to Latent Space
+Our approach starts with
+the analysis of already trained diffusion models in pixel
+space: Fig. 2 shows the rate-distortion trade-off of a trained
+model. As with any likelihood-based model, learning can
+be roughly divided into two stages: First is a perceptual
+compression stage which removes high-frequency details
+but still learns little semantic variation. In the second stage,
+the actual generative model learns the semantic and conceptual composition of the data (semantic compression). We
+thus aim to ﬁrst ﬁnd a perceptually equivalent, but computationally more suitable space, in which we will train diffusion models for high-resolution image synthesis.
+Following common practice , we separate training into two distinct phases:
+First, we train
+an autoencoder which provides a lower-dimensional (and
+thereby efﬁcient) representational space which is perceptually equivalent to the data space. Importantly, and in contrast to previous work , we do not need to rely on excessive spatial compression, as we train DMs in the learned
+latent space, which exhibits better scaling properties with
+respect to the spatial dimensionality. The reduced complexity also provides efﬁcient image generation from the latent
+space with a single network pass.
+We dub the resulting
+model class Latent Diffusion Models (LDMs).
+A notable advantage of this approach is that we need to
+train the universal autoencoding stage only once and can
+therefore reuse it for multiple DM trainings or to explore
+possibly completely different tasks . This enables efﬁcient exploration of a large number of diffusion models for
+various image-to-image and text-to-image tasks. For the latter, we design an architecture that connects transformers to
+the DM’s UNet backbone and enables arbitrary types
+of token-based conditioning mechanisms, see Sec. 3.3.
+In sum, our work makes the following contributions:
+(i) In contrast to purely transformer-based approaches
+ , our method scales more graceful to higher dimensional data and can thus (a) work on a compression level
+which provides more faithful and detailed reconstructions
+than previous work (see Fig. 1) and (b) can be efﬁciently
+Figure 2. Illustrating perceptual and semantic compression: Most
+bits of a digital image correspond to imperceptible details. While
+DMs allow to suppress this semantically meaningless information
+by minimizing the responsible loss term, gradients (during training) and the neural network backbone (training and inference) still
+need to be evaluated on all pixels, leading to superﬂuous computations and unnecessarily expensive optimization and inference.
+We propose latent diffusion models (LDMs) as an effective generative model and a separate mild compression stage that only eliminates imperceptible details. Data and images from .
+applied to high-resolution synthesis of megapixel images.
+(ii) We achieve competitive performance on multiple
+tasks (unconditional image synthesis, inpainting, stochastic
+super-resolution) and datasets while signiﬁcantly lowering
+computational costs. Compared to pixel-based diffusion approaches, we also signiﬁcantly decrease inference costs.
+(iii) We show that, in contrast to previous work 
+which learns both an encoder/decoder architecture and a
+score-based prior simultaneously, our approach does not require a delicate weighting of reconstruction and generative
+abilities.
+This ensures extremely faithful reconstructions
+and requires very little regularization of the latent space.
+(iv) We ﬁnd that for densely conditioned tasks such
+as super-resolution, inpainting and semantic synthesis, our
+model can be applied in a convolutional fashion and render
+large, consistent images of ∼10242 px.
+(v) Moreover, we design a general-purpose conditioning
+mechanism based on cross-attention, enabling multi-modal
+training. We use it to train class-conditional, text-to-image
+and layout-to-image models.
+(vi) Finally,
+we release pretrained latent diffusion
+autoencoding
+https : / / github .
+com/CompVis/latent-diffusion which might be
+reusable for a various tasks besides training of DMs .
+2. Related Work
+Generative Models for Image Synthesis The high dimensional nature of images presents distinct challenges
+to generative modeling. Generative Adversarial Networks
+(GAN) allow for efﬁcient sampling of high resolution
+images with good perceptual quality , but are difﬁ-
+cult to optimize and struggle to capture the full
+data distribution . In contrast, likelihood-based methods emphasize good density estimation which renders optimization more well-behaved.
+Variational autoencoders
+(VAE) and ﬂow-based models enable efﬁcient
+synthesis of high resolution images , but sample quality is not on par with GANs. While autoregressive
+models (ARM) achieve strong performance
+in density estimation, computationally demanding architectures and a sequential sampling process limit them to
+low resolution images. Because pixel based representations
+of images contain barely perceptible, high-frequency details , maximum-likelihood training spends a disproportionate amount of capacity on modeling them, resulting
+in long training times. To scale to higher resolutions, several
+two-stage approaches use ARMs to model
+a compressed latent image space instead of raw pixels.
+Recently, Diffusion Probabilistic Models (DM) ,
+have achieved state-of-the-art results in density estimation
+ as well as in sample quality . The generative power
+of these models stems from a natural ﬁt to the inductive biases of image-like data when their underlying neural backbone is implemented as a UNet . The best
+synthesis quality is usually achieved when a reweighted objective is used for training. In this case, the DM corresponds to a lossy compressor and allow to trade image quality for compression capabilities. Evaluating and optimizing
+these models in pixel space, however, has the downside of
+low inference speed and very high training costs. While
+the former can be partially adressed by advanced sampling
+strategies and hierarchical approaches ,
+training on high-resolution image data always requires to
+calculate expensive gradients. We adress both drawbacks
+with our proposed LDMs, which work on a compressed latent space of lower dimensionality. This renders training
+computationally cheaper and speeds up inference with almost no reduction in synthesis quality (see Fig. 1).
+Two-Stage Image Synthesis To mitigate the shortcomings of individual generative approaches, a lot of research
+ has gone into combining the
+strengths of different methods into more efﬁcient and performant models via a two stage approach. VQ-VAEs use autoregressive models to learn an expressive prior
+over a discretized latent space. extend this approach to
+text-to-image generation by learning a joint distributation
+over discretized image and text representations. More generally, uses conditionally invertible networks to provide a generic transfer between latent spaces of diverse domains. Different from VQ-VAEs, VQGANs employ a ﬁrst stage with an adversarial and perceptual objective to scale autoregressive transformers to larger images.
+However, the high compression rates required for feasible
+ARM training, which introduces billions of trainable parameters , limit the overall performance of such approaches and less compression comes at the price of high
+computational cost . Our work prevents such tradeoffs, as our proposed LDMs scale more gently to higher
+dimensional latent spaces due to their convolutional backbone. Thus, we are free to choose the level of compression
+which optimally mediates between learning a powerful ﬁrst
+stage, without leaving too much perceptual compression up
+to the generative diffusion model while guaranteeing high-
+ﬁdelity reconstructions (see Fig. 1).
+While approaches to jointly or separately learn
+an encoding/decoding model together with a score-based
+prior exist, the former still require a difﬁcult weighting between reconstruction and generative capabilities and
+are outperformed by our approach (Sec. 4), and the latter
+focus on highly structured images such as human faces.
+To lower the computational demands of training diffusion models towards high-resolution image synthesis, we
+observe that although diffusion models allow to ignore
+perceptually irrelevant details by undersampling the corresponding loss terms , they still require costly function
+evaluations in pixel space, which causes huge demands in
+computation time and energy resources.
+We propose to circumvent this drawback by introducing
+an explicit separation of the compressive from the generative learning phase (see Fig. 2). To achieve this, we utilize
+an autoencoding model which learns a space that is perceptually equivalent to the image space, but offers signiﬁcantly
+reduced computational complexity.
+Such an approach offers several advantages: (i) By leaving the high-dimensional image space, we obtain DMs
+which are computationally much more efﬁcient because
+sampling is performed on a low-dimensional space. (ii) We
+exploit the inductive bias of DMs inherited from their UNet
+architecture , which makes them particularly effective
+for data with spatial structure and therefore alleviates the
+need for aggressive, quality-reducing compression levels as
+required by previous approaches . (iii) Finally, we
+obtain general-purpose compression models whose latent
+space can be used to train multiple generative models and
+which can also be utilized for other downstream applications such as single-image CLIP-guided synthesis .
+3.1. Perceptual Image Compression
+Our perceptual compression model is based on previous
+work and consists of an autoencoder trained by combination of a perceptual loss and a patch-based 
+adversarial objective . This ensures that the reconstructions are conﬁned to the image manifold by enforcing local realism and avoids bluriness introduced by relying
+solely on pixel-space losses such as L2 or L1 objectives.
+More precisely, given an image x ∈RH×W ×3 in RGB
+space, the encoder E encodes x into a latent representa-
+tion z = E(x), and the decoder D reconstructs the image from the latent, giving ˜x = D(z) = D(E(x)), where
+z ∈Rh×w×c. Importantly, the encoder downsamples the
+image by a factor f = H/h = W/w, and we investigate
+different downsampling factors f = 2m, with m ∈N.
+In order to avoid arbitrarily high-variance latent spaces,
+we experiment with two different kinds of regularizations.
+The ﬁrst variant, KL-reg., imposes a slight KL-penalty towards a standard normal on the learned latent, similar to a
+VAE , whereas VQ-reg. uses a vector quantization
+layer within the decoder. This model can be interpreted
+as a VQGAN but with the quantization layer absorbed
+by the decoder. Because our subsequent DM is designed
+to work with the two-dimensional structure of our learned
+latent space z = E(x), we can use relatively mild compression rates and achieve very good reconstructions. This is
+in contrast to previous works , which relied on an
+arbitrary 1D ordering of the learned space z to model its
+distribution autoregressively and thereby ignored much of
+the inherent structure of z. Hence, our compression model
+preserves details of x better (see Tab. 8). The full objective
+and training details can be found in the supplement.
+3.2. Latent Diffusion Models
+Diffusion Models are probabilistic models designed to
+learn a data distribution p(x) by gradually denoising a normally distributed variable, which corresponds to learning
+the reverse process of a ﬁxed Markov Chain of length T.
+For image synthesis, the most successful models 
+rely on a reweighted variant of the variational lower bound
+on p(x), which mirrors denoising score-matching .
+These models can be interpreted as an equally weighted
+sequence of denoising autoencoders ϵθ(xt, t); t = 1 . . . T,
+which are trained to predict a denoised variant of their input
+xt, where xt is a noisy version of the input x. The corresponding objective can be simpliﬁed to (Sec. B)
+LDM = Ex,ϵ∼N(0,1),t
+∥ϵ −ϵθ(xt, t)∥2
+with t uniformly sampled from {1, . . . , T}.
+Generative Modeling of Latent Representations With
+our trained perceptual compression models consisting of E
+and D, we now have access to an efﬁcient, low-dimensional
+latent space in which high-frequency, imperceptible details
+are abstracted away.
+Compared to the high-dimensional
+pixel space, this space is more suitable for likelihood-based
+generative models, as they can now (i) focus on the important, semantic bits of the data and (ii) train in a lower dimensional, computationally much more efﬁcient space.
+Unlike previous work that relied on autoregressive,
+attention-based transformer models in a highly compressed,
+discrete latent space , we can take advantage of
+image-speciﬁc inductive biases that our model offers. This
+crossattention
+Latent Space
+Conditioning
+Diffusion Process
+denoising step
+skip connection
+Pixel Space
+Denoising U-Net
+We condition LDMs either via concatenation or by a
+more general cross-attention mechanism. See Sec. 3.3
+includes the ability to build the underlying UNet primarily from 2D convolutional layers, and further focusing the
+objective on the perceptually most relevant bits using the
+reweighted bound, which now reads
+LLDM := EE(x),ϵ∼N(0,1),t
+∥ϵ −ϵθ(zt, t)∥2
+The neural backbone ϵθ(◦, t) of our model is realized as a
+time-conditional UNet . Since the forward process is
+ﬁxed, zt can be efﬁciently obtained from E during training,
+and samples from p(z) can be decoded to image space with
+a single pass through D.
+3.3. Conditioning Mechanisms
+Similar to other types of generative models ,
+diffusion models are in principle capable of modeling
+conditional distributions of the form p(z|y).
+be implemented with a conditional denoising autoencoder
+ϵθ(zt, t, y) and paves the way to controlling the synthesis
+process through inputs y such as text , semantic maps
+ or other image-to-image translation tasks .
+In the context of image synthesis, however, combining
+the generative power of DMs with other types of conditionings beyond class-labels or blurred variants of the input
+image is so far an under-explored area of research.
+We turn DMs into more ﬂexible conditional image generators by augmenting their underlying UNet backbone with
+the cross-attention mechanism , which is effective for
+learning attention-based models of various input modalities . To pre-process y from various modalities (such
+as language prompts) we introduce a domain speciﬁc encoder τθ that projects y to an intermediate representation
+τθ(y) ∈RM×dτ , which is then mapped to the intermediate
+layers of the UNet via a cross-attention layer implementing
+Attention(Q, K, V ) = softmax
+· V , with
+Q · ϕi(zt), K = W (i)
+K · τθ(y), V = W (i)
+Here, ϕi(zt) ∈RN×di
+ϵ denotes a (ﬂattened) intermediate
+representation of the UNet implementing ϵθ and W (i)
+LSUN-Churches
+Samples from LDMs trained on CelebAHQ , FFHQ , LSUN-Churches , LSUN-Bedrooms and classconditional ImageNet , each with a resolution of 256 × 256. Best viewed when zoomed in. For more samples cf. the supplement.
+Q ∈Rd×dτ & W (i)
+K ∈Rd×dτ are learnable projection matrices . See Fig. 3 for a visual depiction.
+Based on image-conditioning pairs, we then learn the
+conditional LDM via
+LLDM := EE(x),y,ϵ∼N(0,1),t
+∥ϵ−ϵθ(zt, t, τθ(y))∥2
+where both τθ and ϵθ are jointly optimized via Eq. 3. This
+conditioning mechanism is ﬂexible as τθ can be parameterized with domain-speciﬁc experts, e.g. (unmasked) transformers when y are text prompts (see Sec. 4.3.1)
+4. Experiments
+LDMs provide means to ﬂexible and computationally
+tractable diffusion based image synthesis of various image
+modalities, which we empirically show in the following.
+Firstly, however, we analyze the gains of our models compared to pixel-based diffusion models in both training and
+inference. Interestingly, we ﬁnd that LDMs trained in VQregularized latent spaces sometimes achieve better sample
+quality, even though the reconstruction capabilities of VQregularized ﬁrst stage models slightly fall behind those of
+their continuous counterparts, cf. Tab. 8. A visual comparison between the effects of ﬁrst stage regularization schemes
+on LDM training and their generalization abilities to resolutions > 2562 can be found in Appendix D.1. In E.2 we list
+details on architecture, implementation, training and evaluation for all results presented in this section.
+4.1. On Perceptual Compression Tradeoffs
+This section analyzes the behavior of our LDMs with different downsampling factors f ∈{1, 2, 4, 8, 16, 32} (abbreviated as LDM-f, where LDM-1 corresponds to pixel-based
+DMs). To obtain a comparable test-ﬁeld, we ﬁx the computational resources to a single NVIDIA A100 for all experiments in this section and train all models for the same
+number of steps and with the same number of parameters.
+Tab. 8 shows hyperparameters and reconstruction performance of the ﬁrst stage models used for the LDMs compared in this section. Fig. 6 shows sample quality as a function of training progress for 2M steps of class-conditional
+models on the ImageNet dataset. We see that, i) small
+downsampling factors for LDM-{1,2} result in slow training progress, whereas ii) overly large values of f cause stagnating ﬁdelity after comparably few training steps. Revisiting the analysis above (Fig. 1 and 2) we attribute this to
+i) leaving most of perceptual compression to the diffusion
+model and ii) too strong ﬁrst stage compression resulting
+in information loss and thus limiting the achievable quality. LDM-{4-16} strike a good balance between efﬁciency
+and perceptually faithful results, which manifests in a signiﬁcant FID gap of 38 between pixel-based diffusion
+(LDM-1) and LDM-8 after 2M training steps.
+In Fig. 7, we compare models trained on CelebA-
+HQ and ImageNet in terms sampling speed for different numbers of denoising steps with the DDIM sampler 
+and plot it against FID-scores .
+LDM-{4-8} outperform models with unsuitable ratios of perceptual and conceptual compression. Especially compared to pixel-based
+LDM-1, they achieve much lower FID scores while simultaneously signiﬁcantly increasing sample throughput. Complex datasets such as ImageNet require reduced compression rates to avoid reducing quality. In summary, LDM-4
+and -8 offer the best conditions for achieving high-quality
+synthesis results.
+4.2. Image Generation with Latent Diffusion
+We train unconditional models of 2562 images on
+LSUN-Churches
+-Bedrooms and evaluate the i) sample quality and ii)
+their coverage of the data manifold using ii) FID and
+ii) Precision-and-Recall . Tab. 1 summarizes our results. On CelebA-HQ, we report a new state-of-the-art FID
+of 5.11, outperforming previous likelihood-based models as
+well as GANs. We also outperform LSGM where a latent diffusion model is trained jointly together with the ﬁrst
+stage. In contrast, we train diffusion models in a ﬁxed space
+Text-to-Image Synthesis on LAION. 1.45B Model.
+’A street sign that reads
+“Latent Diffusion” ’
+’A zombie in the
+style of Picasso’
+’An image of an animal
+half mouse half octopus’
+’An illustration of a slightly
+conscious neural network’
+’A painting of a
+squirrel eating a burger’
+’A watercolor painting of a
+chair that looks like an octopus’
+’A shirt with the inscription:
+“I love generative models!” ’
+Samples for user-deﬁned text prompts from our model for text-to-image synthesis, LDM-8 (KL), which was trained on the
+LAION database. Samples generated with 200 DDIM steps and η = 1.0. We use unconditional guidance with s = 10.0.
+Figure 6. Analyzing the training of class-conditional LDMs with
+different downsampling factors f over 2M train steps on the ImageNet dataset. Pixel-based LDM-1 requires substantially larger
+train times compared to models with larger downsampling factors
+(LDM-{4-16}). Too much perceptual compression as in LDM-32
+limits the overall sample quality. All models are trained on a single NVIDIA A100 with the same computational budget. Results
+obtained with 100 DDIM steps and κ = 0.
+Comparing LDMs with varying compression on the
+CelebA-HQ (left) and ImageNet (right) datasets. Different markers indicate {10, 20, 50, 100, 200} sampling steps using DDIM,
+from right to left along each line. The dashed line shows the FID
+scores for 200 steps, indicating the strong performance of LDM-
+{4-8}. FID scores assessed on 5000 samples. All models were
+trained for 500k (CelebA) / 2M (ImageNet) steps on an A100.
+and avoid the difﬁculty of weighing reconstruction quality
+against learning the prior over the latent space, see Fig. 1-2.
+We outperform prior diffusion based approaches on all
+but the LSUN-Bedrooms dataset, where our score is close
+to ADM , despite utilizing half its parameters and requiring 4-times less train resources (see Appendix E.3.5).
+CelebA-HQ 256 × 256
+FFHQ 256 × 256
+DC-VAE 
+ImageBART 
+VQGAN+T. (k=400)
+U-Net GAN (+aug) 
+10.9 (7.6)
+PGGAN 
+StyleGAN 
+ProjectedGAN 
+LDM-4 (ours, 500-s†)
+LDM-4 (ours, 200-s)
+LSUN-Churches 256 × 256
+LSUN-Bedrooms 256 × 256
+ImageBART 
+ImageBART 
+PGGAN 
+StyleGAN 
+StyleGAN 
+StyleGAN2 
+ProjectedGAN 
+ProjectedGAN 
+LDM-8∗(ours, 200-s)
+LDM-4 (ours, 200-s)
+Evaluation metrics for unconditional image synthesis.
+CelebA-HQ results reproduced from , FFHQ from
+ . †: N-s refers to N sampling steps with the DDIM 
+sampler. ∗: trained in KL-regularized latent space. Additional results can be found in the supplementary.
+Text-Conditional Image Synthesis
+CogView† 
+self-ranking, rejection rate 0.017
+LAFITE† 
+GLIDE∗ 
+277 DDIM steps, c.f.g. s = 3
+Make-A-Scene∗ 
+c.f.g for AR models s = 5
+20.03±0.33
+250 DDIM steps
+LDM-KL-8-G∗
+30.29±0.42
+250 DDIM steps, c.f.g. s = 1.5
+Evaluation of text-conditional image synthesis on the
+256 × 256-sized MS-COCO dataset: with 250 DDIM 
+steps our model is on par with the most recent diffusion and
+autoregressive methods despite using signiﬁcantly less parameters. †/∗:Numbers from / 
+Moreover, LDMs consistently improve upon GAN-based
+methods in Precision and Recall, thus conﬁrming the advantages of their mode-covering likelihood-based training
+objective over adversarial approaches. In Fig. 4 we also
+show qualitative results on each dataset.
+Figure 8. Layout-to-image synthesis with an LDM on COCO ,
+see Sec. 4.3.1. Quantitative evaluation in the supplement D.3.
+4.3. Conditional Latent Diffusion
+Transformer Encoders for LDMs
+By introducing cross-attention based conditioning into
+LDMs we open them up for various conditioning modalities previously unexplored for diffusion models. For textto-image image modeling, we train a 1.45B parameter
+KL-regularized LDM conditioned on language prompts on
+LAION-400M . We employ the BERT-tokenizer 
+and implement τθ as a transformer to infer a latent
+code which is mapped into the UNet via (multi-head) crossattention (Sec. 3.3). This combination of domain speciﬁc
+experts for learning a language representation and visual
+synthesis results in a powerful model, which generalizes
+well to complex, user-deﬁned text prompts, cf. Fig. 8 and 5.
+For quantitative analysis, we follow prior work and evaluate
+text-to-image generation on the MS-COCO validation
+set, where our model improves upon powerful AR 
+and GAN-based methods, cf. Tab. 2. We note that applying classiﬁer-free diffusion guidance greatly boosts
+sample quality, such that the guided LDM-KL-8-G is on par
+with the recent state-of-the-art AR and diffusion models for text-to-image synthesis, while substantially reducing parameter count. To further analyze the ﬂexibility of
+the cross-attention based conditioning mechanism we also
+train models to synthesize images based on semantic layouts on OpenImages , and ﬁnetune on COCO , see
+Fig. 8. See Sec. D.3 for the quantitative evaluation and implementation details.
+Lastly, following prior work , we evaluate our best-performing class-conditional ImageNet models with f ∈{4, 8} from Sec. 4.1 in Tab. 3, Fig. 4 and
+Sec. D.4. Here we outperform the state of the art diffusion model ADM while signiﬁcantly reducing computational requirements and parameter count, cf. Tab 18.
+Convolutional Sampling Beyond 2562
+By concatenating spatially aligned conditioning information to the input of ϵθ, LDMs can serve as efﬁcient general-
+Precision↑
+BigGan-deep 
+250 DDIM steps
+ADM-G 
+250 DDIM steps
+LDM-4 (ours)
+103.49±1.24
+250 DDIM steps
+LDM-4-G (ours)
+247.67±5.59
+250 steps, c.f.g , s = 1.5
+Table 3. Comparison of a class-conditional ImageNet LDM with
+recent state-of-the-art methods for class-conditional image generation on ImageNet . A more detailed comparison with additional baselines can be found in D.4, Tab. 10 and F. c.f.g. denotes
+classiﬁer-free guidance with a scale s as proposed in .
+purpose image-to-image translation models. We use this
+to train models for semantic synthesis, super-resolution
+(Sec. 4.4) and inpainting (Sec. 4.5). For semantic synthesis, we use images of landscapes paired with semantic maps
+ and concatenate downsampled versions of the semantic maps with the latent image representation of a f = 4
+model (VQ-reg., see Tab. 8). We train on an input resolution
+of 2562 (crops from 3842) but ﬁnd that our model generalizes to larger resolutions and can generate images up to the
+megapixel regime when evaluated in a convolutional manner (see Fig. 9). We exploit this behavior to also apply the
+super-resolution models in Sec. 4.4 and the inpainting models in Sec. 4.5 to generate large images between 5122 and
+10242. For this application, the signal-to-noise ratio (induced by the scale of the latent space) signiﬁcantly affects
+the results. In Sec. D.1 we illustrate this when learning an
+LDM on (i) the latent space as provided by a f = 4 model
+(KL-reg., see Tab. 8), and (ii) a rescaled version, scaled by
+the component-wise standard deviation.
+The latter, in combination with classiﬁer-free guidance , also enables the direct synthesis of > 2562 images for the text-conditional LDM-KL-8-G as in Fig. 13.
+A LDM trained on 2562 resolution can generalize to
+larger resolution (here: 512×1024) for spatially conditioned tasks
+such as semantic synthesis of landscape images. See Sec. 4.3.2.
+4.4. Super-Resolution with Latent Diffusion
+LDMs can be efﬁciently trained for super-resolution by
+diretly conditioning on low-resolution images via concatenation (cf. Sec. 3.3). In a ﬁrst experiment, we follow SR3
+Figure 10. ImageNet 64→256 super-resolution on ImageNet-Val.
+LDM-SR has advantages at rendering realistic textures but SR3
+can synthesize more coherent ﬁne structures. See appendix for
+additional samples and cropouts. SR3 results from .
+ and ﬁx the image degradation to a bicubic interpolation with 4×-downsampling and train on ImageNet following SR3’s data processing pipeline. We use the f = 4 autoencoding model pretrained on OpenImages (VQ-reg., cf.
+Tab. 8) and concatenate the low-resolution conditioning y
+and the inputs to the UNet, i.e. τθ is the identity. Our qualitative and quantitative results (see Fig. 10 and Tab. 5) show
+competitive performance and LDM-SR outperforms SR3
+in FID while SR3 has a better IS. A simple image regression model achieves the highest PSNR and SSIM scores;
+however these metrics do not align well with human perception and favor blurriness over imperfectly aligned
+high frequency details .
+Further, we conduct a user
+study comparing the pixel-baseline with LDM-SR. We follow SR3 where human subjects were shown a low-res
+image in between two high-res images and asked for preference. The results in Tab. 4 afﬁrm the good performance
+of LDM-SR. PSNR and SSIM can be pushed by using a
+post-hoc guiding mechanism and we implement this
+image-based guider via a perceptual loss, see Sec. D.6.
+SR on ImageNet
+Inpainting on Places
+User Study
+Pixel-DM (f1)
+Task 1: Preference vs GT ↑
+Task 2: Preference Score ↑
+Table 4. Task 1: Subjects were shown ground truth and generated
+image and asked for preference. Task 2: Subjects had to decide
+between two generated images. More details in E.3.6
+Since the bicubic degradation process does not generalize
+well to images which do not follow this pre-processing, we
+also train a generic model, LDM-BSR, by using more diverse degradation. The results are shown in Sec. D.6.1.
+Image Regression 
+LDM-4 (ours, 100 steps)
+emphLDM-4 (ours, big, 100 steps)
+LDM-4 (ours, 50 steps, guiding)
+Table 5. ×4 upscaling results on ImageNet-Val. (2562); †: FID
+features computed on validation split, ‡: FID features computed
+on train split; ∗: Assessed on a NVIDIA A100
+train throughput
+sampling throughput†
+Model (reg.-type)
+samples/sec.
+hours/epoch
+LDM-1 (no ﬁrst stage)
+LDM-4 (KL, w/ attn)
+LDM-4 (VQ, w/ attn)
+LDM-4 (VQ, w/o attn)
+Table 6. Assessing inpainting efﬁciency. †: Deviations from Fig. 7
+due to varying GPU settings/batch sizes cf. the supplement.
+4.5. Inpainting with Latent Diffusion
+Inpainting is the task of ﬁlling masked regions of an image with new content either because parts of the image are
+are corrupted or to replace existing but undesired content
+within the image. We evaluate how our general approach
+for conditional image generation compares to more specialized, state-of-the-art approaches for this task. Our evaluation follows the protocol of LaMa , a recent inpainting
+model that introduces a specialized architecture relying on
+Fast Fourier Convolutions . The exact training & evaluation protocol on Places is described in Sec. E.2.2.
+We ﬁrst analyze the effect of different design choices for
+the ﬁrst stage. In particular, we compare the inpainting ef-
+ﬁciency of LDM-1 (i.e. a pixel-based conditional DM) with
+LDM-4, for both KL and VQ regularizations, as well as VQ-
+LDM-4 without any attention in the ﬁrst stage (see Tab. 8),
+where the latter reduces GPU memory for decoding at high
+resolutions. For comparability, we ﬁx the number of parameters for all models. Tab. 6 reports the training and sampling
+throughput at resolution 2562 and 5122, the total training
+time in hours per epoch and the FID score on the validation
+split after six epochs. Overall, we observe a speed-up of at
+least 2.7× between pixel- and latent-based diffusion models
+while improving FID scores by a factor of at least 1.6×.
+The comparison with other inpainting approaches in
+Tab. 7 shows that our model with attention improves the
+overall image quality as measured by FID over that of .
+LPIPS between the unmasked images and our samples is
+slightly higher than that of . We attribute this to 
+only producing a single result which tends to recover more
+of an average image compared to the diverse results produced by our LDM cf. Fig. 21. Additionally in a user study
+(Tab. 4) human subjects favor our results over those of .
+Based on these initial results, we also trained a larger diffusion model (big in Tab. 7) in the latent space of the VQregularized ﬁrst stage without attention. Following ,
+the UNet of this diffusion model uses attention layers on
+three levels of its feature hierarchy, the BigGAN residual
+block for up- and downsampling and has 387M parameters
+Figure 11. Qualitative results on object removal with our big, w/
+ft inpainting model. For more results, see Fig. 22.
+instead of 215M. After training, we noticed a discrepancy
+in the quality of samples produced at resolutions 2562 and
+5122, which we hypothesize to be caused by the additional
+attention modules. However, ﬁne-tuning the model for half
+an epoch at resolution 5122 allows the model to adjust to
+the new feature statistics and sets a new state of the art FID
+on image inpainting (big, w/o attn, w/ ft in Tab. 7, Fig. 11.).
+5. Limitations & Societal Impact
+Limitations
+While LDMs signiﬁcantly reduce computational requirements compared to pixel-based approaches,
+their sequential sampling process is still slower than that
+of GANs. Moreover, the use of LDMs can be questionable when high precision is required: although the loss of
+image quality is very small in our f = 4 autoencoding models (see Fig. 1), their reconstruction capability can become
+a bottleneck for tasks that require ﬁne-grained accuracy in
+pixel space. We assume that our superresolution models
+(Sec. 4.4) are already somewhat limited in this respect.
+Societal Impact
+Generative models for media like imagery are a double-edged sword: On the one hand, they
+40-50% masked
+All samples
+LDM-4 (ours, big, w/ ft)
+0.246± 0.042
+0.137± 0.080
+LDM-4 (ours, big, w/o ft)
+0.257± 0.047
+0.142± 0.085
+LDM-4 (ours, w/ attn)
+0.257± 0.042
+0.144± 0.084
+LDM-4 (ours, w/o attn)
+0.259± 0.041
+0.145± 0.084
+LaMa †
+0.243± 0.038
+0.134± 0.080
+CoModGAN 
+RegionWise 
+DeepFill v2 
+EdgeConnect 
+Table 7. Comparison of inpainting performance on 30k crops of
+size 512 × 512 from test images of Places . The column 40-
+50% reports metrics computed over hard examples where 40-50%
+of the image region have to be inpainted. †recomputed on our test
+set, since the original test set used in was not available.
+enable various creative applications, and in particular approaches like ours that reduce the cost of training and inference have the potential to facilitate access to this technology and democratize its exploration. On the other hand,
+it also means that it becomes easier to create and disseminate manipulated data or spread misinformation and spam.
+In particular, the deliberate manipulation of images (“deep
+fakes”) is a common problem in this context, and women in
+particular are disproportionately affected by it .
+Generative models can also reveal their training data
+ , which is of great concern when the data contain
+sensitive or personal information and were collected without explicit consent. However, the extent to which this also
+applies to DMs of images is not yet fully understood.
+Finally, deep learning modules tend to reproduce or exacerbate biases that are already present in the data . While diffusion models achieve better coverage of the
+data distribution than e.g. GAN-based approaches, the extent to which our two-stage approach that combines adversarial training and a likelihood-based objective misrepresents the data remains an important research question.
+For a more general, detailed discussion of the ethical
+considerations of deep generative models, see e.g. .
+6. Conclusion
+We have presented latent diffusion models, a simple and
+efﬁcient way to signiﬁcantly improve both the training and
+sampling efﬁciency of denoising diffusion models without degrading their quality. Based on this and our crossattention conditioning mechanism, our experiments could
+demonstrate favorable results compared to state-of-the-art
+methods across a wide range of conditional image synthesis
+tasks without task-speciﬁc architectures.
+This work has been supported by the German Federal Ministry for
+Economic Affairs and Energy within the project ’KI-Absicherung - Safe
+AI for automated driving’ and by the German Research Foundation (DFG)
+project 421703927.

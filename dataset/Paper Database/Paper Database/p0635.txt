@@ -1,0 +1,194 @@
+Q8BERT: Quantized 8Bit BERT
+Oﬁr Zafrir
+Guy Boudoukh
+Peter Izsak
+Moshe Wasserblat
+Intel AI Lab
+{ofir.zafrir, guy.boudoukh, peter.izsak, moshe.wasserblat}@intel.com
+Recently, pre-trained Transformer based language models such as BERT 
+and GPT , have shown great improvement in many Natural Language Processing (NLP) tasks. However, these models contain a large amount of parameters.
+The emergence of even larger and more accurate models such as GPT2 and
+Megatron1, suggest a trend of large pre-trained Transformer models. However,
+using these large models in production environments is a complex task requiring
+a large amount of compute, memory and power resources. In this work we show
+how to perform quantization-aware training during the ﬁne-tuning phase of BERT
+in order to compress BERT by 4× with minimal accuracy loss. Furthermore, the
+produced quantized model can accelerate inference speed if it is optimized for 8bit
+Integer supporting hardware.
+Introduction
+Pre-trained transformer language models (GPT , XLNet , XLM , BERT ) have demonstrated State-of-the-Art (SOTA) results for a variety of NLP tasks such as sentence classiﬁcation,
+sequence tagging and question answering, by extracting contextual word representations or by ﬁnetuning the whole model on a target task. The models are pre-trained on extremely large corpora and
+result in a large number of parameters. For example, Devlin et al. introduced two pre-trained
+models: BERT-Base, which has 110M parameters in 32bit Floating Point (FP32) representation, and
+BERT-Large, which has 334M parameters in FP32 representation. Both BERT models have a high
+memory footprint and require heavy compute and wide bandwidth during inference. In addition,
+real time NLP applications that integrate BERT have to meet low latency requirements to achieve
+a high quality customer experience, therefore, the computational characteristics of BERT pose a
+challenge to deployment in production environments. These models will have a major impact on the
+way business organizations consume computing resources, since computing resources will have to
+handle loading of large models and heavy feed-forward calculations, shifting workload focus from
+lower level training to more application-speciﬁc ﬁne-tuning and inference. Therefore, it is crucial to
+develop energy-efﬁcient and minimum-cost methods to run these models in production .
+Model compression algorithms are used to reduce compute and memory resources required for running inference. For example, Han et al. used a pipeline of pruning, quantization and Huffman encoding in order to achieve a compression ratio of 49× of VGG-16 . As a result, the compressed
+VGG-16 can be ﬁtted into an on-chip SRAM cache which allows faster access times with less power
+in comparison to off-chip DRAM memory. In another example, Jacob et al. introduced a method
+of training linear quantized Convolutional Neural Networks (CNN) that uses Integer Arithmetic instead of Floating Point Arithmetic which can be up to 4× faster using only 25% of the memory
+footprint .
+In this work, we present a method for achieving best-in-class compression-accuracy ratio for BERT.
+To do this, we apply quantization-aware training during the ﬁne-tuning process of BERT. We quan-
+1 
+33rd Conference on Neural Information Processing Systems , Vancouver, Canada.
+tize all GEMM (General Matrix Multiply) operations in BERT Fully Connected (FC) and Embedding layers. We simulate 8bit quantized inference while maintaining 99% accuracy in comparison
+to the FP32 version of BERT for eight different NLP tasks. Moreover, since we quantize all the FC
+and Embedding layers’ weights - which comprise over 99% of the model’s weights - to 8bit, we
+achieve a memory footprint 4× smaller than the original BERT. In addition, it is possible to use
+our method to implement efﬁcient inference with hardware that supports 8bit arithmetic and an optimized library for 8bit GEMM. We have released our work as part of our open source model library
+NLP Architect2.
+The method presented in this paper is not exclusive to BERT model and can be integrated into other
+large pre-trained Transformer based models.
+In this section, we describe the quantization scheme, linear quantization, and quantization-aware
+training method we used. We chose to use this quantization scheme because, in addition to reducing
+the model size by approximately 4×, it is also possible to accelerate inference time by using Integer
+arithmetic to calculate GEMM using specialized hardware for Integer and Fixed Point calculations.
+For example, Bhandare et al. stated that using Intel R
+⃝Xeon R⃝Cascade Lake’s Vectorized Neural
+Network Instructions (VNNI) to perform Int8 matrix multiplication provides a speed-up of 3.7×
+over FP32 matrix multiplication. Moreover, by using symmetric linear quantization we simplify
+the quantization process and zero out terms related to the offset part of the quantized values. Our
+method is based on the method proposed by Jacob et al. .
+Quantization Scheme
+We use symmetric linear quantization as our quantization scheme for quantizing both weights and
+activations to 8bit Integers (Int8):
+Quantize(x|Sx, M) := Clamp (⌊x × Sx⌉, −M, M) ,
+Clamp (x, a, b) = min (max (x, a), b)
+where Sx is the quantization scaling-factor for input x and M is the highest quantized value when
+quantizing to b number of bits:
+M = 2b−1 −1
+E.g. when quantizing to 8 bits, M = 127. The scaling-factor can be determined either dynamically
+during inference, or calculated using statistics collected during training, or calculated using statistics
+collected, post-training, during inference on a calibration set. In our work the weights’ scaling-factor
+is calculated according to:
+and the activations’ scaling-factor is calculated based on values seen during training using an Exponential Moving Average (EMA):
+EMA (max (|x|))
+Quantized-Aware Training
+Quantization-aware training is a method of training Neural Networks (NN) to be quantized at the
+inference stage, as opposed to post-training quantization where the training is executed without
+any adaptation to the quantization process. In our work, we use fake quantization to introduce the
+quantization error to the model during the training phase in order for the model to learn to bridge
+the quantization error gap. Fake quantization is an operation that simulates the rounding effect in
+Floating Point values as presented by Jacob et al. . Since the rounding operation is not derivable,
+we use the Straight-Through Estimator (STE) to estimate the gradient of fake quantization:
+2 
+Table 1: GLUE tasks and SQuAD results. Each score is evaluated on the publicly available development set for the task using the metric speciﬁed for each task. For each task we present the score of a
+baseline (FP32) model, of a Quantization-Aware Training (QAT) model quantized to 8bit, and of a
+Dynamically Quantized (DQ) to 8bit model. Large means those tasks were trained with BERT-Large
+architecture.
+BERT baseline
+accuracy (STD)
+8bit (STD)
+8bit (STD)
+Matthew’s corr.
+58.48 (1.54)
+58.48 (1.32)
+56.74 (0.61)
+89.56 (0.18)
+87.88 (2.03)
+MRPC-Large
+90.86 (0.55)
+90.9 (0.29)
+88.18 (2.19)
+90.3 (0.44)
+90.62 (0.29)
+89.34 (0.61)
+QNLI-Large
+91.66 (0.15)
+91.74 (0.36)
+88.38 (2.22)
+87.84 (0.19)
+87.96 (0.35)
+84.98 (0.97)
+69.7 (1.5)
+68.78 (3.52)
+63.32 (4.58)
+92.36 (0.59)
+92.24 (0.27)
+91.04 (0.43)
+Pearson corr.
+89.62 (0.31)
+89.04 (0.17)
+87.66 (0.41)
+STS-B-Large
+Pearson corr.
+90.34 (0.21)
+90.12 (0.13)
+83.04 (5.71)
+88.46 (0.15)
+87.74 (0.15)
+80.02 (2.38)
+where xq denotes the result of fake quantizing x. Using the combination of fake quantization and
+STE we are able to perform quantized inference during training while back-propagating at full precision which allows the FP32 weights to overcome the quantization error.
+Implementation
+Our goal is to quantize all the Embedding and FC layers in BERT to Int8 using the method described
+in Section 2. For this purpose we implemented quantized versions of Embedding and FC layers.
+During training, the Embedding layer returns fake quantized embedding vectors, and the quantized
+FC performs GEMM between the fake quantized input and the fake quantized weight, and then
+accumulates the products to the bias which is untouched since the bias will be later quantized to
+Int32. During inference, the quantized Embedding layer returns Int8 embedding vectors, and the
+quantized FC performs GEMM between Int8 inputs accumulated to the Int32 bias which is quantized
+using the weights’ and activations’ scaling-factors as described in . Although the bias vectors are
+quantized to Int32 values, they only make up for a fraction of the amount of parameters in the model.
+Our implementation of Quantized BERT is based on the BERT implementation provided by the
+PyTorch-Transformers3 library. To implement quantized BERT we replaced all the Embedding
+and FC layers in BERT to the quantized Embedding and FC layers we had implemented. Operations
+that require higher precision, such as Softmax, Layer Normalization and GELU, are kept in FP32.
+Evaluation
+To test our approach we evaluated our model on the GLUE (General Language Understanding Evaluation) benchmark , which is a collection of resources for training, evaluating, and analyzing
+natural language understanding systems in a wide array of NLP tasks. The ultimate goal of GLUE is
+to drive research in the development of general and robust natural language understanding systems.
+In addition, we evaluated our model on the question and answering task SQuADv1.1 . The
+Stanford Question Answering Dataset (SQuAD) is a reading comprehension dataset, consisting of
+questions posed by crowd workers on a set of Wikipedia articles, where the answer to every question
+is a segment of text, or span, from the corresponding reading passage.
+We summarized our results for quantized BERT in the QAT column in Table 1. We ran each experiment ﬁve times and reported the average result and standard deviation. In addition, we calculated
+the relative error induced by the quantization process and summarized the results in Table 2. In all
+experiments we used BERT-Base as the base model unless indicated otherwise. In all experiments
+3 
+Table 2: Reduction in accuracy induced by quantization relative to baseline model. DQ is the
+Dynamically Quantized model and QAT is the Quantization-aware Trained quantized model. Large
+means those tasks were trained with BERT-Large architecture.
+MRPC-Large
+QNLI-Large
+STS-B-Large
+we ﬁne-tuned the pre-trained models offered by Tensorﬂow-Hub4. In our internal testing, we found
+that the relative error induced by quantization is less than 1% (excluding RTE task) while the space
+capacity of the model is reduced by 4x.
+Effect of Quantization-Aware Training
+In order to measure the necessity of quantization-aware training we compared our results to posttraining quantized models. We quantized our baseline models using Dynamic Quantization (DQ).
+The weights and activations are quantized as described in Section 2.1 with a small difference in the
+way we calculate the quantization scaling-factor of the activations. Instead of using Equation 4 we
+compute the scale the same way we compute the weights’ scaling-factor using Equation 3. This
+calculation is done during inference for each incoming activation tensor. The results for this quantization method are summarized in the DQ column in Table 1 and the relative error induced by
+quantization is also summarized in Table 2. We observe that the DQ method produces signiﬁcantly
+worse results over all tasks.
+Related Work
+Compressing Transformer-based models for efﬁcient inference is an active ﬁeld of research. Junczys-
+Dowmunt et al. applied knowledge distillation and 8bit post-training quantization to speed up
+Transformer models for neural machine translation (Transformer-LT) , however, the quantized
+model suffered a loss of 1 BLEU score in comparison to the baseline model. Bhandare et al. 
+also applied 8bit post-training quantization to Transformer-LT models and demonstrated how to
+utilize Intel R⃝specialized 8bit hardware to accelerate the inference process. Habana Labs5 published
+Quantized BERT performance measurements on its in-house accelerator for NN inference, however,
+Habana quantized BERT to 16bit Integer which offers a much wider quantization range and only
+2× compression. NVIDIA6 also measured BERT performance on its in-house accelerator using
+16bit Floating Point arithmetic. Furthermore, NVIDIA implemented a number of optimized kernels
+for BERT’s operations in order to save memory bandwidth during inference. Sucik ﬁne-tuned
+BERT on a custom dataset and performed 8bit Integer post-training quantization.
+Conclusions and Future Work
+We have shown a method for quantizing BERT GEMM operations to 8bit for a variety of NLP
+tasks with minimum loss in accuracy, and hope that the software developers community can use our
+quantization method to compress BERT and implement efﬁcient BERT inference with 8bit GEMM
+operations. Efﬁcient inference will enable low-latency NLP applications on a variety of hardware
+platforms from edge devices to data centers. In the future we intend to apply other model compression methods in order to compress BERT. Decreasing BERT’s memory footprint will accelerate
+BERT inference time and reduce power consumption, both of which are critical for deploying BERT
+in production environments having low memory and power resources. Furthermore, we intend to
+integrate other compression methods with our quantized BERT model.

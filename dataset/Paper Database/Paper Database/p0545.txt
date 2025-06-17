@@ -1,0 +1,938 @@
+Authors’ address: Andrea Esuli, Istituto di Scienza e Tecnologie dell’Informazione, Consiglio Nazionale delle
+Ricerche, Via Giuseppe Moruzzi 1, 56124 Pisa, Italy. E-mail: . Fabrizio Sebastiani,
+Qatar Computing Research Institute, PO Box 5825, Doha, Qatar. E-mail: . Fabrizio
+Sebastiani is on leave from Consiglio Nazionale delle Ricerche. The order in which the authors are listed is
+purely alphabetical; each author has given an equally important contribution to this work.
+Permission to make digital or hard copies of part or all of this work for personal or classroom use is granted
+without fee provided that copies are not made or distributed for proﬁt or commercial advantage and that
+copies show this notice on the ﬁrst page or initial screen of a display along with the full citation. Copyrights
+for components of this work owned by others than ACM must be honored. Abstracting with credit is permitted. To copy otherwise, to republish, to post on servers, to redistribute to lists, or to use any component
+of this work in other works requires prior speciﬁc permission and/or a fee. Permissions may be requested
+from Publications Dept., ACM, Inc., 2 Penn Plaza, Suite 701, New York, NY 10121-0701 USA, fax +1 (212)
+869-0481, or .
+c⃝YYYY ACM 1556-4681/YYYY/-ARTAA $15.00
+DOI: 
+ACM Transactions on Knowledge Discovery from Data, Vol. VV, No. NN, Article AA, Publication date: YYYY.
+ 
+Optimizing Text Quantiﬁers for Multivariate Loss Functions
+ANDREA ESULI, Consiglio Nazionale delle Ricerche
+FABRIZIO SEBASTIANI, Qatar Computing Research Institute
+We address the problem of quantiﬁcation, a supervised learning task whose goal is, given a class, to estimate the relative frequency (or prevalence) of the class in a dataset of unlabelled items. Quantiﬁcation has
+several applications in data and text mining, such as estimating the prevalence of positive reviews in a set of
+reviews of a given product, or estimating the prevalence of a given support issue in a dataset of transcripts
+of phone calls to tech support. So far, quantiﬁcation has been addressed by learning a general-purpose classiﬁer, counting the unlabelled items which have been assigned the class, and tuning the obtained counts
+according to some heuristics. In this paper we depart from the tradition of using general-purpose classiﬁers,
+and use instead a supervised learning model for structured prediction, capable of generating classiﬁers directly optimized for the (multivariate and non-linear) function used for evaluating quantiﬁcation accuracy.
+The experiments that we have run on 5500 binary high-dimensional datasets (averaging more than 14,000
+documents each) show that this method is more accurate, more stable, and more efﬁcient than existing,
+state-of-the-art quantiﬁcation methods.
+Categories and Subject Descriptors: I.5.2 [Pattern Recognition]: Design Methodology—Classiﬁer design
+and evaluation; H.3.3 [Information Storage and Retrieval]: Information Search and Retrieval—Information ﬁltering; Search process; I.2.7 [Artiﬁcial Intelligence]: Natural Language Processing—Text analysis
+General Terms: Algorithm, Design, Experimentation, Measurements
+Additional Key Words and Phrases: Quantiﬁcation, Prevalence estimation, Prior estimation, Supervised
+learning, Text classiﬁcation, Loss functions, Kullback-Leibler divergence
+ACM Reference Format:
+Andrea Esuli and Fabrizio Sebastiani, YYYY. Optimizing Text Quantiﬁers for Multivariate Loss Functions.
+ACM Trans. Knowl. Discov. Data. VV, NN, Article AA ( YYYY), 26 pages.
+DOI: 
+1. INTRODUCTION
+In recent years it has been pointed out that, in a number of applications involving
+classiﬁcation, the ﬁnal goal is not determining which class (or classes) individual unlabelled data items belong to, but determining the prevalence (or “relative frequency”) of
+each class in the unlabelled data. The latter task is known as quantiﬁcation [Forman
+2005; 2006a; 2008; Forman et al. 2006].
+Although what we are going to discuss here applies to any type of data, we are mostly
+interested in text quantiﬁcation, i.e., quantiﬁcation when the data items are textual
+documents. To see the importance of text quantiﬁcation, let us examine the task of
+classifying textual answers returned to open-ended questions in questionnaires [Esuli
+and Sebastiani 2010a; Gamon 2004; Giorgetti and Sebastiani 2003], and let us discuss
+two important such scenarios.
+In the ﬁrst scenario, a telecommunications company asks its current customers the
+question “How satisﬁed are you with our mobile phone services?”, and wants to classify the resulting textual answers according to whether they belong to the class May-
+DefectToCompetition. The company is likely interested in accurately classifying each
+individual customer, since it may want to call each customer that is assigned the class
+and offer her improved conditions.
+In the second scenario, a market research agency asks respondents the question
+“What do you think of the recent ad campaign for product X?”, and wants to classify
+the resulting textual answers according to whether they belong to the class LovedThe-
+Campaign. Here, the agency is likely not interested in whether a speciﬁc individual
+ACM Transactions on Knowledge Discovery from Data, Vol. VV, No. NN, Article AA, Publication date: YYYY.
+Optimizing Text Quantiﬁers for Multivariate Loss Functions
+belongs to the class LovedTheCampaign, but is likely interested in knowing how many
+respondents belong to it, i.e., in knowing the prevalence of the class.
+In sum, while in the ﬁrst scenario classiﬁcation is the goal, in the second scenario the
+real goal is quantiﬁcation, i.e., evaluating the results of classiﬁcation at the aggregate
+level rather than at the individual level. Other scenarios in which quantiﬁcation is
+the goal may be, e.g., predicting election results by estimating the prevalence of blog
+posts (or tweets) supporting a given candidate or party [Hopkins and King 2010], or
+planning the amount of human resources to allocate to different types of issues in a
+customer support center by estimating the prevalence of customer calls related to a
+given issue [Forman 2005], or supporting epidemiological research by estimating the
+prevalence of medical reports in which a speciﬁc pathology is diagnosed [Baccianella
+et al. 2013].
+The obvious method for dealing with the latter type of scenarios is aggregative quantiﬁcation, i.e., classifying each unlabelled document and estimating class prevalence by
+counting the documents that have been attributed the class. However, there are two
+reasons why this strategy is suboptimal. The ﬁrst reason is that a good classiﬁer may
+not be a good quantiﬁer, and vice versa. To see this, one only needs to look at the
+deﬁnition of F1, the standard evaluation function for binary classiﬁcation, deﬁned as
+2 · TP + FP + FN
+where TP, FP and FN indicate the numbers of true positives, false positives, and false
+negatives, respectively. According to F1, a binary classiﬁer ˆΦ1 for which FP = 20 and
+FN = 20 is worse than a classiﬁer ˆΦ2 for which, on the same test set, FP = 0 and
+FN = 10. However, ˆΦ1 is intuitively a better binary quantiﬁer than ˆΦ2; indeed, ˆΦ1 is
+a perfect quantiﬁer, since FP and FN are equal and thus compensate each other, so
+that the distribution of the test items across the class and its complement is estimated
+perfectly.
+A second reason is that standard supervised learning algorithms are based on the
+assumption that the training set is drawn from the same distribution as the unlabelled
+data the classiﬁer is supposed to classify. But in real-world settings this assumption is
+often violated, a phenomenon usually referred to as concept drift [Sammut and Harries
+2011]. For instance, in a backlog of newswire stories from year 2001, the prevalence of
+class Terrorism in August data will likely not be the same as in September data; training on August data and testing on September data might well yield low quantiﬁcation
+accuracy. Violations of this assumption may occur “for reasons ranging from the bias
+introduced by experimental design, to the irreproducibility of the testing conditions
+at training time” [Qui˜nonero-Candela et al. 2009]. Concept drift usually comes in one
+of three forms [Kelly et al. 1999]: (a) the class priors p(ci) may change, i.e., the one
+in the test set may signiﬁcantly differ from the one in the training set; (b) the classconditional distributions p(x|ci) may change; (c) the posterior distribution p(ci|x) may
+change. It is the ﬁrst of these three cases that poses a problem for quantiﬁcation.
+The previous arguments indicate that text quantiﬁcation should not be considered
+a mere byproduct of text classiﬁcation, and should be studied as a task of its own.
+To date, proposed methods explicitly addressed to quantiﬁcation employ general-purpose supervised learning methods, i.e., address
+quantiﬁcation by elaborating on the results returned by a general-purpose standard
+classiﬁer. In this paper we take a sharply different, structured prediction approach,
+based upon the use of classiﬁers explicitly optimized for the non-linear, multivariate
+ACM Transactions on Knowledge Discovery from Data, Vol. VV, No. NN, Article AA, Publication date: YYYY.
+Andrea Esuli and Fabrizio Sebastiani
+evaluation function that we will use for assessing quantiﬁcation accuracy. This idea
+was ﬁrst proposed, but not implemented, in [Esuli and Sebastiani 2010b].
+The rest of the paper is organized as follows. In Section 2, after setting the stage we
+describe the evaluation function we will adopt (§2.1) and sketch a number of quantiﬁcation methods previously proposed in the literature (§2.2). In Section 3 we introduce
+our novel method based on explicitly minimizing, via a structured prediction model,
+the evaluation measure we have chosen. Section 4 presents experiments in which we
+test the method we propose on two large batches of binary, high-dimensional, publicly
+available datasets (the two batches consist of 5148 and 352 datasets, respectively), using all the methods introduced in §2.2 as baselines. Section 5 discusses related work,
+while Section 6 concludes.
+2. PRELIMINARIES
+In this paper we will focus on quantiﬁcation at the binary level. That is, given a domain
+of documents D and a class c, we assume the existence of an unknown target function
+(or ground truth) Φ : D →{−1, +1} that speciﬁes which members of D belong to c; as
+usual, +1 and −1 represent membership and non-membership in c, respectively. The
+approaches we will focus on are based on aggregative quantiﬁcation, i.e., they rely on
+the generation of a classiﬁer ˆΦ : D →{−1, +1} via supervised learning from a training
+set Tr. We will indicated with Te the test set on which quantiﬁcation effectiveness is
+going to be tested.
+We deﬁne the prevalence (or relative frequency) λT e(c) of class c in a set of documents
+Te as the fraction of members of Te that belong to c, i.e., as
+λT e(c) = |{dj ∈Te|Φ(dj) = +1}|
+Given a set Te of unlabelled documents and a class c, quantiﬁcation is deﬁned as
+the task of estimating λT e(c), i.e., of computing an estimate ˆλT e(c) such that λT e(c)
+and ˆλT e(c) are as close as possible1. What “as close as possible” exactly means will be
+formalized by an appropriate evaluation measure (see §2.1).
+The reasons why we focus on binary quantiﬁcation are two-fold:
+— Many quantiﬁcation problems are binary in nature. For instance, estimating the
+prevalence of positive and negative reviews in a dataset of reviews of a given product is such a task. Another such task is estimating from blog posts the prevalence of
+support for either of two candidates in the second round of a two-round (“run-off”)
+— A multi-class multi-label problem (also known as an n-of-m problem, i.e., a problem
+where zero, one, or several among m classes can be attributed to the same document) can be reduced to m independent binary problems of type (cj vs. cj), where
+C = {c1, ..., cj, ..., cm} is the set of classes and where cj denotes the complement of cj.
+Binary quantiﬁcation methods can thus also be applied to solving quantiﬁcation in
+multi-class multi-label contexts.
+We instead leave the discussion of quantiﬁcation in single-label multi-class (i.e., 1-ofm) contexts to future work.
+2.1. Evaluation measures for quantiﬁcation
+Different measures have been used in the literature for measuring binary quantiﬁcation accuracy.
+1Consistently with most mathematical literature we use the caret symbol (ˆ) to indicate estimation.
+ACM Transactions on Knowledge Discovery from Data, Vol. VV, No. NN, Article AA, Publication date: YYYY.
+Optimizing Text Quantiﬁers for Multivariate Loss Functions
+The simplest such measure is bias (B), deﬁned as B(λT e, ˆλT e) = ˆλT e(c) −λT e(c) and
+used in [Forman 2005; 2006a; Tang et al. 2010]; positive bias indicates a tendency to
+overestimate the prevalence of c, while negative bias indicates a tendency to underestimate it.
+Absolute Error , de-
+ﬁned as AE(λT e, ˆλT e) = |ˆλT e(c) −λT e(c)|, is an alternative, equally simplistic measure
+that accounts for the fact that positive and negative bias are (in the absence of speciﬁc
+application-dependent constraints) equally undesirable.
+Relative absolute error (RAE), deﬁned as
+RAE(λT e, ˆλT e) = |ˆλT e(c) −λT e(c)|
+is a reﬁnement of AE meant to account for the fact that the same value of absolute
+error is a more serious mistake when the true class prevalence is small. For instance,
+predicting ˆλT e(c) = 0.10 when λT e(c) = 0.01 and predicting ˆλT e(c) = 0.50 when λT e(c) =
+0.41 are equivalent errors according to B and AE, but the former is intuitively a more
+serious error than the latter.
+The most convincing among the evaluation measures proposed so far is certainly
+Forman’s , who uses normalized cross-entropy, better known as Kullback-Leibler
+Divergence . KLD, deﬁned as
+KLD(λT e, ˆλT e) =
+λT e(c) log λT e(c)
+and also used in [Esuli and Sebastiani 2010b; Forman 2006a; 2008; Tang et al. 2010],
+is a measure of the error made in estimating a true distribution λT e over a set C of
+classes by means of a distribution ˆλT e; this means that KLD is in principle suitable
+for evaluating quantiﬁcation, since quantifying exactly means predicting how the test
+items are distributed across the classes. KLD ranges between 0 (perfect coincidence of
+λT e and ˆλT e) and +∞(total divergence of λT e and ˆλT e). In the binary case in which
+C = {c, c}, KLD becomes
+KLD(λT e, ˆλT e) = λT e(c) log λT e(c)
++ λT e(c) log λT e(c)
+Continuity arguments indicate that we should consider 0 log 0
+q = 0 and p log p
+ . Note that, as from Equation 4, KLD is undeﬁned
+when the predicted distribution ˆλT e is zero for at least one class (a problem that also
+affects RAE). As a result, we smooth the fractions λT e(c)/ˆλT e(c) and λT e(c)/ˆλT e(c) in
+Equation 4 by adding a small quantity ϵ to both the numerator and the denominator.
+The smoothed KLD function is always deﬁned and still returns a value of zero when
+λT e and ˆλT e coincide.
+KLD offers several advantages with respect to RAE (and, a fortiori, to B and AE).
+One advantage is that, as evident from Equation 5, it is symmetric with respect to the
+complement of a class, i.e., switching the role of c and c does not change the result. This
+means that, e.g., predicting ˆλT e(c) = 0.10 when λT e(c) = 0.11 and predicting ˆλT e(c) =
+0.90 when λT e(c) = 0.89, are equivalent errors (which seems intuitive), while RAE
+considers the former a much more serious error than the latter. This is especially useful
+in binary quantiﬁcation tasks in which it is not clear which of the two classes should
+ACM Transactions on Knowledge Discovery from Data, Vol. VV, No. NN, Article AA, Publication date: YYYY.
+Andrea Esuli and Fabrizio Sebastiani
+play the role of the positive class c, as in e.g., Employed vs. Unemployed. A second
+advantage is that KLD is not deﬁned only on the binary (and multi-label multi-class)
+case, but is also deﬁned on the single-label multi-class case; this allows evaluating
+different types of quantiﬁcation tasks with the same measure. Last but not least, one
+beneﬁt of using KLD is that it is a very well-known measure, having been the subject
+of intense study within information theory [Csisz´ar and Shields 2004] and, although
+from a more applicative angle, within the language modelling approach to information
+retrieval [Zhai 2008].
+2.2. Existing quantiﬁcation methods
+A number of methods have been proposed in the (still brief) literature on quantiﬁcation; below we list the main ones, which we will use as baselines in the experiments
+discussed in Section 4.
+Classify and Count (CC). An obvious method for quantiﬁcation consists of generating a classiﬁer from Tr, classifying the documents in Te, and estimating λT e by
+simply counting the fraction of documents in Te that are predicted positive, i.e.,
+T e (c) = |{dj ∈Te|ˆΦ(dj) = +1}|
+Forman calls this the classify and count (CC) method.
+Probabilistic Classify and Count (PCC). A variant of the above consists in generating a classiﬁer from Tr, classifying the documents in Te, and computing λT e as the
+expected fraction of documents predicted positive, i.e.,
+where p(c|dj) is the probability of membership in c of test document dj returned by
+the classiﬁer. If the classiﬁer only returns conﬁdence scores that are not probabilities
+ ,
+the conﬁdence scores must be converted into probabilities, e.g., by applying a logistic
+function. The PCC method is dismissed as unsuitable in [Forman 2005; 2008], but is
+shown to perform better than CC in [Bella et al. 2010] (where it is called “Probability
+Average”) and in [Tang et al. 2010].
+Adjusted Classify and Count (ACC). Forman [2005; 2008] uses a further method
+which he calls “Adjusted Count”, and which we will call Adjusted Classify and Count
+(ACC) so as to make its relation with CC more explicit. The underlying idea is that
+CC would be optimal, were it not for the fact that the classiﬁer may generate different
+numbers of false positives and false negatives, and that this difference would lead
+to imperfect quantiﬁcation. If we knew the “true positive rate” (tpr =
+T P +F N , a.k.a.
+recall) and “false positive rate” (fpr =
+F P +T N , a.k.a. fallout) that the classiﬁer has
+obtained on Te, it is easy to check that perfect quantiﬁcation would be obtained by
+adjusting ˆλCC
+T e (c) as follows:
+T e (c) −fprT e(c)
+tprT e(c) −fprT e(c)
+Since we cannot know the true values of tprT e(c) and fprT e(c), the ACC method consists of estimating them on Tr via k-fold cross-validation and using the resulting estimates in Equation 8.
+However, one problem with ACC is that it is not guaranteed to return a value in
+ , due to the fact that the estimates of tprT e(c) and fprT e(c) may be imperfect. This
+ACM Transactions on Knowledge Discovery from Data, Vol. VV, No. NN, Article AA, Publication date: YYYY.
+Optimizing Text Quantiﬁers for Multivariate Loss Functions
+lead Forman to “clip” the results of the estimation (i.e., equate to 1 every value
+higher than 1 and to 0 every value lower than 0) in order for the ﬁnal results to be in
+Probabilistic Adjusted Classify and Count (PACC). The PACC method is a probabilistic variant of ACC, i.e., it stands to ACC like PCC stands to CC. Its underlying idea
+is to replace, in Equation 8, ˆλCC
+T e (c), tprT e(c) and fprT e(c) with their expected values,
+with probability of membership in c replacing binary predictions. Equation 8 is thus
+transformed into
+(c) −E[fprT e(c)]
+E[tprT e(c)] −E[fprT e(c)]
+where E[tprT e(c)] and E[fprT e(c)] (expected tprT e(c) and expected fprT e(c), respectively) are deﬁned as
+E[tprT e(c)] =
+E[fprT e(c)] =
+and Tec (resp., Tec) indicates the set of documents in Te that belong (resp., do not
+belong) to class c. Again, since we cannot know the true E[tprT e(c)] and E[fprT e(c)]
+(given that we do not know Tec and Tec), we estimate them on Tr via k-fold crossvalidation and use the resulting estimates in Equation 9.
+ (T50), Method X (X), and Method Max (MAX). Forman 
+points out that the ACC method is very sensitive to the decision threshold of the classi-
+ﬁer, which may yield unreliable values of λACC
+(c) (or lead to λACC
+(c) being undeﬁned
+when tprT e = fprT e). In order to reduce this sensitivity, [Forman 2008] recommends to
+heuristically set the decision threshold in such a way that tprT r (as obtained via k-fold
+cross-validation) is equal to .50 before computing Equation 8. This method is dubbed
+ (T50). Alternative heuristics that [Forman 2008] discusses are to set
+the decision threshold in such a way that fprT r = 1 −tprT r (this is dubbed Method X)
+or such that (tprT r −fprT r) is maximized (this is dubbed Method Max).
+Median Sweep (MS). Alternatively, [Forman 2008] recommends to compute
+(c) for every decision threshold that gives rise (in k-fold cross-validation) to different tprT r or fprT r values, and take the median of all the resulting estimates of
+(c). This method is dubbed Median Sweep (MS).
+Mixture Model (MM). The MM method consists of
+assuming that the distribution DT e of the scores that the classiﬁer assigns to the test
+examples is a mixture
+DT e = λT e(c) · DT e
++ (1 −λT e(c)) · DT e
+where DT e
+are the distributions of the scores that the classiﬁer assigns to the
+positive and the negative test examples, respectively, and where λT e(c) and λT e(c) are
+the parameters of this mixture. The MM method consists of estimating DT e
+via k-fold cross-validation, and picking as value of λT e(c) the one that generates the
+best ﬁt between the observed DT e and the mixture. Two variants of this method, called
+the Kolmogorov-Smirnov Mixture Model (MM(KS)) and the PP-Area Mixture Model
+(MM(PP)), are actually deﬁned in [Forman 2005], which differ in terms of how the
+goodness of ﬁt between the left- and the right-hand side of Equation 12 is estimated.
+See [Forman 2005] for more details.
+ACM Transactions on Knowledge Discovery from Data, Vol. VV, No. NN, Article AA, Publication date: YYYY.
+Andrea Esuli and Fabrizio Sebastiani
+3. OPTIMIZING QUANTIFICATION ACCURACY
+A problem with the methods discussed in §2.2 is that most of them are fairly heuristic
+in nature. For instance, the fact that methods such as ACC (and all the others based
+on it, such as T50, MS, X, and MAX) require “clipping” is scarcely reassuring. More
+in general, methods such as T50 or MS have hardly any theoretical foundation, and
+choosing them over CC only rests on our knowledge that they have performed better
+in previously reported experiments.
+A further problem is that some of these methods rest on assumptions that seem
+problematic. For instance, one problem with the MM method is that it seems to implicitly rely on the hypothesis that estimating DT e
+via k-fold cross-validation
+on Tr can be done reliably. However, since the very motivation of doing quantiﬁcation
+is that the training set and the test set may have quite different characteristics, this
+hypothesis seems adventurous. A similar argument casts some doubt on ACC: how
+reliable are the estimates of tprT e and fprT e that can be generated via k-fold crossvalidation on Tr, given the different characteristics that training set and test set may
+have in the application contexts where quantiﬁcation is required?2 In sum, the very
+same arguments that are used to deem the CC method unsuitable for quantiﬁcation
+seem to undermine the previously mentioned attempts at improving on CC.
+In this paper we propose a new, theoretically well-founded quantiﬁcation method
+that radically differs from the ones discussed in §2.2. Note that all of the methods
+discussed in §2.2 employ general-purpose supervised learning methods, i.e., address
+quantiﬁcation by post-processing the results returned by a standard classiﬁer (where
+the decision threshold has possibly been tuned according to some heuristics). In particular, all the supervised learning methods adopted in the literature on quantiﬁcation
+optimize Hamming distance or variants thereof, and not a quantiﬁcation-speciﬁc evaluation function. When the dataset is imbalanced (typically: when the positives are by
+far outnumbered by the negatives), as is frequently the case in text classiﬁcation, this
+is suboptimal, since a supervised learning method that minimizes Hamming distance
+will generate classiﬁers with a tendency to make negative predictions. This means that
+FN will be much higher than FP, to the detriment of quantiﬁcation accuracy3.
+We take a sharply different approach, based upon the use of classiﬁers explicitly
+optimized for the evaluation function that we will use for assessing quantiﬁcation accuracy. Given such a classiﬁer, we will simply use a “classify and count” approach, with
+no heuristic threshold tuning (`a la T50 / X / MAX) and no a posteriori adjustment (`a la
+The idea of using learning algorithms capable of directly optimizing the measure
+(a.k.a. “loss”) used for evaluating effectiveness is well-established in supervised learning. However, in our case following this route is non-trivial, because the evaluation
+measure that we want to use (KLD) is non-linear, i.e., is such that the error on the test
+set may not be formulated as a linear combination of the error incurred by each test
+example. An evaluation measure for quantiﬁcation is inherently non-linear, because
+how the error on an individual test item impacts on the overall quantiﬁcation error depends on how the other test items have been classiﬁed. For instance, if in the other test
+items there are more false positives than false negatives, an additional false negative
+is actually beneﬁcial to overall quantiﬁcation error, because of the mutual compensation effect between FP and FN mentioned in Section 1. As a result, a measure of
+2In Appendix A we thoroughly analyse (also by means of concrete experiments) the issue of how (un)reliable
+the k-fold cross-validation estimates of tprT e and fprT e are in practice.
+3To witness, in the experiments we report in Section 4 our 5148 test sets exhibit, when classiﬁed by the
+classiﬁers generated by the linear SVM used for implementing the CC method, an average FP/FN ratio of
+0.109; by contrast, for an optimal quantiﬁer this ratio is always 1.
+ACM Transactions on Knowledge Discovery from Data, Vol. VV, No. NN, Article AA, Publication date: YYYY.
+Optimizing Text Quantiﬁers for Multivariate Loss Functions
+quantiﬁcation accuracy is inherently non-linear, and should thus be multivariate, i.e.,
+take in consideration all test items at once.
+As discussed in [Joachims 2005], the assumption that the error on the test set may
+be formulated as a linear combination of the error incurred by each test example (as indeed happens for many common error measures – e.g., Hamming distance) underlies
+most existing discriminative learners, which are thus suboptimal for tackling quantiﬁcation. In order to sidestep this problem, we adopt the SVM for Multivariate Performance Measures (SVMperf) learning algorithm proposed by Joachims 4. SVMperf
+is a learning algorithm of the Support Vector Machine family that can generate classiﬁers optimized for any non-linear, multivariate loss function that can be computed
+from a contingency table (as KLD is).
+SVMperf is a specialization to the problem of binary classiﬁcation of the structural
+SVM (SV M struct) learning algorithm [Joachims et al. 2009a; Joachims et al. 2009b;
+Tsochantaridis et al. 2004] for “structured prediction”, i.e., an algorithm designed for
+predicting multivariate, structured objects (e.g., trees, sequences, sets). SVMperf is
+fundamentally different from conventional algorithms for learning classiﬁers: while
+these latter learn univariate classiﬁers (i.e., functions of type ˆΦ : D →{−1, +1} that
+classify individual instances one at a time), SVMperf learns multivariate classiﬁers
+(i.e., functions of type ˆΦ : D|S| →{−1, +1}|S| that classify entire sets S of instances
+in one shot). By doing so, SVMperf can optimize properties of entire sets of instances,
+properties (such as KLD) that cannot be expressed as linear functions of the properties
+of the individual instances.
+As discussed in [Joachims et al. 2009b], SV M struct can be adapted to a speciﬁc task
+by deﬁning four components:
+(1) A joint feature map Ψ(x, y). This function computes a vector of features (describing the match between the input vectors in x and the relative outputs, true or
+predicted, in y) from all the input-output pairs at the same time. In this way the
+number of features, and thus the number of parameters of the model, can be kept
+constant regardless of the size of the sample set. The Ψ function allows to generalise not only on inputs (x) but also on outputs (y), thus allowing to produce
+predictions not seen in the training data.
+In SVMperf Ψ is deﬁned5 as
+Ψ(x, y) = 1
+(2) A loss function ∆(y, ˆy). SVMperf works with loss functions ∆(TP, FP, FN, TN) in
+which the four values are those from the contingency table resulting from comparing the true labels y with the predicted labels ˆy. In our work we take the loss
+4In [Joachims 2005] SVMperf is actually called SV M∆multi, but the author has released its implementation under the name SVMperf. We will use this latter name because it uniquely identiﬁes the algorithm
+on the Web, while searching for “SVM multi” often returns the SV Mmulticlass package, which addresses a
+different problem.
+5For this formulation of Ψ, and when error rate is the chosen loss function, Joachims shows that
+SVMperf coincides with the traditional univariate SVM model .
+ACM Transactions on Knowledge Discovery from Data, Vol. VV, No. NN, Article AA, Publication date: YYYY.
+Andrea Esuli and Fabrizio Sebastiani
+function to be KLD, i.e.,6
+∆KLD(TP, FP, FN, TN) = KLD(λ, ˆλ)
+where λ(c) =
+TP + FP + FN + TN and ˆλT e(c) =
+TP + FP + FN + TN
+(3) An algorithm for the efﬁcient computation of a hypothesis
+ˆΦ(x) = argmaxˆy∈Y{w · Ψ(x, ˆy)}
+where w is a vector of parameters. In SVMperf this simply corresponds to computing
+ˆΦ(x) = (sign(w · x1), . . . , sign(w · xn))
+(4) An algorithm for the efﬁcient computation of the loss-augmented hypothesis
+ˆΦ∆(x) = argmaxˆy∈Y{∆(y, ˆy) + w · Ψ(x, ˆy)}
+which in SVMperf is computed via an algorithm [Joachims 2005, Algorithm 2] with
+O(n2) worst-case complexity.
+We have used the implementation of SVMperf made available by Joachims7, which we
+have extended by implementing the module that takes care of the ∆KLD loss function.
+In the rest of the paper our method will be dubbed SVM(KLD).
+4. EXPERIMENTS
+We now present the results of experiments aimed at assessing whether the approach
+we have proposed in Section 3 delivers better quantiﬁcation accuracy than state-ofthe-art quantiﬁcation methods. In order to do this, we have run all our experiments
+by using as baselines for our SVM(KLD) method all the methods described in §2.2.
+For the CC, ACC, T50, X, MAX, MS, MM(KS), MM(PP) methods we have used the
+original implementation that we have obtained from the author (this guarantees that
+the baselines perform at their full potential). We have instead implemented PCC and
+PACC ourselves. At the heart of the implementation of all the baselines is a standard
+linear SVM with the parameters set at their default values; where quantities (such
+as e.g., fprT e and tprT e – see Equation 8) had to be estimated from the training set,
+we have used 50-fold cross-validation, as done and recommended in [Forman 2008].
+In order to guarantee a fair comparison with the baselines we have used the default
+values for the parameters also for SVMperf, which lies at the basis of our SVM(KLD)
+6In Equation 14 KLD is written as a function of TP, FP, FN, TN for the simple fact that in [Joachims
+2005] (where SVMperf was originally described) the loss function ∆is speciﬁed as a function of the four
+cells of the contingency table. However, it should be clear that λ(c) does not depend on the predicted labels:
+even if in Equation 14 we have written it out as λ(c) =
+T P +F P +F N+T N , this latter is equivalent to writing
+GP +GN , where GP (the “gold positives”) is TP + FN and GN (the “gold negatives”) is FP + TN.
+Seen under this light, there is no trace of predicted labels in λ(c) =
+GP +GN , and λ(c) is just a function of
+the gold standard and not of the prediction. Analogously, it should be clear that ˆλ(c) is just a function of the
+prediction and not of the gold standard.
+7SVMperfis available from perf.html. Our module
+that extends it to deal with KLD is available at 
+8An additional reason why we have left the parameters at their default values is that, in a context in which
+the characteristics of Tr and Te may substantially differ, it is not clear that the parameter values which are
+found optimal on Tr via k-fold cross-validation will also prove optimal (or at least will perform reasonably)
+ACM Transactions on Knowledge Discovery from Data, Vol. VV, No. NN, Article AA, Publication date: YYYY.
+Optimizing Text Quantiﬁers for Multivariate Loss Functions
+In order to generate the vectorial representations for our documents, the classic
+“bag-of-words” approach has been adopted. In particular, punctuation has been removed, all letters have been converted to lowercase, numbers have been removed, stop
+words have been removed using the stop list provided in [Lewis 1992, pages 117–118],
+and stemming has been performed by means of the version of Porter’s stemmer available from All the remaining stemmed words (“terms”)
+that occur at least once in Tr have thus been used as features of our vectorial representations of documents; no feature selection has been performed. Feature weights
+have been obtained via the “ltc” variant [Salton and Buckley 1988] of the well-known
+tfidf class of weighting functions, i.e.,
+tfidf(tk, di) = tf(tk, di) · log
+where di is a document, #T r(tk) denotes the number of documents in Tr in which
+feature tk occurs at least once and
+tf(tk, di) =
+1 + log #(tk, di) if #(tk, di) > 0
+where #(tk, di) denotes the number of times tk occurs in di. Weights obtained by Equation 18 are normalized through cosine normalization, i.e.,
+tfidf(tk, di)
+s=1 tfidf(ts, di)2
+where T denotes the total number of features. Following [Forman 2008], we set the ϵ
+constant for smoothing KLD to the value ϵ = 1
+4.1. Datasets
+The datasets we use for our experiments have been extracted from two important text
+classiﬁcation test collections, REUTERS CORPUS VOLUME 1 version 2 (RCV1-V2) and
+OHSUMED-S.
+RCV1-V2 is a standard, publicly available benchmark for text classiﬁcation consisting of 804,414 news stories produced by Reuters from 20 Aug 1996 to 19 Aug 19979.
+RCV1-V2 ranks as one of the largest corpora currently used in text classiﬁcation research and, as pointed out in [Forman 2006b], suffers from extensive “drift”, i.e., from
+substantial variability between the training set and the test set, which makes it a
+challenging dataset for quantiﬁcation. In our experiments we have used the 12,807
+news stories of the 1st week for training, and the 791,607 news
+stories of the other 52 weeks for testing10. We have further partitioned these latter
+into 52 test sets each consisting of one week’s worth of data11. RCV1-V2 is multi-label,
+i.e., a document may belong to several classes at the same time. Of the 103 classes of
+which its “Topic” hierarchy consists, in our experiments we have restricted our attention to the 99 classes with at least one positive training example. Consistently with
+the evaluation presented in [Lewis et al. 2004], also classes placed at internal nodes in
+the hierarchically organized classiﬁcation scheme are considered in the evaluation; as
+9 
+10This is the standard “LYRL2004” split between training and test data, originally deﬁned in [Lewis et al.
+11More precisely, since the period covered by RCV1-V2 consists of 365 days, i.e., 52 full weeks + 1 day, the
+52nd test set consists of 1 day’s worth of data only.
+ACM Transactions on Knowledge Discovery from Data, Vol. VV, No. NN, Article AA, Publication date: YYYY.
+Andrea Esuli and Fabrizio Sebastiani
+positive examples of these classes we use the union of the positive examples of their
+subordinate nodes, plus their “own” positive examples.
+The OHSUMED-S dataset [Esuli and Sebastiani 2013] is a subset of the wellknown OHSUMED test collection [Hersh et al. 1994]. OHSUMED-S consists of a
+set of 15,643 MEDLINE records spanning the years from 1987 to 1991, where each
+record is classiﬁed under one or more of the 97 MeSH index terms that belong to the
+Heart Disease (HD) subtree of the well-known MeSH tree of index terms12. Each entry
+consists of summary information relative to a paper published on one of 270 medical
+journals; the available ﬁelds are title, abstract, author, source, publication type, and
+MeSH index terms. As the training set we have used, consistently with [Esuli and
+Sebastiani 2013], the 2,510 documents belonging to year 1987; 9 MeSH index terms
+out of the 97 in the HD subtree are never assigned to any training document, so the
+number of classes we actually use is 88. We partition the four remaining years’ worth
+of data into four bins , each containing the documents generated within the corresponding calendar year. The reason why we do not use the
+entire OHSUMED dataset is that roughly 93% of OHSUMED entries have no class
+assigned from the HD subtree, which means that the classes in the HD subtree have
+very low prevalence (λT r = 0.003 on average); we thus prefer to use OHSUMED-S,
+which presents a wider range of prevalence values.
+This experimental setting thus generates 52 × 99 = 5148 binary quantiﬁcation test
+sets for RCV1-V2 (containing an average of 15,223 documents each), and 4 × 88 =
+352 test sets for OHSUMED-S (containing an average of 3,283 documents each).
+This large number of test sets will give us an opportunity to study quantiﬁcation
+across different dimensions (e.g., across classes characterized by different prevalence,
+across classes characterized by different amounts of drift, across time)13. More detailed ﬁgures about our datasets are given in Table I. Note that both RCV1-V2 and
+OHSUMED-S classes are characterized by severe imbalance, as can be noticed by
+the two “Avg prevalence of the positive class” rows of Table I, where both values
+are very far away from the value of 0.5, which represents perfect balance. On a side
+note, it is well-known that the “bag-of-words” extraction process outlined a few paragraphs above gives rise to very high-dimensional (albeit sparse) vectors; our case is
+no exception, and the dimensionality of our vectors is 53,204 (RCV1-V2) and 11,286
+(OHSUMED-S), respectively.
+Note that the experimental protocol we adopt is different from the one adopted by
+Forman. In [Forman 2005; 2006a; 2008] he proposes a protocol in which, given a training set Tr and a test set Te, several controlled experiments are run by artiﬁcially
+altering class prevalences (i.e., by randomly removing predeﬁned percentages of the
+positives or of the negatives) either on Tr or on Te. This protocol is meant to test the
+robustness of the methods with respect to different “distribution drifts” (i.e., differences between λT r(c) and λT e(c) of different magnitude) and different class prevalence
+values. We prefer to opt for a different protocol, one in which “natural” training and
+test sets are used, without artiﬁcial alterations. The reason is that artiﬁcial alterations
+may generate class prevalence values and/or distribution drifts that are simply not realistic (e.g., a situation in which λT r(c) = .40 and λT e(c) = .01); conversely, focusing
+on naturally occurring datasets forces us to come to terms with realistic levels of class
+prevalence and/or distribution drift. We will thus adopt the latter protocol in all the
+12 
+13In order to guarantee perfect reproducibility of our results, we make available at 
+quantiﬁcation/ the feature vectors of the RCV1-V2 and OHSUMED-S documents as extracted from our
+preprocessing module, and already split respectively into the 53 and 5 sets described above.
+ACM Transactions on Knowledge Discovery from Data, Vol. VV, No. NN, Article AA, Publication date: YYYY.
+Optimizing Text Quantiﬁers for Multivariate Loss Functions
+Table I. Main characteristics of the datasets used in our experiments.
+Total # of docs
+# of classes (i.e., binary tasks)
+Time unit used for split
+# of features
+Min # of positive docs per class
+Max # of positive docs per class
+Avg # of positive docs per class
+Min prevalence of the positive class
+Max prevalence of the positive class
+Avg prevalence of the positive class
+# of test sets per class
+Avg # of test docs per set
+Min # of positive docs per class
+Max # of positive docs per class
+Avg # of positive docs per class
+Min prevalence of the positive class
+Max prevalence of the positive class
+Avg prevalence of the positive class
+experiments discussed in this paper, “compensating” for the absence of artiﬁcial alterations by also studying (see §4.2.3) the behaviour of our methods separately on test
+sets characterized by different (and natural) levels of distribution drift.
+4.2. Testing quantiﬁcation accuracy
+We have run our experiments by learning quantiﬁers for each class c on the respective
+training set and testing the quantiﬁers separately on each of the test sets, using KLD
+as the evaluation measure. We have done this for all the 99 classes × 52 weeks in
+RCV1-V2 and for all the 88 classes × 4 years in OHSUMED-S, and for all the 10
+baseline methods discussed in §2.2 plus our SVM(KLD) method.
+4.2.1. Analysing the results along the class dimension. We ﬁrst discuss the results according
+to the class dimension, i.e., by averaging the results for each RCV1-V2 class across the
+52 test weeks and for each OHSUMED-S class across the 4 years14. Since this would
+leave no less than 99 RCV1-V2 classes to discuss, we further average the results across
+all the RCV1-V2 classes characterized by a training class prevalence λT r(c) that falls
+into a certain interval (same for OHSUMED-S and its 88 classes). This allows us to
+separately check the behaviour of our quantiﬁcation methods on groups of classes that
+are homogeneous by level of imbalance. We have also run statistical signiﬁcance tests
+in order to check whether the improvement obtained by the best performing method
+over the 2nd best performer on the group is statistically signiﬁcant15.
+The results are reported in Table II, where four levels of imbalance have been singled
+out: very low prevalence (VLP, which accounts for all the classes c such that λT r(c) <
+0.01; there are 48 RCV1-V2 and 51 OHSUMED-S such classes), low prevalence (LP
+14Wherever in this paper we speak of averaging accuracy results across different test sets, what we mean
+is actually macroaveraging, i.e., taking the accuracy results on the individual test sets and computing their
+arithmetic mean. This is sharply different from microaveraging, i.e., merging the test sets and computing
+a single accuracy ﬁgure on the merged set. Quite obviously, in a quantiﬁcation setting microaveraging does
+not make any sense at all, since false positives from one set and false negatives from another set would
+compensate each other, thus generating misleadingly high accuracy values.
+15All the statistical signiﬁcance tests discussed in this paper are based on a two-tailed paired t-test and the
+use of a 0.001 signiﬁcance level.
+ACM Transactions on Knowledge Discovery from Data, Vol. VV, No. NN, Article AA, Publication date: YYYY.
+Andrea Esuli and Fabrizio Sebastiani
+Table II. Accuracy of SVM(KLD) and of 10 baseline methods as measured in terms
+of KLD on the 99 classes of RCV1-V2 (top) and on the 88 classes of OHSUMED-S
+(bottom) grouped by class prevalence in Tr (Columns 2 to 5); lower values are better;
+Column 6 indicates average accuracy across all the classes. The best result in each
+column is indicated with boldface only when there is a statistically signiﬁcant difference
+with respect to each of the other tested methods (p < 0.001, two-tailed paired t-test on
+KLD value across the test sets in the group). The methods are ranked in terms of the
+value indicated in the “All” column.
+– 0.01 ≤λT r(c) < 0.05; 34 RCV1-V2 and 28 OHSUMED-S classes), high prevalence
+(HP – 0.05 ≤λT r(c) < 0.10; 10 RCV1-V2 and 4 OHSUMED-S classes), and very high
+prevalence (VHP – 0.10 ≤λT r(c); 7 RCV1-V2 and 5 OHSUMED-S classes).
+The ﬁrst observation that can be made by looking at the RCV1-V2 results in this
+table is that, when evaluated across all our 5148 test sets (Column 6), SVM(KLD)
+outperforms all the other baseline methods in a statistically signiﬁcant way, scoring a
+KLD value of 1.32E-03 against the 1.74E-03 value (a -24.2% error reduction) obtained
+by the best-performing baseline (the PACC method). This is largely a result of a much
+better balance between false positives and false negatives obtained by the base classiﬁers: while (as already observed in Footnote 3) the average FP/FN ratio across the
+5148 test sets is 0.109 for CC, it is 0.684 for SVM(KLD) (and it is 1 for the perfect quantiﬁer). The OHSUMED-S results essentially conﬁrm the insights obtained from the
+RCV1-V2 results, with SVM(KLD) again the best of the 11 methods and PACC again
+the 2nd best; the difference between them is now even higher, with an error reduction
+of -56.8%.
+A second observation that the RCV1-V2 results allow is to make is that SVM(KLD)
+scores well on all the four groups of classes identiﬁed; while it is not always the best
+method (e.g., it is outperformed by other methods in the HP and VHP groups), it consistently performs well on all four groups. In particular, SVM(KLD) seems to excel
+at classes characterized by drastic imbalance, as witnessed by the VLP group, where
+SVM(KLD) is the best performer, and by the LP group, where SVM(KLD) is the best
+performer in a statistically signiﬁcant way. In fact, this group of classes seems largely
+responsible for the excellent overall performance (Column 6) displayed by SVM(KLD),
+ACM Transactions on Knowledge Discovery from Data, Vol. VV, No. NN, Article AA, Publication date: YYYY.
+Optimizing Text Quantiﬁers for Multivariate Loss Functions
+since on the LP group the margin between it and the other methods is large (4.92E-04
+against 1.98E-03 of the 2nd best method), and since the VLP and LP groups altogether
+account for no less than 82 out of the total 99 classes. This latter fact characterizes
+most naturally occurring datasets, whose class distribution usually exhibits a power
+law, with very few highly frequent classes and very many highly infrequent classes.
+The OHSUMED-S results essentially conﬁrm the RCV1-V2 results, with SVM(KLD)
+again the best performer on the VLP and LP classes, and still performing well, although not being the best, on HP and VHP.
+The stability of SVM(KLD) is also conﬁrmed by Table III, which reports, for the same
+groups of test sets identiﬁed by Table II, the variance in KLD across the members of
+the group. For example, on RCV1-V2, Column 3 reports the variance in KLD across all
+the 34 classes such that .01 ≤λT r(c) ≤0.05 and across the 52 test weeks, for a total of
+34 × 52 = 1, 768 test sets. What we can observe from this table is that, when averaged
+across all the 99 × 52 = 5148 test sets (Column 6), the variance of SVM(KLD) is lower
+than the variance of all other methods in a statistically signiﬁcant way. The variance
+of SVM(KLD) is fairly low in all the four subsets of classes, and particularly so in
+the subsets of the most imbalanced classes (VLP and LP), in which SVM(KLD) is the
+best performer in a statistically signiﬁcant way. The OHSUMED-S results essentially
+conﬁrm the RCV1-V2 results, with SVM(KLD) the best performer on VLP and LP, and
+still behaving well on HP and VHP.
+Concerning the baselines, our results seem to disconﬁrm the ones reported in [Forman 2008] according to which the MS method is the best of the lot, and according to
+which the ACC method “can estimate the class distribution well in many situations,
+but its performance degrades severely when the training class distribution is highly
+imbalanced”. In our experiments, instead, MS is substantially outperformed by several
+baseline methods; ACC is instead a strong contender, and (contrary to the statement
+above) especially shines on the subsets of the most imbalanced classes. The results of
+both Tables II and III clearly show that, on both RCV1-V2 and OHSUMED-S, PACC
+is the best of the baseline methods presented in §2.2.
+4.2.2. Analysing the results along the temporal dimension. We now analyse the results
+along the temporal dimension. In order to do this for the RCV1-V2 dataset (resp.,
+OHSUMED-S dataset), for each of the 52 test weeks (resp., 4 test years) we average the 99 (resp., 88) accuracy results corresponding to the individual classes, and
+check the temporal accuracy trend resulting from these averages. This trend is displayed in Figure 1, where the results of SVM(KLD) are plotted together with the results of the three best-performing baseline methods. The plots unequivocally show that
+SVM(KLD) is the best method across the entire temporal spectrum for both RCV1-V2
+and OHSUMED-S.
+Note that quantiﬁcation accuracy remains fairly stable across time, i.e., we are not
+witnessing any substantial decrease in quantiﬁcation accuracy with time. Intuition
+might instead suggest that quantiﬁcation accuracy should decrease with time, due to
+the combined effects of true concept drift and distribution drift. This may indicate that
+(at least in the context of broadcast news that RCV1-V2 represents, and in the context
+of medical scientiﬁc articles that OHSUMED-S represents) the chosen timeframe (one
+year for RCV1-V2, four years for OHSUMED-S) is not sufﬁcient enough a timeframe
+to observe a signiﬁcant such drift.
+4.2.3. Analysing the results along the distribution drift dimension. The last angle according to
+which we analyse the results is distribution “drift”. That is, we conduct our analysis
+in terms of how much the prevalence λT ei(c) in a given test set Tei “drifts away” from
+ACM Transactions on Knowledge Discovery from Data, Vol. VV, No. NN, Article AA, Publication date: YYYY.
+Andrea Esuli and Fabrizio Sebastiani
+Table III. Variance of SVM(KLD) and of 10 baseline methods as measured in terms
+of KLD on the 99 classes of RCV1-V2 (top) and on the 88 classes of OHSUMED-
+S (bottom) grouped by class prevalence in Tr (Columns 2 to 5); Column 6 indicates
+variance across all the classes. Boldface represents the best value. The methods are
+ranked in terms of the value indicated in the “All” column.
+the prevalence λT r(c) in the training set. Speciﬁcally, for all our 5148 RCV1-V2 test
+sets (resp., 352 OHSUMED-S test sets) Tei we compute KLD(λT ei, λT r), we rank all
+the test sets according to the KLD value they have obtained, and we subdivide the
+resulting ranking into four equally-sized segments (quartiles) of 5148/4=1287 RCV1-
+V2 test sets (resp., 352/4=88 OHSUMED-S test sets) each. As a result, each resulting
+quartile contains test sets that are homogeneous according to the divergence of their
+distributions from the corresponding distributions in the training set (different test
+sets pertaining to the same class c may thus end up in different quartiles). This allows
+us to investigate how well the different methods behave when distribution drift is low
+(indicated by low KLD values) and when distribution drift is high (high KLD values).
+We have also run statistical signiﬁcance tests in order to check whether the improvement obtained by the best performing method over the 2nd best performer on the test
+sets belonging to a certain quartile is statistically signiﬁcant.
+The results of this analysis are displayed in Table IV. The most important observation here is that SVM(KLD) is the best performer in a statistically signiﬁcant way, both
+overall and on three out of four quartiles (on the “very high drift” quartile SVM(KLD)
+is outperformed by PACC). Additionally, it is worth observing that its performance is
+consistently high on each quartile. Table V reports variance ﬁgures, showing again the
+stability of SVM(KLD), which is the most stable method overall and on three out of
+four quartiles (on the VHD quartile the most stable method is PACC).
+4.2.4. Evaluating the results according to RAE. It may be interesting to analyse the results
+of the previous experiments according to an evaluation measure different from KLD,
+such as the RAE measure introduced in §2.1. As discussed in §2.1, RAE is the most
+(and only) reasonable alternative to KLD proposed so far. Given the simplicity of its
+mathematical form, it is also a measure everyone can relate to.
+ACM Transactions on Knowledge Discovery from Data, Vol. VV, No. NN, Article AA, Publication date: YYYY.
+Optimizing Text Quantiﬁers for Multivariate Loss Functions
+Values of KLD obtained by SVM(KLD) and by the three best-performing baseline methods on the
+RCV1-V2 dataset (top) and on the OHSUMED-S dataset (bottom). Each point represents the average KLD
+value obtained across the 99 RCV1-V2 classes for the given week (top) and across the 88 OHSUMED-S
+classes for the given year (bottom); lower values are better. Points are plotted as a temporal series (the 52
+weeks and the 4 years, respectively, are chronologically ordered).
+Similarly to Table IV, Table VI reports the results of our experiments broken down
+into quartiles of test sets homogeneous by distribution drift; the difference with Table
+IV is that RAE is now used as the evaluation measure in place of KLD. The RCV1-V2
+results of Table IV conﬁrm the superiority of SVM(KLD) over the baselines, notwithstanding the discrepancy between evaluation measure (RAE) and loss function optimized (KLD). As an average across the 5148 test sets, SVM(KLD) obtains an average
+RAE value of 0.465, which improves in a statistically signiﬁcant way over the 0.674
+result obtained by the second best performer, ACC; the next best-performing methods, CC and PACC, obtain dramatically worse results (1.087 and 1.466, respectively).
+SVM(KLD) is also the best performer, in a statistically signiﬁcant way, in each of the
+four quartiles.
+In this case OHSUMED-S results are substantially different from the RCV1-V2
+results, since here the best performer is MM(KS) (a weak contender in all the experiments that we have reported so far), while SVM(KLD) performs much less well.
+The overall performance of SVM(KLD) is penalized by a bad performance on the VHD
+quartile, since it is the best performer (and in a statistically signiﬁcant way) on the
+other three quartiles. While there is some discrepancy between the outcomes of the
+RCV1-V2 experiments and those of the OHSUMED-S experiments, we observe that
+the former might be considered somehow more trustworthy than the latter ones, since
+ACM Transactions on Knowledge Discovery from Data, Vol. VV, No. NN, Article AA, Publication date: YYYY.
+Andrea Esuli and Fabrizio Sebastiani
+Table IV. As Table II, but with tests sets grouped by distribution drift instead of by class
+prevalence.
+Table V. As Table III, but with tests sets grouped by distribution drift instead of by class
+prevalence.
+RCV1-V2 is much bigger than OHSUMED-S (approximately 60 times more test documents).
+Additionally, and more importantly, let us recall that SVM(KLD) is optimized for
+KLD, and not for RAE. This means that, in keeping with our plan to use classiﬁers
+explicitly optimized for the evaluation function used for assessing quantiﬁcation accuracy, should we really deem RAE to be the “right” such function we would implement
+ACM Transactions on Knowledge Discovery from Data, Vol. VV, No. NN, Article AA, Publication date: YYYY.
+Optimizing Text Quantiﬁers for Multivariate Loss Functions
+Table VI. As Table II, but with RAE used as the evaluation measure instead of
+and use SVM(RAE)!, and not SVM(KLD). In other words, in the RCV1-V2 results of
+Table VI SVM(KLD) turns out to be the best performer despite the fact that we here
+use RAE as an evaluation measure.
+4.3. Testing classiﬁcation accuracy
+As discussed in Section 1, quantiﬁcation accuracy is related to the classiﬁer’s ability
+to balance false positives and false negatives, but is not related to its ability to keep
+their total number low, which is instead a key requirement in standard classiﬁcation.
+However, it is fairly natural to expect that a user will trust a quantiﬁcation method
+only inasmuch as its good quantiﬁcation performance results from reasonable classiﬁcation performance. In other words, a user is unlikely to accept a classiﬁer with good
+quantiﬁcation accuracy but bad classiﬁcation accuracy.
+For this reason we have compared, in terms of classiﬁcation accuracy, SVM(KLD)
+against the traditional classiﬁcation-oriented SVMs (i.e., SVMorg – see Section 3), with
+the goal of ascertaining if the former has also a reasonable classiﬁcation accuracy.
+Default parameters have been used for both, for the reasons already explained in the
+ﬁrst paragraph of Section 4. We have compared the two systems by using the same
+training set as used in the quantiﬁcation experiments, and as the test set the union
+of the 52 test sets used for quantiﬁcation (i.e., a single test set of 791,607 documents
+across 99 classes). Evaluation is based on the F1 measure, both in its micro-averaged
+1 ) and macro-averaged (F M
+1 ) versions.
+On the RCV1-V2 dataset, in terms of F µ
+1 SVM(KLD) performs slightly worse than
+SVMorg (.755 instead of .777, with a relative decrease of −2.83%), while in terms of
+SVM(KLD) performs slightly better (.440 instead of .433, a relative increase of
++1.61%), which indicates that, on highly imbalanced classes, SVM(KLD) is not only a
+better quantiﬁer, but also a better classiﬁer. To witness, on the 48 classes for which
+λT r ≤0.01 (i.e., on the most imbalanced classes) we obtain F µ
+= .294 for SVMorg
+while SVM(KLD) obtains F µ
+= .350 (an increase of +19.09%). The trends on the
+ACM Transactions on Knowledge Discovery from Data, Vol. VV, No. NN, Article AA, Publication date: YYYY.
+Andrea Esuli and Fabrizio Sebastiani
+OHSUMED-S dataset are similar, though with smaller margins. In terms of F µ
+SVM(KLD) performs slightly worse than SVMorg (F µ
+1 = .713 instead of .722, with a
+relative decrease of −1.24%), while in terms of F M
+SVM(KLD) performs slightly better
+(.405 instead of .398, a relative increase of +1.76%), conﬁrming the insights obtained
+from RCV1-V2. On the 51 classes for which λT r ≤0.01 (i.e., on the most imbalanced
+classes) we obtain F µ
+1 = .443 for SVMorg while SVM(KLD) obtains F µ
+1 = .456 (an increase of +2.93%).
+All in all, these results show that classiﬁers trained via SVM(KLD), aside from delivering top-notch quantiﬁcation accuracy, are also characterized by very good classiﬁcation accuracy. This makes the quantiﬁers generated via SVM(KLD) not only accurate,
+but also trustworthy.
+4.4. Testing efﬁciency
+SVM(KLD) has also good properties in terms of sheer efﬁciency.
+Concerning training, Joachims proves that training a classiﬁer with SVMperf
+is O(n2), with n the number of training examples, for any loss function that can be
+computed from a contingency table (such as KLD indeed is). This is certainly more
+expensive than training a classiﬁer by means of a standard, linear SVM (which is at
+the heart of Forman’s implementation of all the quantiﬁcation methods of §2.2), since
+this latter is well-known to be O(sn) (with s the average number of non-zero features
+in the training objects) [Joachims 2006].
+However, note that, while SVM(KLD) only requires training a classiﬁer by means
+of SVMperf, setting up a quantiﬁer with any of the methods of §2.2 (with the only
+exception of the simple CC method) requires more than simply training a classiﬁer.
+For instance, ACC (together with the methods derived from it, such as T50, X, MAX,
+MS, PACC) also requires estimating tprT e and fprT e on the training set via k-fold cross
+validation, which may be expensive; analogously, both MM(KS) and MM(PP) require
+estimating DT e
+via k-fold cross-validation, and the same considerations apply.
+In practice, using SVMperf turns out to be affordable. On RCV1-V2, training the 99
+binary classiﬁers described in the previous sections via SVMperf required on average
+about 4.7 seconds each16. By contrast, training the analogous classiﬁers via a standard
+linear SVM required on average only 2.1 seconds each. However, this means that, if
+k-fold cross-validation is used for the estimation of parameters with a value of k ≥2
+(meaning that, for each class, additional k classiﬁers need to be trained), the computational advantage of using a linear SVM instead of the more expensive SVMperf is
+completely lost. Forman recommends choosing k = 50 in order to obtain more
+accurate estimates of tprT e and fprT e for use in ACC and derived methods; this means
+making the training phase roughly (2.1 · 51)/4.7 ≈22 times slower than the training
+phase of SVM(KLD).
+Concerning the computational costs involved at classiﬁcation / quantiﬁcation time,
+SVM(KLD) and all the baseline methods discussed in this paper are equivalent, since
+(a) they all generate linear classiﬁers of equal efﬁciency, and (b) in ACC and derived
+methods the cost of the post-processing involved in computing class prevalences from
+the classiﬁcation decisions is negligible.
+5. RELATED WORK
+An early mention of quantiﬁcation can be found in [Lewis 1995, Section 7], where this
+task is simply called counting; however, the author does not propose any speciﬁc solu-
+16All times reported in this section were measured on a commodity machine equipped with an Intel Centrino
+Duo 2×2Ghz processor and 2GB RAM.
+ACM Transactions on Knowledge Discovery from Data, Vol. VV, No. NN, Article AA, Publication date: YYYY.
+Optimizing Text Quantiﬁers for Multivariate Loss Functions
+tion for this problem. Forman [2005; 2006; 2006a; 2008] is to be credited for bringing
+the problem of quantiﬁcation to the attention of the data mining and machine learning
+research communities, and for proposing several solutions for performing quantiﬁcation and for evaluating it.
+5.1. Applications of quantiﬁcation
+Chan and Ng [2005; 2006] apply quantiﬁcation (which they call “class prior estimation”) to determining the prevalence of different senses of a word in a text corpus, with
+the goal of improving the accuracy of word sense disambiguation algorithms as applied
+on that corpus. Forman uses quantiﬁcation in order to establish the prevalence
+of various support-related issues in incoming telephone calls received at customer support desks. Esuli and Sebastiani [2010a] apply quantiﬁcation methods for estimating
+the prevalence of various response classes in open-ended answers obtained in the context of market research surveys (they do not use the term “quantiﬁcation”, and rather
+speak of “measuring classiﬁcation accuracy at the aggregate level”). Hopkins and King
+ classify blog posts with the aim of estimating the prevalence of different political candidates in bloggers’ preferences. Gonzalez-Castro et al. and Sanchez et
+al. use quantiﬁcation for establishing the prevalence of damaged sperm cells in
+a given sample for veterinary applications. Baccianella et al. classify radiology
+reports with the aim of estimating the prevalence of different pathologies. Tang et al.
+ focus on network quantiﬁcation problems, i.e., problems in which the goal is to
+estimate class prevalence among a population of nodes in a network. Alaiz-Rodriguez
+et al. , Limsetto and Waiyamai , Xue and Weiss , and Zhang and
+Zhou use quantiﬁcation in order to improve classiﬁcation, i.e., attempt to estimate class prevalence in the test set in order to generate a classiﬁer that better copes
+with differences in the class distributions of the training set and the test set.
+Many other works use quantiﬁcation “without knowingly doing so”; that is, unaware
+of the existence of methods speciﬁcally optimized for quantiﬁcation, they use classiﬁcation with the only goal of estimating class prevalences. In other words, these works
+use plain “classify and count”. Among them, Mandel et al. use tweet quantiﬁcation in order to estimate, from a quantitative point of view, the emotional responses of
+the population (segmented by location and gender) to a natural disaster; O’Connor et
+al. analyse the correlation between public opinion as measured via tweet sentiment quantiﬁcation and via traditional opinion polls; Dodds et al. use tweet sentiment quantiﬁcation in order to infer spatio-temporal happiness patterns; and Weiss
+et al. use quantiﬁcation in order to measure the prevalence of different types of
+pets’ activity as detected by wearable devices.
+5.2. Quantiﬁcation methods
+Bella et al. compare many of the methods discussed in §2.2, and ﬁnd that CC
+≺PCC ≺ACC ≺PACC (where ≺means “underperforms”). Also Tang et al. experimentally compare several among the methods discussed in §2.2, and ﬁnd that CC
+≺PCC ≺ACC ≺PACC ≺MS. They also propose a method (speciﬁc to linked data)
+that does not require the classiﬁcation of individual items, but they ﬁnd that it underperforms a robust classiﬁcation-based quantiﬁcation method such as MS. However,
+the experimental comparisons of [Bella et al. 2010] and [Tang et al. 2010] are both
+framed in terms of absolute error, which seems a sub-standard evaluation measure for
+this task (see §2.1); additionally, the datasets they test on do not exhibit the severe
+imbalance typical of many binary text classiﬁcation tasks, so it is not surprising that
+their results concerning MS are not conﬁrmed by our experiments.
+The idea of using a learner that directly optimizes a loss function speciﬁc to quantiﬁcation was ﬁrst proposed, although not implemented, in [Esuli and Sebastiani 2010b],
+ACM Transactions on Knowledge Discovery from Data, Vol. VV, No. NN, Article AA, Publication date: YYYY.
+Andrea Esuli and Fabrizio Sebastiani
+which indeed proposes using SVMperf to directly optimize KLD; the present paper is
+thus the direct realization of that proposal. The ﬁrst published work that implements
+and tests the idea of directly optimizing a quantiﬁcation-speciﬁc loss function is [Milli
+et al. 2013], whose authors propose variants of decision trees and decision forests that
+directly optimize a loss combining classiﬁcation accuracy and quantiﬁcation accuracy.
+At the time of going to print we have become aware of a related paper [Barranquero
+et al. 2015] whose authors, following [Esuli and Sebastiani 2010b], use SV Mperf to
+perform quantiﬁcation; differently from the present paper, and similarly to [Milli et al.
+2013], they use an evaluation function that combines classiﬁcation accuracy and quantiﬁcation accuracy.
+5.3. Other related work
+Bella et al. address the problem of performing quantiﬁcation for the case in
+which the output variable to be predicted for a given individual is a real value, instead
+of a class as in the case we analyse; that is, they analyse quantiﬁcation as a counterpart
+of regression, rather than of classiﬁcation as we do.
+Quantiﬁcation as deﬁned in this paper bears some relation with density estimation
+[Silverman 1986], which can be deﬁned as the task of estimating, based on observed
+data, the unknown probability density function of a given random variable. If the random variable is discrete, this means estimating, based on observed data, the unknown
+distribution across the discrete set of events, i.e., across the classes. An example density estimation problem is estimating the percentage of white balls in a very large urn
+containing white balls and black balls. However, there are two essential differences
+between quantiﬁcation and density estimation, i.e., that (a) in density estimation the
+class to which a data item belongs can be established with certainty (e.g., if a ball is
+picked, it can be decided with certainty if it is black or white), while in quantiﬁcation
+this is not true; and (b) in density estimation the population of data items is usually so
+large as to make it infeasible to check the class to which each data item belongs (e.g.,
+only a limited sample of balls is picked), while this is not true in quantiﬁcation, where
+it is assumed that all the items can be checked for the purpose of estimating the class
+distribution.
+A research area that might seem related to quantiﬁcation is collective classiﬁcation (CoC) [Sen et al. 2008]. Similarly to quantiﬁcation, in CoC the classiﬁcation of
+instances is not viewed in isolation. However, CoC is radically different from quantiﬁcation in that its focus is on improving the accuracy of classiﬁcation by exploiting
+relationships between the objects to classify (e.g., hypertextual documents that link to
+each other). Differently from quantiﬁcation, CoC (a) assumes the existence of explicit
+relationships between the objects to classify, which quantiﬁcation does not, and (b) is
+evaluated at the individual level, rather than at the aggregate level as quantiﬁcation.
+Quantiﬁcation bears strong relations with prevalence estimation from screening
+tests, an important task in epidemiology . A screening test
+is a test that a patient undergoes in order to check if s/he has a given pathology. Tests
+are often imperfect, i.e., they may give rise to false positives (the patient is incorrectly
+diagnosed with the pathology) and false negatives (the test wrongly diagnoses the patient to be free from the pathology). Therefore, testing a patient is akin to classifying
+a document, and using these tests for estimating the prevalence of the pathology in a
+given population is akin to performing aggregative quantiﬁcation. The main difference
+between this task and quantiﬁcation is that a screening test typically has known and
+fairly constant recall (that epidemiologists call “sensitivity”) and fallout (whose complement epidemiologists call “speciﬁcity”), while the same usually does not happen for
+a classiﬁer.
+ACM Transactions on Knowledge Discovery from Data, Vol. VV, No. NN, Article AA, Publication date: YYYY.
+Optimizing Text Quantiﬁers for Multivariate Loss Functions
+6. CONCLUSIONS
+We have presented SVM(KLD), a new method for performing quantiﬁcation, an important (if scarcely investigated) task in supervised learning, where estimating class
+prevalence, rather that classifying individual items, is the goal. The method is sharply
+different from most other methods presented in the literature. While most such methods adopt a general-purpose classiﬁer (where the decision threshold has possibly been
+tuned according to some heuristics) and adjust the outcome of the “classify and count”
+phase, we adopt a straightforward “classify and count” approach (with no threshold
+tuning and/or a posteriori adjustment) but generate a classiﬁer that is directly optimized for the evaluation measure used for estimating quantiﬁcation accuracy. This
+is not straightforward, since an evaluation measure for quantiﬁcation is inherently
+non-linear and multivariate, and thus does not lend itself to optimization via standard
+supervised learning algorithms. We circumvent this problem by adopting a supervised
+learning method for structured prediction that allows the optimization of non-linear,
+multivariate loss functions, and extend it to optimize KLD, the standard evaluation
+measure of the quantiﬁcation literature.
+Experimental results that we have obtained by comparing SVM(KLD) with ten different state-of-the-art baselines show that SVM(KLD) (i) is more accurate (in a statistically signiﬁcant way) than the competition, (ii) is more stable than the tested
+baselines, since it systematically shows very good performance irrespectively of class
+prevalence (i.e., level of imbalance) and distribution drift (i.e., discrepancy between
+the class distributions in the training and in the test set), (iii) is also accurate at the
+classiﬁcation (aside from the quantiﬁcation) level, and (iv) is 20 times faster to train
+than the competition. These experiments have been run, against 10 state-of-the-art
+baseline methods, on a batch of 5,148 binary, high-dimensional datasets (averaging
+more than 15,200 documents each and characterized by more than 50,000 features)
+and on a further batch of 352 binary, high-dimensional datasets (averaging more than
+3,200 documents each and characterized by more than 10,000 features), all characterized by varying levels of class imbalance and distribution drift. These ﬁgures qualify
+the present experimentation as a very large one.
+ACKNOWLEDGMENTS
+We are indebted to George Forman for letting us have the code for all the quantiﬁcation methods he introduced in [Forman 2005; 2006a; 2008], which we have used as baselines. We are also very grateful to
+Thorsten Joachims for making his SVMperf package available, and for useful discussions about its use in
+quantiﬁcation.
+ACM Transactions on Knowledge Discovery from Data, Vol. VV, No. NN, Article AA, Publication date: YYYY.
+Andrea Esuli and Fabrizio Sebastiani
+A. APPENDIX: ON THE PRESUMED INVARIANCE OF TPR AND FPR ACROSS TEST SETS
+Most methods described in §2.2 (speciﬁcally: ACC, PACC, T50, X, MAX, MS) rely,
+among other things, on the assumption that tprT e and fprT e can reliably be estimated
+via k-fold cross-validation on the training set; in other words, they rely on the assumption that tpr and fpr do not change when the classiﬁer is applied to different test sets.
+Indeed, Forman explicitly assumes that the application domains he confronts are of
+a type that [Fawcett and Flach 2005] call “y →x domains”, in which tpr and fpr are
+in fact invariant with respect to the test set the classiﬁer is applied to. The notation
+y →x means that the value of the y variable (the output label) probabilistically determines the values of the x variables (the input features), i.e., x causally depends on y;
+in other words, the class-conditional probabilities p(x|y) are invariant across different
+test sets. For instance, our classiﬁcation problem may consist in predicting whether
+a patient suffers or not from a given pathology (a fact represented by a binary variable y) given a vector x of observed symptoms. This is indeed a “y →x domain”, since
+the causality relation is from y to x, i.e., it is the presence of the pathology that determines the presence of the symptoms, and not vice versa. In other words, the class
+conditional probabilities p(x|y) do not change across test sets: if more people suffer
+from the pathology, more people will exhibit its symptoms. Important quantiﬁcation
+problems within y →x domains do exist. One of them is when epidemiologists attempt
+to estimate the prevalence of various causes of death (y) from “verbal autopsies”, i.e.,
+binary vectors of symptoms (x) as extracted from oral accounts obtained from relatives
+of the deceased [King and Lu 2008].
+However, many application domains are instead of the type that [Fawcett and Flach
+2005] call “x →y domains”, where it is y that causally depends on x, and not vice
+versa. For instance, our classiﬁcation problem may consist in predicting whether the
+home football team is going to win tomorrow’s match or not (y) given a number of stats
+(x) about its recent performance (e.g., number of goals scored in the last k matches,
+number of goals conceded, etc.). This is indeed a “x →y domain”, since the (assumed)
+causality relation is from x to y, i.e., the recent performance of the team is an indicator
+of its state of form, which may probabilistically determine the outcome of the game; it
+is certainly not the case that the outcome of the game determines the past performance
+of the team! And in x →y domains the class-conditional probabilities p(x|y) are not
+guaranteed to be constant.
+One may wonder whether text classiﬁcation contexts are y →x or x →y domains.
+Given the wide array of uses text classiﬁcation has been put to, we think it is difﬁcult
+to make general statements about this. We prefer to follow the advice in [Fawcett and
+Flach 2005], who recommend “that researchers test their assumptions in practice”. We
+have thus compared, for each of our 5,148 RCV1-V2 test sets and 352 OHSUMED-S
+test sets, (a) the tprT e and fprT e values that the standard linear SVM classiﬁer (the
+one at the heart of all our baseline methods) has obtained, with (b) the corresponding
+tprT r and fprT r values that we have computed on the training set via k-fold cross
+validation. If tpr and fpr were invariant across different sets, then (a) and (b) should
+be approximately the same. The results, which are displayed in Table VII, show that in
+our domain tpr and fpr are far from being invariant across different sets. For instance,
+on RCV1-V2 the average tprT r as computed via k-fold cross-validation is 0.443, while
+the analogous average on the 5,148 test sets is 0.357, a -19.29% decrease; interestingly
+enough, on OHSUMED-S we witness an analogous trend but with opposite sign, with
+ACM Transactions on Knowledge Discovery from Data, Vol. VV, No. NN, Article AA, Publication date: YYYY.
+Optimizing Text Quantiﬁers for Multivariate Loss Functions
+Table VII. Average tpr and fpr values measured on the training and test sets of the RCV1-V2 and
+OHSUMED-S datasets. The values in the avg(tprT r) and avg(fprT r) are computed via k-fold crossvalidation, and are thus averages across 99 classes (RCV1-V2) and 88 classes (OHSUMED-S). The
+values in the avg(tprT e) and avg(fprT e) are averages across 5,148 test sets (RCV1-V2) and 352
+test sets (OHSUMED-S). Column 4 and 7 show the relative variation in these values, measured as
+(tprT e −tprT r)/(tprT r) and (fprT e −fprT r)/(fprT r), respectively.
+avg(tprT r)
+avg(tprT e)
+rel % diff
+avg(fprT r)
+avg(fprT e)
+rel % diff
+a +59.48% variation (from 0.196 to 0.313) in going from training to test sets17. A similar
+although less marked pattern can be observed for fpr.
+In conclusion, tpr and fpr turn out to be far from being invariant across different
+sets, at least in the application contexts from which our datasets are drawn. It is thus
+evident that, at the very least in text quantiﬁcation contexts, assuming that tpr and
+fpr are indeed invariant, and adopting methods that rely on this assumption, is risky,
+and deﬁnitely suboptimal in some cases. This is yet another reason to prefer methods,
+such as SVM(KLD), which do not rely on any such assumption.

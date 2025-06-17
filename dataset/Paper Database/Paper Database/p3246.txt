@@ -1,0 +1,1252 @@
+What makes for effective detection proposals?
+Jan Hosang1, Rodrigo Benenson1, Piotr Dollár 2, and Bernt Schiele1
+1Max Planck Institute for Informatics
+2 Facebook AI Research (FAIR)
+Abstract—Current top performing object detectors employ detection proposals to guide the search for objects, thereby avoiding
+exhaustive sliding window search across images. Despite the popularity and widespread use of detection proposals, it is unclear which
+trade-offs are made when using them during object detection. We provide an in-depth analysis of twelve proposal methods along with
+four baselines regarding proposal repeatability, ground truth annotation recall on PASCAL, ImageNet, and MS COCO, and their impact
+on DPM, R-CNN, and Fast R-CNN detection performance. Our analysis shows that for object detection improving proposal localisation
+accuracy is as important as improving recall. We introduce a novel metric, the average recall (AR), which rewards both high recall and
+good localisation and correlates surprisingly well with detection performance. Our ﬁndings show common strengths and weaknesses of
+existing methods, and provide insights and metrics for selecting and tuning proposal methods.
+Index Terms—Computer Vision, object detection, detection proposals.
+INTRODUCTION
+NTIL recently, the most successful approaches to object
+detection utilised the well known “sliding window”
+paradigm – , in which a computationally efﬁcient classiﬁer tests for object presence in every candidate image
+window. Sliding window classiﬁers scale linearly with the
+number of windows tested, and while single-scale detection
+requires classifying around 104 – 105 windows per image,
+the number of windows grows by an order of magnitude
+for multi-scale detection. Modern detection datasets – 
+also require the prediction of object aspect ratio, further
+increasing the search space to 106 – 107 windows per image.
+The steady increase in complexity of the core classiﬁers
+has led to improved detection quality, but at the cost of signiﬁcantly increased computation time per window – .
+One approach for overcoming the tension between computational tractability and high detection quality is through
+the use of “detection proposals” – . Under the assumption that all objects of interest share common visual
+properties that distinguish them from the background, one
+can design or train a method that, given an image, outputs
+a set of proposal regions that are likely to contain objects.
+If high object recall can be reached with considerably fewer
+windows than used by sliding window detectors, signiﬁcant speed-ups can be achieved, enabling the use of more
+sophisticated classiﬁers.
+Current top performing object detectors for PASCAL
+ and ImageNet all use detection proposals – ,
+ . In addition to allowing for use of more sophisticated
+classiﬁers, the use of detection proposals alters the data distribution that the classiﬁers handle. This may also improve
+detection quality by reducing spurious false positives.
+Most papers on generating detection proposals perform
+fairly limited evaluations, comparing results using only a
+subset of metrics, datasets, and competing methods. In
+this work, we aim to revisit existing work on proposals
+Figure 1: What makes object detection proposals effective?
+and compare most publicly available methods in a uniﬁed
+framework. While this requires us to carefully re-examine
+the metrics and settings for evaluating proposals, it allows
+us to better understand the beneﬁts and limitations of
+current methods.
+The contributions of this work are as follows:
+In §2 we provide a systematic overview of detection
+proposal methods and deﬁne simple baselines that
+serve as reference points. We discuss the taxonomy of
+proposal methods, and describe commonalities and
+differences of the various approaches.
+In §3 we introduce the notion of proposal repeatability, discuss its relevance when considering proposals
+for detection, and measure the repeatability of existing methods. The results are somewhat unexpected.
+In §4 we study object recall on the PASCAL VOC
+2007 test set , and for the ﬁrst time, over the
+larger and more diverse ImageNet 2013 and MS
+COCO 2014 validation sets. The latter allows us
+to examine possible biases towards PASCAL objects
+categories. Overall, these experiments are substanarXiv:1502.05082v3 [cs.CV] 1 Aug 2015
+tially broader in scope than previous work, both in
+the number of methods evaluated and datasets used.
+In §5 we evaluate the inﬂuence of different proposal
+methods on DPM , R-CNN , and Fast R-CNN
+ detection performance. Based on our results,
+we introduce a novel evaluation metric, the average
+recall (AR). We show that AR is highly correlated
+with detector performance, more so than previous
+metrics, and we advocate AR to become the standard
+metric for evaluating proposals. Our experiments
+provide the ﬁrst clear guidelines for selecting and
+tuning proposal methods for object detection.
+All evaluation scripts and method bounding boxes used in
+this work are publicly available to facilitate the reproduction
+of our evaluation1. The results presented in this paper
+summarise results of over 500 experiments on multiple data
+sets and required multiple months of CPU time.
+An earlier version of this work appeared in .
+DETECTION PROPOSAL METHODS
+Detection proposals are similar in spirit to interest point
+detectors , . Interest points allow for focusing attention to the most salient and distinctive locations in an
+image, greatly reducing computation for subsequent tasks
+such as classiﬁcation, retrieval, matching, and detection.
+Likewise, object proposals considerably reduce computation
+compared to the dense (sliding window) detection framework by generating candidate proposals that may contain
+objects. This in turn enables use of expensive classiﬁers per
+window – .
+It is worthwhile noting that interest points were dominant when computing feature descriptors densely was
+prohibitive. However, with improved algorithmic efﬁciency
+and increased computational power, it is now standard
+practice to use dense feature extraction . The opposite
+trend has occurred in object detection, where the dense
+sliding window framework has been overtaken by use of
+proposals. We aim to understand if detection proposals improve detection accuracy or if their use is strictly necessary
+for computational reasons. While in this work we focus
+on the impact of proposals on detection, proposals have
+applications beyond object detection, as we discuss in §6.
+Two general approaches for generating object proposals have emerged: grouping methods and window scoring
+methods. These are perhaps best exempliﬁed by the early
+and well known SelectiveSearch and Objectness proposal methods. We survey these approaches
+in §2.1 and §2.2, followed by an overview of alternate
+approaches in §2.3 and baselines in §2.4. Finally, we consider
+the connection between proposals and cascades in §2.5 and
+provide additional method details in §2.6.
+The survey that follows is meant to be exhaustive. However, for the purpose of our evaluations, we only consider
+methods for which source code is available. We cover a
+diverse set of methods (in terms of quality, speed, and
+underlying approach). Table 1 gives an overview of the 12
+selected methods (plus 4 baselines).2 Table 1 also indicates
+1. Project page: 
+2. We mark the evaluated methods with a ‘†’ in the following listing.
+high level information regarding the output of each method
+and a qualitative overview of the results of the evaluations
+performed in the remainder of this paper.
+In this paper we concentrate on class-agnostic proposals for single-frame, bounding box detection. For proposal
+methods that output segmentations instead of bounding
+boxes, we convert the output to bounding boxes for the
+purpose of our evaluation. Methods that operate on videos
+and require temporal information (e.g. ) are considered
+outside the scope of this work.
+Grouping proposal methods
+Grouping proposal methods attempt to generate multiple
+(possibly overlapping) segments that are likely to correspond to objects. The simplest such approach would be to
+directly use the output of any hierarchical image segmentation algorithm, e.g. Gu et al. use the segmentation
+produced by gPb . To increase the number of candidate
+segments, most methods attempt to diversify such hierarchies, e.g. by using multiple low level segmentations , ,
+ or starting with an over-segmentation and randomising
+the merge process . The decision to merge segments is
+typically based on a diverse set of cues including superpixel
+shape, appearance cues, and boundary estimates (typically
+obtained from , ).
+We classify grouping methods into three types according
+to how they generate proposals. Broadly speaking, methods
+generate region proposals by grouping superpixels (SP),
+often using , solving multiple graph cut (GC) problems
+with diverse seeds, or directly from edge contours (EC), e.g.
+from , . In the method descriptions below the type of
+each method is marked by SP, GC, or EC accordingly.
+We note that while all the grouping approaches have the
+strength of producing a segmentation mask of the object, we
+evaluate only the enclosing bounding box proposals.
+SelectiveSearch†SP
+ , greedily merges
+superpixels to generate proposals. The method has
+no learned parameters, instead features and similarity functions for merging superpixels are manually designed. SelectiveSearch has been broadly
+used as the proposal method of choice by many stateof-the-art object detectors, including the R-CNN and
+Fast R-CNN detectors , .
+RandomizedPrim’s†SP uses similar features
+as SelectiveSearch, but introduces a randomised
+superpixel merging process in which all probabilities
+have been learned. Speed is substantially improved.
+Rantalankila†SP proposes a superpixel merging strategy similar to SelectiveSearch, but using different features. In a subsequent stage, the generated segments are used as seeds for solving graph
+cuts in the spirit of CPMC (see below) to generate
+more proposals.
+Chang SP combines saliency and Objectness
+with a graphical model to merge superpixels into
+ﬁgure/background segmentations.
+CPMC†GC , avoids initial segmentations and
+computes graph cuts with several different seeds and
+unaries directly on pixels. The resulting segments are
+ranked using a large pool of features.
+#proposals
+Window scoring
+EdgeBoxes 
+Window scoring
+Endres 
+Geodesic 
+Objectness 
+Window scoring
+Rahtu 
+Window scoring
+RandomizedPrim’s 
+Rantalankila 
+Rigor 
+SelectiveSearch 
+SlidingWindow
+Superpixels
+Table 1: Comparison of different detection proposal methods. Grey check-marks indicate that the number of proposals
+is controlled by indirectly adjusting parameters. Repeatability, quality, and detection rankings are provided as rough
+summary of the experimental results: “-” indicates no data, “·”, “⋆”, “⋆⋆”, “⋆⋆⋆” indicate progressively better results.
+These guidelines were obtained based on experiments presented in sections §3, §4, and §5, respectively.
+Endres†GC , builds a hierarchical segmentation from occlusion boundaries and solves graph
+cuts with different seeds and parameters to generate
+segments. The proposals are ranked based on a wide
+range of cues and in a way that encourages diversity.
+Rigor†GC is a somewhat improved variant of
+CPMC that speeds computation considerably by reusing computation across multiple graph-cut problems and using the fast edge detectors from , .
+Geodesic†EC starts from an over-segmentation
+of the image based on . Classiﬁers are used to
+place seeds for a geodesic distance transform. Level
+sets of each of the distance transforms deﬁne the
+ﬁgure/ground segmentations that are the proposals.
+MCG†EC introduces a fast algorithm for computing multi-scale hierarchical segmentations building
+on . Segments are merged based on edge strength
+and the resulting object hypotheses are ranked using
+cues such as size, location, shape, and edge strength.
+Window scoring proposal methods
+An alternate approach for generating detection proposals
+is to score each candidate window according to how likely
+it is to contain an object. Compared to grouping approaches
+these methods usually only return bounding boxes and tend
+to be faster. Unless window sampling is performed very
+densely, this approach typically generates proposals with
+low localisation accuracy. Some methods counteract this by
+reﬁning the location of the generated windows.
+Objectness† , is one of the earliest and
+well known proposal methods. An initial set of proposals is selected from salient locations in an image,
+these proposals are then scored according to multiple
+cues including colour, edges, location, size, and the
+strong “superpixel straddling” cue.
+Rahtu† begins with a large pool of proposal
+regions generated from individual superpixels, pairs
+and triplets of superpixels, and multiple randomly
+sampled boxes. The scoring strategy used by Objectness is revisited, and improvements are proposed. adds additional low-level features and
+highlights the importance of properly tuned nonmaximum suppression.
+Bing† uses a simple linear classiﬁer trained
+over edge features and applied in a sliding window
+manner. Using adequate approximations a very fast
+class agnostic detector is obtained (1 ms/image on
+CPU). However, it was shown that the classiﬁer has
+minimal inﬂuence and similar performance can be
+obtained without looking at the image . This image independent method is named CrackingBing.
+EdgeBoxes†EC also starts from a coarse sliding window pattern, but builds on object boundary
+estimates (obtained via structured decision forests
+ , ) and adds a subsequent reﬁnement step
+to improve localisation. No parameters are learned.
+The authors propose tuning the density of the sliding window pattern and the threshold of the nonmaximum suppression to tune the method for different overlap thresholds (see §5).
+Feng poses proposal generation as the search
+for salient image content and introduces new saliency measures, including the ease with which a
+potential object can be composed from the rest of the
+image. The sliding window paradigm is used and
+every location scored according to the saliency cues.
+Zhang proposes to train a cascade of ranking
+SVMs on simple gradient features. The ﬁrst stage has
+separate classiﬁers for each scale and aspect ratio; the
+second stage ranks all proposals from the previous
+stage. All SVMs are trained using structured output
+learning to score windows higher that overlap more
+with objects. Because the cascade is trained and
+tested over the same set of categories, it is unclear
+how well this approach generalises across categories.
+RandomizedSeeds uses multiple randomised
+SEED superpixel maps to score each candidate
+window. The scoring is done using a simple metric
+similar to “superpixel straddling” from Object-
+ness, no additional cues are used. The authors show
+that using multiple superpixel maps signiﬁcantly
+improves recall.
+Alternative proposal methods
+ShapeSharing
+ is a non-parametric, datadriven method that transfers object shapes from exemplars into test images by matching edges. The resulting regions are subsequently merged and reﬁned
+by solving graph cuts.
+Multibox , trains a neural network to directly regress a ﬁxed number of proposals in the
+image without sliding the network over the image.
+Each of the proposals has its own location bias to
+diversify the location of the proposals. The authors
+report top results on ImageNet.
+Baseline proposal methods
+We additionally consider a set of baselines that serve as reference points. Like all evaluated methods described earlier,
+the following baselines are class independent:
+Uniform†: To generate proposals, we uniformly
+sample the bounding box centre position, square root
+area, and log aspect ratio. We estimate the range of
+these parameters on the PASCAL VOC 2007 training
+set after discarding 0.5% of the smallest and largest
+values, so that our estimated distribution covers 99%
+of the data.
+Gaussian†: Likewise, we estimate a multivariate
+Gaussian distribution for the bounding box centre
+position, square root area, and log aspect ratio. After
+calculating mean and covariance on the training set
+we sample proposals from this distribution.
+SlidingWindow†: We place windows on a regular
+grid as is common for sliding window object detectors. The requested number of proposals is distributed across windows sizes (width and height),
+and for each window size, we place the windows
+uniformly. This procedure is inspired by the implementation of Bing , .
+Superpixels†: As we will show, superpixels have
+an important inﬂuence on the behaviour of proposal
+methods. Since ﬁve of the evaluated methods build
+on , we use it as a baseline: each low-level segment is used as a detection proposal. This method
+serves as a lower-bound on recall for methods using
+superpixels.
+It should be noted that with the exception of Superpixels,
+all the baselines generate proposal windows independent of
+the image content. SlidingWindow is deterministic given
+the image size (similar to CrackingBing), while the Uniform and Gaussian baselines are stochastic.
+Proposals versus cascades
+Many proposal methods utilise image features to generate
+candidate windows. One can interpret this process as a
+discriminative one; given such features a method quickly
+determines whether a window should be considered for
+detection. Indeed, many of the surveyed methods include
+some form of discriminative learning (SelectiveSearch
+and EdgeBoxes are notable exceptions). As such, proposal
+methods are related to cascades , – , which use
+a fast but inaccurate classiﬁer to discard a vast majority
+of unpromising proposals. Although traditionally used for
+class speciﬁc detection, cascades can also apply to sets of
+categories , .
+The key distinction between traditional cascades and
+proposal methods is that the latter is required to generalise beyond object classes observed during training. So
+what allows discriminatively trained proposal methods to
+generalise to unseen categories? A key assumption is that
+training a classiﬁer for a large enough number of categories
+is sufﬁcient to generalise to unseen categories (for example,
+after training on cats and dogs proposals may generalise
+to other animals). Additionally, the discriminative power of
+the classiﬁer is often limited (e.g. Bing and Zhang), thus
+preventing overﬁtting to the training classes and forcing the
+classiﬁer to learn coarse properties shared by all object (e.g.
+“objects are roundish”). This key distinction is also noted
+in . We test the generalisation of proposal methods by
+evaluating on datasets with many additional classes in §4.
+Controlling the number of proposals
+In this work we will perform an extensive apples-to-apples
+comparison of the 12 methods (plus 4 baselines) listed in
+table 1. In order to be able to compare amongst methods, for
+each method we need to control the number of proposals
+produced per image. By default, the evaluated methods
+provide variable numbers of detection proposals, ranging
+from just a few (∼102) to a large number (∼105). Additionally, some methods output sorted or scored proposals, while
+others do not. Having more proposals increases the chance
+for high recall, thus for each method in all experiments
+we attempt to carefully control the number of generated
+proposals. Details are provided next.
+Albeit not all having explicit control over the number
+of proposals, Objectness, CPMC, Endres, Selective
+Search, Rahtu, Bing, MCG, and EdgeBoxes do provide
+scored or sorted proposals so we can use the top k.
+Rantalankila, Rigor, and Geodesic provide neither
+direct control over the number of proposals nor sorted
+proposals, but indirect control over k can be obtained by
+altering other parameters. Thus, we record the number of
+produced proposals on a subset of the images for different
+parameters and linearly interpolate between the parameter
+settings to control k. For RandomizedPrim’s, which lacks
+any control over the number of proposals, we randomly
+sample k proposals.
+Finally, we observed a number of methods produce
+duplicate proposals. All such duplicates were removed.
+PROPOSAL REPEATABILITY
+Training a detector on detection proposals rather than on
+all sliding windows modiﬁes the appearance distribution
+of both positive and negative windows. In section 4, we
+look into how well the different object proposals overlap
+with ground truth annotations of objects, which is an analysis of the positive window distribution. In this section
+(a) Example rotation of 20◦.
+(b) Resulting crop from (a).
+(c) Example rotation of −5◦.
+(d) Resulting crop from (c).
+Figure 2: Examples of rotation perturbation. (a) shows the
+largest rectangle with the same aspect as the original image
+that can ﬁt into the image under a 20◦rotation, and (b) the
+resulting crop. All other rotations are cropped to the same
+dimensions, e.g. the −5◦rotation in (c) to the crop in (d).
+we analyse the distribution of negative windows: if the
+proposal method does not consistently propose windows
+on similar image content without objects or with partial
+objects, the classiﬁer may have difﬁculty generating scores
+on negative windows on the test set. As an extreme, motivational example, consider a proposal method that generates
+proposals containing only objects on the training set but
+containing both objects and negative windows on the test
+set. A classiﬁer trained on such proposals would be unable
+to differentiate objects from background, thus at test time
+would give useless scores for the negative windows. Thus
+we expect that a consistent appearance distribution for proposals on the background is likewise relevant for a detector.
+We call the property of proposals being placed on similar
+image content the repeatability of a proposal method. Intuitively proposals should be repeatable on slightly different
+images with the same content. To evaluate repeatability we
+compare proposals that are generated for one image with
+proposals generated for a slightly modiﬁed version of the
+same image. PASCAL VOC does not contain suitable
+images. An alternative is the dataset of , but it only
+consists of 54 images and even fewer objects. Instead, we
+opt to apply synthetic transformations to PASCAL images.
+Evaluation protocol for repeatability
+Our evaluation protocol is inspired by , which evaluates
+interest point repeatability. For each image in the PASCAL
+VOC 2007 test set , we generate several perturbed versions. We consider blur, rotation, scale, illumination, JPEG
+compression, and “salt and pepper” noise (see ﬁgures 3-4).
+For each pair of reference and perturbed images we
+compute detection proposals with a given method (generating 1000 windows per image). The proposals are projected
+back from the perturbed into the reference image and then
+Figure 3: Illustration of the perturbation ranges used for the
+repeatability experiments.
+matched to the proposals in the reference image. In the case
+of rotation, all proposals whose centre lies outside the image
+after projection are removed before matching. For matching
+we use the intersection over union (IoU) criterion and we
+solve the resulting bipartite matching problem greedily for
+efﬁciency reasons. Given the matching, we plot the recall
+for every IoU threshold and deﬁne the repeatability to be the
+area under this “recall versus IoU threshold” curve between IoU
+0 and 13. This is similar to computing the average best
+overlap (ABO, see §A) for the proposals on the reference
+image. Methods that propose windows at similar locations
+at high IoU—and thus on similar image content—are more
+repeatable, since the area under the curve is larger.
+One issue regarding such proposal matching is that large
+windows are more likely to match than smaller ones since
+the same perturbation will have a larger relative effect
+on smaller windows. This effect is important to consider
+since different methods have very different distributions of
+proposal window sizes as can be seen in ﬁgure 5a. To reduce
+the impact of this effect, we bin the original image windows
+by area into 10 groups, and evaluate the area under the
+3. In contrast to the average recall (AR) used in later sections, we use
+the area under the entire curve. We are interested in how much proposals change, which is independent of the PASCAL overlap criterion.
+recall versus IoU curve per size group. In ﬁgure 5b we show
+the recall versus IoU curve for a small blur perturbation
+for each of the 10 groups. As expected, large proposals
+have higher repeatability. In order to measure repeatability
+independently of the distribution of windows sizes, in all
+remaining repeatability experiments in ﬁgure 5 we show
+the (unweighted) average across the 10 size groups.
+We omit the slowest two methods, CPMC and Endres,
+due to computational constraints (these experiments require
+running the detectors ~50 times on the entire PASCAL test
+set, once for every perturbation).
+Repeatability experiments and results
+There are some salient aspects of the result curves in ﬁgure 5
+that need additional explanation. First, not all methods have
+100% repeatability when there is no perturbation. This is
+due to random components in the selection of proposals for
+several methods. Attempting to remove a method’s random
+component is beyond the scope of this work and could potentially considerably alter the method. A second important
+aspect is the large drop of repeatability for most methods,
+even for subtle image changes. We observed that many of
+the methods based on superpixels are particularly prone to
+such perturbations. Indeed the Superpixels baseline itself
+shows high sensitivity to perturbations, so the instability of
+the superpixels likely explains much of this effect. Inversely
+we notice that methods that are not based on superpixels
+are most robust to small image changes (e.g. Bing and also
+the baselines that ignore image content).
+We now discuss the details and effects of each perturbation on repeatability, shown in ﬁgure 5:
+Scale (5c): We uniformly sample the scale factor from .5×
+to 2×, and test additional scales near the original resolution (.9×, .95×, .99×, 1.01×, 1.05×, 1.1×). Upscaling is
+done with bicubic interpolation and downscaling with antialiasing. All methods except Bing show a drastic drop with
+small scale changes, but suffer only minor degradation for
+larger changes. Bing is more robust to small scale changes;
+however, it is more sensitive to larger changes due to its use
+of a coarse set of box sizes while searching for candidates
+(this also accounts for its dip in repeatability at half scales).
+The SlidingWindow baseline suffers from the same effect.
+JPEG artefacts (5d): To create JPEG artefacts we write the
+target image to disk with the Matlab function imwrite and
+specify a quality settings ranging from 5% to 100%, see
+ﬁgure 3. Even the 100% quality setting is lossy, so we also
+include a lossless setting for comparison. Similar to scale
+change, even slight compression has a large effect and more
+aggressive compression shows monotonic degradation. Despite using gradient information, Bing is most robust to
+these kind of changes.
+Rotation (5e): We rotate the image in 5◦steps between −20◦
+and 20◦. To ensure roughly the same content is visible under
+all rotations, we construct the largest box with the same
+aspect as the original image that ﬁts into the image under
+a 20◦rotation and use this crop for all other rotations, see
+ﬁgure 2. All proposal methods are equally affected by image
+rotation. The drop of the Uniform and Gaussian baselines
+indicate the repeatability loss due to the fact that we are
+matching rotated bounding boxes.
+Illumination (5f): To synthetically alter illumination of an
+image we changed its brightness channel in HSB colour
+space. We vary the brightness between 50% and 150% of the
+original image so that some over and under saturation occurs, see ﬁgure 3. Repeatability under illumination changes
+shows a similar trend as under JPEG artefacts. Methods
+based on superpixels are heavily affected. Bing is more
+robust, likely due to use of gradient information which is
+known to be fairly robust to illumination changes.
+Blur (5g): We blur the images with a Gaussian kernel
+with standard deviations 0 ≤σ ≤8, see ﬁgure 3. The
+repeatability results again exhibit a similar trend although
+the drop is stronger for a small σ.
+Salt and pepper noise (5h): We sample between 1 and 1000
+random locations in the image and change the colour of the
+pixel to white if it is a dark and to black otherwise, see
+ﬁgure 3. Surprisingly, most methods already lose some repeatability when even a single pixel is changed. Signiﬁcant
+degradation in repeatability for the majority of the methods
+occurs when merely ten pixels are modiﬁed.
+Discussion: Small changes to an image cause noticeable
+differences in the set of detection proposals for all methods
+except Bing. The higher repeatability of Bing is explained
+by its sliding window pattern, which has been designed
+to cover almost all possible annotations with IoU = 0.5
+(see also Cracking Bing ). As one cause for poor
+repeatability we identify the segmentation algorithm on
+which many methods build. Among all proposal methods,
+EdgeBoxes also performs favourably, possibly because it
+avoids the hard decision of grouping pixels into superpixels.
+We also experimented with repeatability of boxes that
+touch annotations sufﬁciently (IoU ≥0.5), which showed
+very similar trends, indicating that the issue of repeatability
+also applies to proposals that partially cover objects.
+Different applications will be more or less sensitive to
+repeatability. Our results indicate that if repeatability is a
+concern, the proposal method should be selected with care.
+For object detection, another aspect of interest is recall,
+which we explore in the next section.
+PROPOSAL RECALL
+When using detection proposals for detection it is important
+to have a good coverage of the objects of interest in the
+test image, since missed objects cannot be recovered in the
+subsequent classiﬁcation stage. Thus it is common practice
+to evaluate the quality of proposals based on the recall of
+the ground truth annotations.
+Evaluation protocol for recall
+The protocol introduced in has served as a guideline for most evaluations in the literature. While previous papers do show
+various comparisons on PASCAL, the train and test sets
+vary amongst papers, and the metrics shown tend to favour
+different methods. We provide an extensive and uniﬁed
+evaluation and show that different metrics result in different
+rankings of proposal methods (e.g. see ﬁgure 6b versus 7b).
+Figure 4: Example of the image perturbations considered. Top to bottom, left to right: original, blur, illumination, JPEG
+artefact, rotation, scale perturbations, and “salt and pepper” noise.
+sqrt(relative candidate size)
+(a) Histogram of proposal sizes on PASCAL.
+IoU overlap threshold
+Large windows
+Small windows
+(b) Example of recall at different scales.
+log 2(scale)
+repeatability
+(c) Scale.
+quality of compression in %
+repeatability
+(d) JPEG artefacts.
+rotation in degree
+repeatability
+(e) Rotation.
+lighting in %
+repeatability
+(f) Illumination.
+sigma in pixels
+repeatability
+log 10(number of pixels)
+repeatability
+(h) Salt and pepper noise.
+Objectness
+RandomizedPrims
+Rantalankila
+SelectiveSearch
+Sliding window
+Superpixels
+Ground truth VOC 2007
+Ground truth ILSVRC 2013
+Ground truth COCO 2014
+Figure 5: Repeatability results under various perturbations.
+IoU overlap threshold
+PASCAL 2007
+(a) 100 proposals per image.
+IoU overlap threshold
+(b) 1 000 proposals per image.
+IoU overlap threshold
+(c) 10 000 proposals per image.
+Objectness
+RandomizedPrims
+Rantalankila
+SelectiveSearch
+Sliding window
+Superpixels
+Figure 6: Recall versus IoU threshold on the PASCAL VOC 2007 test set.
+# proposals
+recall at IoU threshold 0.50
+PASCAL 2007
+(a) Recall at 0.5 IoU.
+# proposals
+recall at IoU threshold 0.80
+(b) Recall at 0.8 IoU.
+# proposals
+average recall
+(c) Average recall (between [0.5, 1] IoU).
+Objectness
+RandomizedPrims
+Rantalankila
+SelectiveSearch
+Sliding window
+Superpixels
+Figure 7: Recall versus number of proposal windows on the PASCAL VOC 2007 test set.
+Metrics: Evaluating (class agnostic) detection proposals is
+quite different from traditional class-speciﬁc detection 
+since most metrics (class confusion, background confusion,
+precision, etc.) do not apply. Instead, one of the primary
+metrics for evaluating proposals is, for a ﬁxed number of
+proposals, the fraction of ground truth annotations covered
+as the intersection over union (IoU) threshold is varied
+(ﬁgure 6). Another common and complementary metric is,
+for a ﬁxed IoU threshold, proposal recall as the number of
+proposals is varied (ﬁgure 7a, 7b). Finally, we deﬁne and
+report a novel metric, the average recall (AR) between IoU
+0.5 to 1, and plot AR versus number of proposals (ﬁgure 7c).
+PASCAL: We evaluate recall on the full PASCAL VOC 2007
+test set , which includes 20 object categories present in
+∼5 000 unconstrained images. For the purpose of proposal
+evaluation we include all 20 object categories and all ground
+truth bounding boxes, including “difﬁcult” ones, since our
+goal is to measure maximum recall. In contrast to , we
+compute a matching between proposals and ground truth,
+so one proposal cannot cover two objects. Note that while
+different methods may be trained on different sets of object
+categories and subsets of data, we believe evaluating on
+all categories at test time is appropriate as we care about
+absolute proposal quality. Such an evaluation strategy is
+further supported as many methods have no training stage,
+yet provide competitive results (e.g. SelectiveSearch).
+The PASCAL VOC 2007 test set, on which
+most proposal methods have been previously evaluated,
+has only 20 categories, yet detection proposal methods
+claim to predict proposals for any object category. Thus
+there is some concern that the proposal methods may be
+tuned to the PASCAL categories and not generalise well to
+novel categories. To investigate this potential bias, we also
+evaluate methods on the larger ImageNet 2013 validation
+set, which contains annotations for 200 categories in over
+∼20 000 images. It should be noted that these 200 categories
+are not ﬁne grained versions of the PASCAL ones. They
+include additional types of animals (e.g. crustaceans), food
+items (e.g. hot-dogs), household items (e.g. diapers), and
+other diverse object categories.
+MS COCO: Although ImageNet has 180 more classes than
+PASCAL, it is still similar in statistics like number of objects
+per image and size of objects. Microsoft Common Objects in
+Context (MS COCO) has more objects per image, smaller
+objects, but also fewer object classes (80 object categories).
+We evaluate the recall of this dataset to further investigate
+potential biases of proposal methods. We evaluate the recall
+on all annotations excluding the “crowd” annotations which
+may mark large image areas including a lot of background.
+Recall results
+PASCAL Results in ﬁgure 6 and 7 present a consistent trend
+across the different metrics. MCG, EdgeBoxes, Selective-
+IoU overlap threshold
+1 ImageNet 2013
+(a) 1 000 proposals per image.
+# proposals
+recall at IoU threshold 0.80
+(b) Recall at 0.8 IoU.
+# proposals
+average recall
+(c) Average recall (between [0.5, 1] IoU).
+RandomizedPrims
+SelectiveSearch
+SlidingWindow
+Superpixels
+Figure 8: Recall on the ImageNet 2013 validation set.
+IoU overlap threshold
+(a) 1 000 proposals per image.
+# proposals
+recall at IoU threshold 0.80
+(b) Recall at 0.8 IoU.
+# proposals
+average recall
+(c) Average recall (between [0.5, 1] IoU).
+RandomizedPrims
+SelectiveSearch
+SlidingWindow
+Superpixels
+Figure 9: Recall on the MS COCO 2014 validation set.
+Search, Rigor, and Geodesic are the best methods across
+different numbers of proposals. SelectiveSearch is surprisingly effective despite being fully hand-crafted (no machine learning involved). When considering less than 103
+proposals, MCG, Endres, and CPMC provide strong results.
+Overall, the methods fall into two groups: well localised
+methods that gradually lose recall as the IoU threshold increases and methods that only provide coarse bounding box
+locations, so their recall drops rapidly. All baseline methods,
+as well as Bing, Rahtu, Objectness, and EdgeBoxes fall
+into the latter category. Bing in particular, while providing
+high repeatability, only provides high recall at IoU = 0.5
+and drops dramatically when requiring higher overlap (the
+reason for this is identiﬁed in ).
+Baselines: When inspecting ﬁgure 6 from left to right,
+one notices that with few proposals the baselines provide
+relatively low recall (ﬁgure 6a). However as the number of
+proposals increases, Gaussian and Uniform become more
+competitive (ﬁgure 6b). In relative gain, detection proposal
+methods have most to offer for low numbers of windows.
+Average Recall: Rather than reporting recall at particular
+IoU thresholds, we also report the average recall (AR)
+between IoU 0.5 to 1 (which is related to the ABO metric,
+see §A), and plot AR for varying number of proposals in
+ﬁgure 7c. Much like the average precision (AP) metric for
+(class speciﬁc) object detection, AR summarises proposal
+performance across IoU thresholds (for a given number of
+proposals). In fact, in §5 we will show that AR correlates
+well with detection performance. As can be seen in ﬁgure
+7c, MCG performs well across the entire range of number
+of proposals. Endres and EdgeBoxes work well for a low
+number of proposals while for a higher number of proposals
+Rigor and SelectiveSearch perform best.
+ImageNet: As discussed, compared to PASCAL, ImageNet
+includes 10× ground truth classes and 4× images. Somewhat surprisingly the ImageNet results in ﬁgure 8 are
+almost identical to the ones in ﬁgures 6b, 7b, and 7c. To
+understand this phenomenon, we note that the statistics
+of ImageNet match the ones of PASCAL. In particular
+the typical image size and the mean number of object
+annotation per image (three) is similar in both datasets. This
+helps explain why the recall behaviour is similar, and why
+methods tuned on PASCAL still perform well on ImageNet.
+MS COCO: We present the same results for MS COCO
+in ﬁgure 9. We see different absolute numbers, yet similar
+trends with some notable exceptions as can be seen in
+ﬁgure 10a. EdgeBoxes no longer ranks signiﬁcantly better
+than SelectiveSearch, Geodesic and Rigor for few
+proposals. MCG and Endres improve relative to the other
+methods, in particular for a higher number of proposals. We
+PASCAL 2007
+ImageNet 2013
+average recall
+(a) AR with 1000 proposals
+sqrt(annotation area)
+VOC test 2007
+ILSVRC val 2013
+COCO val 2014
+(b) Ground truth size
+Figure 10: Comparison between all considered datasets:
+PASCAL VOC 2007 test set, ImageNet 2013 validation set,
+MS COCO 2014 validation set (see methods legend ﬁg. 7c).
+attribute these difference to different statistics of the dataset,
+particularly the different size distribution, see ﬁgure 10b.
+Overall, MCG is the top performing method across all
+datasets in terms of both recall and AR at all settings. This
+is readily apparent in ﬁgure 10a.
+Generalisation: We emphasise that although the results on
+PASCAL, ImageNet, and MS COCO are quite similar (see
+ﬁgure 10a), ImageNet covers 200 object categories, many of
+them unrelated to the 20 PASCAL categories and COCO has
+signiﬁcantly different statistics. In other words, there is no
+measurable over-ﬁtting of the detection proposal methods
+towards the PASCAL categories. This suggests that proposal
+methods transfer adequately amongst object classes, and can
+thus be considered true “objectness” measures.
+USING THE DETECTION PROPOSALS
+In this section we analyse detection proposals for use with
+object detectors. We consider two well known and quite
+distinct approaches to object detection. First we use a variant
+of the popular DPM part-based sliding window detector ,
+speciﬁcally the LM-LLDA detector . We also test the
+state of the art R-CNN and Fast R-CNN detectors
+which couple object proposals with a convolutional neural
+network classiﬁcation stage. Our goals are twofold. First,
+we aim to measure the performance of different proposal
+methods for object detection. Second, we are interested in
+evaluating how well the proposal metrics reported in the
+previous sections can serve as a proxy for predicting ﬁnal
+detection performance. All following experiments involving
+proposals use 1 000 proposals.
+Detector responses around objects
+As a preliminary experiment, we aim to quantify the importance of having well localised proposals for object detection.
+We begin by measuring how detection scores are affected by
+the overlap between the detector window and the ground
+truth annotation on the PASCAL 2007 test set . When
+considering the detectors’ bounding box prediction, we use
+the reﬁned position to compute the overlap.
+(a) Average R-CNN score map across all ground truth annotations.
+(b) A score map similar to the mean (around a correct detection).
+(c) A score map different than the mean (around a missed detection).
+Figure 11: Normalised score maps of the R-CNN around
+ground truth annotations on the PASCAL 2007 test set. One
+grid cell in each map has width and height of ∼7px after
+the object height has been resized to the detector window of
+227×227 px (3% of the object height).
+IoU with GT
+detector score
+LM-LLDA bboxpred
+Fast R-CNN
+Fast R-CNN bboxpred
+Figure 12: Normalised detector scores as a function of the
+overlap between the detector window and the ground truth.
+Score map: Figure 11a shows the average R-CNN detection
+score around the ground truth annotations. We notice that
+the score map is symmetric and attains a maximum at the
+ground truth object location. In other words, the detector
+has no systematic spatial or scale bias. However, averaging
+the score maps removes small details and imperfections of
+individual score maps. When considering individual activations instead of the average, we observe a high variance in
+the quality of the score maps, see ﬁgures 11b and 11c.
+Score vs IoU: In ﬁgure 12 we show average detection
+scores for proposals with varying IoU overlap with the
+ground truth. The scores have been scaled between zero
+and one per class before averaging across classes. The drop
+of the LM-LLDA scores at high overlaps is due to a bias
+introduced during training by the latent location estimation
+on positive samples; this bias is compensated for by the
+subsequent bounding box prediction stage of LM-LLDA.
+For Fast R-CNN, the bounding box prediction effectively
+improves proposal IoU with the ground truth and results in
+a substantial shift of the curve to the right.
+bicycle bird boat bottle
+table dog horse mbike person plant sheep
+LM-LLDA Dense
+Objectness
+Rantalankila
+SelectiveSearch
+SlidingWindow
+-10.2 -1.4
+Superpixels
+Top methods avg.
+Table 2: LM-LLDA detection results on PASCAL 2007 (with bounding box regression). The top row indicates the average
+precision (AP) of LM-LLDA alone, while the other rows show the difference in AP when adding proposal methods. Green
+indicates improvement of at least 2 AP, blue indicates minor change (−2 ≤AP < 2), and white indicates a decrease by
+more than 2 AP. EdgeBoxes achieves top results on 6 of the 20 categories; MCG performs best overall with -1.4 mAP loss.
+Fast R-CNN
+Objectness
+RandomizedPrims
+Rantalankila
+SelectiveSearch
+Sliding window
+Superpixels
+Table 3: Mean average precision (mAP) on PASCAL 2007
+for multiple detectors and proposal methods (using 1 000
+proposals). LM-LLDA and Fast R-CNN results shown before/after bounding box regression. The ﬁnal column shows
+the change in mAP obtained from re-training Fast R-CNN
+(with box regression) for the speciﬁc proposal method.
+Localisation: We observe from ﬁgure 12 that both LM-
+LLDA and R-CNN exhibit an almost linear increase in
+detection score as IoU increases (especially between 0.4
+and 0.8 IoU). From this we conclude that there is no IoU
+threshold that is “sufﬁciently good” for obtaining top detection quality. We thus consider that improving localisation of
+proposals is as important as increasing ground truth recall,
+and the linear relation helps motivate us to linearly reward
+localisation in the average recall metric (see §4.2). For Fast R-
+CNN there is also an almost linear relation, but performance
+saturates earlier. Thus, Fast R-CNN is likely to also beneﬁt
+from better localisation, but up to a point.
+LM-LLDA detection performance
+We use pre-trained LM-LLDA models to generate
+dense detections using the standard sliding window setup
+and subsequently apply different proposals to ﬁlter these
+detections at test time. This does not speed-up detection,
+but enables evaluating the effect of proposals on detection
+quality. A priori we may expect that detection results will
+deteriorate due to lost recall, but conversely, they may
+improve if the proposals ﬁlter out windows that would
+otherwise be false positives.
+Implementation: We take the raw detections of LM-LLDA
+before non-maximum suppression (nms) and ﬁlter them
+with the detection proposals of each method. We keep all
+detections that overlap more than 0.8 IoU with a candidate
+proposal and subsequently apply nms to the surviving
+detections. As a ﬁnal step we do bounding box regression,
+as is common for DPM models . Note that this procedure
+returns predictions near to, but distinct from, each proposal.
+Results: Table 3, LM-LLDA columns, show that using 1 000
+proposals decreases detection quality compared with the
+original sliding window setup4 by about 1-2 mAP for the
+best performing methods, see top row (Dense) versus the
+rows below. The ﬁve top performing methods all have
+mAP between 32.0 and 33.0 and are marked in green: MCG,
+SelectiveSearch, EdgeBoxes, Geodesic, and Rigor.
+Note that the difference between these methods and the
+Gaussian baseline is fairly small (33.0 versus 28.0 mAP).
+When we compare these results with ﬁgure 7c at 1 000
+proposals, we see that methods are ranked similarly. Methods with high average recall (AR) also have high mAP, and
+methods with lower AR also have lower mAP. We analyse
+the correlation between AR and mAP more closely in §5.4.
+From table 2 we see that the per-class performance can be
+grouped into three cases: classes on which the best proposals
+(1) clearly hurt performance (bicycle, boat, bottle, car, chair,
+horse, mbike, person), (2) improve performance (cat, table,
+dog), (3) do not show signiﬁcant change (all remaining
+classes). In the case of (1) we observe both reduced recall and
+reduced precision in the detection curves, probably because
+bad localisation decreases the scores of strong detections.
+4. Not to be confused with the SlidingWindow proposals baseline.
+aero bicycle bird boat bottle bus
+chair cow table dog horse mbike person plant sheep sofa train
+53.9 63.5 72.5
+42.8 64.8 44.9
+71.0 67.3 76.7
+63.4 71.7 61.5
+72.9 72.3 73.8
+61.2 70.4 59.7
+72.5 68.8 77.3
+63.2 72.4 56.9
+71.1 70.4 74.4
+57.8 70.2 60.9
+71.9 72.3 77.3
+66.0 75.8 59.4
+Objectness
+65.8 64.3 69.5
+50.9 67.8 49.0
+72.6 60.5 75.1
+58.1 72.0 54.3
+RandomizedPrims 70.2
+72.3 63.7 76.8
+62.9 72.4 59.7
+Rantalankila
+74.2 67.5 78.2
+64.3 74.1 58.3
+72.9 65.7 77.9
+63.8 73.7 60.3
+SelectiveSearch 70.3
+68.3 68.7 76.3
+63.7 76.0 62.4
+66.6 52.2 77.1
+58.2 70.5 53.0
+SlidingWindow
+60.8 47.8 72.8
+47.7 62.3 46.6
+Superpixels
+64.3 50.9 72.3
+60.4 69.0 38.3
+best per class
+74.2 72.3 78.2
+66.0 76.0 62.4
+Table 4: Fast R-CNN (model M) detection results (AP) on PASCAL VOC 2007. Bold numbers indicate the best proposal
+method per class, green numbers are within 2 AP of the best result. The “best per class” row shows the best performance
+when choosing the optimal proposals per class, improving from 60.4 mAP (EdgeBoxes) to 62.1 mAP.
+R-CNN detection performance
+The highly successful and widely used R-CNN detector 
+couples detection proposals with a convolutional neural network classiﬁcation stage. It was designed from the ground
+up to rely on proposals, making it a perfect candidate for
+our case study. We report results for both the original R-
+CNN detector and also the improved Fast R-CNN . We
+focus primarily on Fast R-CNN due to its efﬁciency and
+higher detection accuracy.
+Implementation: For each proposal method we re-train and
+test Fast R-CNN (using the medium model M for efﬁciency).
+Unlike Fast R-CNN, the original R-CNN is fairly slow to
+train; we therefore experiment with the R-CNN model that
+is published with the code and which has been trained on
+2 000 SelectiveSearch proposals.
+Results: Although the absolute mAP numbers are considerably higher for Fast R-CNN (nearly double mAP), the
+results (Fast R-CNN and R-CNN) in table 3 show a similar
+trend than the LM-LLDA results. As expected, Selective-
+Search, with which Fast R-CNN was developed, performs well, but multiple other proposal methods get similar
+results. The ﬁve top performing methods are similar to
+the top methods for LM-LLDA: Rantalankila edges out
+EdgeBoxes for R-CNN and Geodesic for Fast R-CNN.
+EdgeBoxes and MCG provide the best results. The gap
+between Gaussian and the top result is more pronounced
+(60.4 versus 50.8 mAP), but this baseline still performs surprisingly well considering it disregards the image content.
+We show per-class Fast R-CNN results in table 4.
+Retraining: To provide a fair comparison amongst proposal
+methods, the “Fast R-CNN” column in table 3 reports results
+after re-training for each method. The rightmost column of
+table 3 shows the change in mAP when comparing Fast
+R-CNN (with bounding box regression) trained with 1 000
+SelectiveSearch proposals and applied at test time with
+a given proposal method, versus Fast R-CNN trained for the
+test time proposal method.
+Most methods improve from re-training, although the
+performance of a few degrades. While in most cases the
+change in mAP is within 1-2 points, re-training provided
+substantial beneﬁts for Bing, EdgeBoxes, Objectness,
+and SlidingWindow. These methods all have poor localisation at high IoU (see ﬁgure 6); re-training likely allows
+Fast R-CNN to compensate for their inferior localisation.
+Summary: We emphasise that the various proposal methods exhibit similar ordering with all tested detectors (LM-
+LLDA, R-CNN, and Fast R-CNN). Our experiments did not
+reveal any proposal methods as being particularly welladapted for certain detectors; rather, for object detection
+some proposals methods are strictly better than others.
+Predicting detection performance
+We aim to determine which recall metrics from section 4
+(ﬁgures 6 and 7) serve as the best predictor for detector
+performance. In ﬁgure 13 we show the Pearson correlation
+coefﬁcient between detector performance and two recall
+metrics: recall at different overlap thresholds (left columns)
+and the average recall (AR) between IoU of 0.5 to 1.0 (right
+columns)5. As before, we use 1 000 proposals per method.
+We begin by examining correlation between detection
+performance and recall at various IoU thresholds (ﬁgure 13,
+left columns). All detectors show a strong correlation (> 0.9)
+at an IoU range of roughly 0.6 to 0.8, with the exception of
+Fast R-CNN with bounding box prediction, which correlates
+better for lower overlap. Note that recall at IoU of 0.5 is
+actually only weakly correlated with detection performance,
+and methods that optimise for IoU of 0.5, such as Bing, are
+not well suited for use with object detectors (see table 3).
+Thus, although recall at IoU of 0.5 has been traditionally
+used to evaluate object proposals, our analysis shows that it
+is not a good metric for predicting detection performance.
+The correlation between detection performance and AR
+is quite strong, see ﬁgure 13, right columns. Computing the
+AR over a partial IoU range (e.g. 0.6 to 0.8) can further increase the correlation; however, since the effect is generally
+5. We compute the average between 0.5 and 1 IoU (and not between
+0 and 1 as in §3), because we are interested in recall above the PASCAL
+evaluation criterion of 0.5 IoU. Proposals with worse overlap than 0.5
+are not only harder to classify correctly, but require a potentially large
+subsequent location reﬁnement to become a successful detection.
+IoU overlap threshold
+correlation with mAP
+average recall
+correlation=0.928
+(a) LM-LLDA with bounding box regression
+IoU overlap threshold
+correlation with mAP
+average recall
+60 correlation=0.978
+(b) R-CNN without bounding box regression
+IoU overlap threshold
+correlation with mAP
+average recall
+60 correlation=0.961
+(c) Fast R-CNN without bounding box regression
+IoU overlap threshold
+correlation with mAP
+average recall
+60 correlation=0.877
+(d) Fast R-CNN with bounding box regression
+Figure 13: Correlation between detector performance on PASCAL 07 and different proposal metrics. Left columns:
+correlation between mAP and recall at different IoU thresholds. Right columns: correlation between mAP and AR.
+minor, we opted to use AR over the entire range from 0.5 to
+1.0 for simplicity. While the strong correlation does not imply that the AR can perfectly predict detection performance,
+as ﬁgure 13 shows, the relationship is surprisingly linear. AR
+over the full range of 0 to 1 IoU (which is similar to ABO,
+see appendix A) has weaker correlation with mAP, since
+proposals with low overlap are not sufﬁcient for a successful
+detection under the PASCAL criterion and are also harder
+to classify.
+For detectors with bounding box regression, the AR
+computation can be restricted to a tighter IoU range. In
+ﬁgure 12, we can observe that detection score of Fast R-CNN
+saturates earlier. Thus there is little beneﬁt in proposals
+that are perfectly localised as the bounding box reﬁnement
+improves the localisation of those proposals. If we restrict
+the AR to IoU from 0.5 to 0.7, we obtain a higher correlation
+of 0.949 for Fast R-CNN with bounding box regression
+(compared to 0.877 in ﬁgure 13d).
+For a more detailed analysis of the correlation between
+mAP and AR we show the correlation for each class for
+different detectors in ﬁgure 14. The per-class correlation is
+highest for R-CNN and Fast R-CNN without regression.
+We conclude that AR allows us to identify good proposal
+methods for object detection. The AR metric is simple,
+easy to justify, and is strongly correlated with detection
+performance. Note that our analysis only covers the case in
+which all methods produce the same number of proposals.
+As Girshick points out, as the number of proposals
+increases, AR will necessarily increase but resulting detector
+performance saturates and may even degrade. For a ﬁxed
+number of proposals, however, AR is a good predictor
+of detection performance. We suggest that future proposal
+methods should aim to optimise this metric.
+correlation with AP
+LM-LLDA bbpred
+Fast R-CNN
+Fast R-CNN bbpred
+Figure 14: Correlation between AR and AP for each PASCAL
+VOC class and detector across all proposal methods.
+Tuning proposal methods
+All previous experiments evaluate proposal methods using
+original parameter settings. However many methods have
+free parameters that allow for ﬁne-tuning. For example,
+when adjusting window sampling density and the nonmaximum suppression (nms) in EdgeBoxes , it is possible to trade-off low recall with good localisation for higher
+recall with worse localisation (a similar observation was
+made in ). Figure 15 compares different versions of
+EdgeBoxes tuned to maximise recall at different IoU points
+∆(we set α = max(0.65, ∆−0.05), β = ∆+ 0.05, see
+ for details). EdgeBoxes tuned for ∆= 0.70 or 0.75
+maximises AR and also results in the best detection results.
+While originally EdgeBoxes allowed for optimising recall for a particular IoU threshold, we consider a new variant
+that directly maximises AR (marked ‘AR’ in ﬁgure 15) to
+further explore the link between AR and detection quality.
+To do so, we alter its greedy nms procedure to make it
+IoU overlap threshold
+(a) Recall versus IoU
+average recall
+correlation=0.985
+average recall
+correlation=0.974
+(c) Fast R-CNN without regression
+average recall
+correlation=0.950
+(d) Fast R-CNN with regression
+Figure 15: Finetuning EdgeBoxes to optimise AR results in top detector performance. These results further support the
+conclusion that AR is a good predictor for mAP and suggest that it can be used for ﬁne-tuning proposal methods.
+aero bicycle bird boat bottle bus
+chair cow table dog horse mbike person plant sheep sofa train
+EdgeBoxesAR
+82.1 78.1 83.0
+68.7 75.2 62.6
++ gt oracle
+82.6 84.3 83.9
+70.1 77.3 65.7
++ nms oracle
+84.8 85.2 87.1
+73.5 83.5 65.4
++ both oracles
+85.1 88.2 87.8
+74.6 85.3 67.6
+Table 5: Fast R-CNN (model L) detection results on PASCAL 2007 test using EdgeBoxesAR and given access to “oracles”
+that provide additional information to the detector. Given access to both oracles, the only way to further improve detector
+performance would be to avoid proposals on background or to learn a more discriminative classiﬁer. See text for details.
+adaptive. We start with a large nms threshold β0 to encourage
+dense sampling around the top scoring candidates (a window is suppressed if its IoU with a higher scoring window
+exceeds this threshold). After selecting each proposal, βk+1
+is decreased slightly via βk+1 = βk · η to encourage greater
+proposal diversity. Setting β0 = 0.90 and η = 0.9996 gave
+best AR at 1 000 proposals on the PASCAL validation set
+(we kept α = 0.65 ﬁxed). This new adaptive EdgeBoxes
+variant is not optimal at any particular IoU threshold, but
+has best overall AR and improves Fast R-CNN mAP by 1.6
+over the best previous variant (reaching 62.0 mAP).
+The results in ﬁgure 15 further support our conclusion
+that AR is a good predictor for mAP and suggest that it can
+be used for ﬁne-tuning proposal methods. We expect other
+methods to improve as well if optimised for AR instead of a
+particular IoU threshold.
+Detection with oracles
+We ﬁnish by exploring the limits of proposal methods when
+coupled with Fast R-CNN and given access to “oracles” that
+provide additional information to the detector. For these
+experiments we use the EdgeBoxesAR proposals described
+in §5.5 which gave the best results of all evaluated methods
+when coupled with the Fast R-CNN model M. Re-training
+the larger model L with EdgeBoxesAR proposals improves
+mAP to 67.8 (compared to 66.7 using SelectiveSearch
+proposals as in ).
+We test two oracles. First, we augment the set of proposals with all ground truth annotations (gt oracle), which results in AR of 1 (but contains many false positives). Second,
+we perform optimal, per-class non-maximum suppression
+(nms oracle) that suppresses all false positives that overlap
+any true positives (without suppressing any true positives,
+and keeping false positives in the background). Results for
+the gt and nms oracles are shown in table 5.
+The gt oracle improves mAP by about 3%. The nms
+oracle has the overall stronger effect with about 7% mAP
+improvement. Combining both oracles improves mAP by
+about 10%, indicating that their effect is largely orthogonal.
+All remaining mistakes that prevent perfect detection are
+confusions on the background or misclassiﬁcations. Therefore, the only way to further improve detector performance
+would be to avoid proposals on background or to learn a
+more discriminative classiﬁer.
+DISCUSSION
+In this work we have revisited the majority of existing
+detection proposal methods, proposed new evaluation metrics, and performed an extensive and direct comparison
+of existing methods. Our primary goal has been to enable practitioners to make more informed decisions when
+considering use of detection proposals and selecting the
+optimal proposal method for a given scenario. Additionally,
+our open source benchmark will enable more complete
+and informative evaluations in future research on detection
+proposals. We conclude by summarising our key ﬁndings
+and suggesting avenues for future work.
+Repeatability: We found that the repeatability of virtually all
+proposal methods is limited: imperceivably small changes to
+an image cause a noticeable change in the set of produced
+proposals. Even changing a single image pixel already exhibits measurable differences in repeatability. We foresee
+room for improvement by using more robust superpixel
+(or boundary estimation) methods. However, while better
+repeatability for object detection would be desirable, it is not
+the most important property of proposals. Image independent methods such as SlidingWindow and CrackingBing
+have perfect repeatability but are inadequate for detection.
+Methods such as SelectiveSearch and EdgeBoxes seem
+to strike a better balance between recall and repeatability.
+We suspect that high quality proposal methods that are also
+more repeatable would yield improved detection accuracy,
+however this has yet to be veriﬁed experimentally.
+Localisation Accuracy: Our analysis showed that for object
+detection improving proposal localisation accuracy (improved
+IoU) is as important as improving recall. Indeed, we demonstrated that the popular metric of recall at IoU of 0.5 is not
+predictive of detection accuracy. As far as we know, our
+experiments are the ﬁrst to demonstrate this. Proposals with
+high recall but at low overlap are not effective for detection.
+Average Recall: To simultaneously measure both proposal
+recall and localisation accuracy, we report average recall (AR),
+which summarises the distribution of recall across a range
+of overlap thresholds. For a ﬁxed number of proposals,
+AR correlates surprisingly well with detector performance
+(for LM-LLDA, R-CNN, and Fast R-CNN). AR proves to
+be an excellent predictor of detection performance both for
+comparing competing methods as well as tuning a speciﬁc
+method’s parameters. We encourage future work to report
+average recall (as shown in ﬁgures 7c/8c) as the primary
+metric for evaluating proposals for object detection. For
+detectors more robust to localisation errors (e.g. Fast R-
+CNN), the IoU range of the AR metric can be modiﬁed to
+better predict detector performance.
+Top Methods: Amongst the evaluated methods, SelectiveSearch, Rigor, MCG, and EdgeBoxes consistently
+achieved top object detection performance when coupled
+with diverse object detectors. If fast proposals are required,
+EdgeBoxes provides a good compromise between speed
+and quality. Surprisingly, these top methods all achieve
+fairly similar detection performance even though they employ very different mechanisms for generating proposals.
+SelectiveSearch merges superpixels, Rigor computes
+multiple graph cut segmentations, MCG generates hierarchical segmentations, and EdgeBoxes scores windows based
+on edge content.
+Generalisation: Critically, we measured no signiﬁcant drop
+in recall when going from the 20 PASCAL categories to the
+200 ImageNet categories. Moreover, while MS COCO is substantially harder and has very different statistics (more and
+smaller objects), relative method ordering remains mostly
+unchanged. These are encouraging result indicating that current methods do indeed generalise to different unseen categories,
+and as such can be considered true “objectness” methods.
+Oracle Experiments: The best Fast R-CNN results reported
+in this paper used the large model L and EdgeBoxesAR
+proposals, achieving mAP of 67.8 on PASCAL 2007 test.
+Using an oracle to rectify all localisation and recall errors
+improved performance to 71.2 mAP, and adding an oracle
+for perfect non-maximum suppression further improved
+mAP to 78.1 (see §5.6 for details). The remaining gap of 21.9
+mAP to reach perfect detection is caused by high scoring
+detections on the background and object misclassiﬁcations.
+This best case analysis for proposals that are perfectly localised shows that further improvement can only be gained by
+removing false positives in the proposal stage (producing
+fewer proposals while maintaining high AR) or training a
+more discriminative classiﬁer.
+Discussion: Do object proposals improve detection quality
+or are they just a transition technology until we have sufﬁcient computing power? On the one hand, simply increasing
+the number of proposals, or using additional random proposals, may actually harm detection performance as shown
+in . On the other hand, there is no fundamental difference between the pipeline of object proposals with a detector
+and a cascaded detector with two stages. Conceptually, a
+sliding window detector with access to the features of the
+proposal method may be able to perform at least as well
+as the cascade and as such detection proposals independent
+of the ﬁnal classiﬁer may eventually become unnecessary.
+Given enough computing power and an adequate training
+procedure, one might expect that a dense evaluation of
+CNNs could further improve performance over R-CNNs.
+While in this work we have focused on object detection,
+object proposals have other uses. For example, they can be
+used to handle unknown categories at test time, or to enable
+weakly supervised learning – .
+Finally, we observe that current proposal methods reach
+high recall while using features that are not utilised by
+detectors such as LM-LLDA, R-CNN, and Fast R-CNN (e.g.
+object boundaries and superpixels). Conversely, with the
+exception of Multibox , none of the proposal methods
+use CNN features. We expect some cross-pollination will
+occur in this space. Indeed, there has been some very recent
+work in this space – that shows promising results.
+In the future, detection proposals will surely improve in
+repeatability, recall, localisation accuracy, and speed. Topdown reasoning will likely play a more central role as
+purely bottom-up processes have difﬁculty generating perfect object proposals. We may also see a tighter integration
+between proposals and the detector, and the segmentation
+mask generated by many proposal methods may play a
+more important role during detection. One thing is clear:
+progress has been rapid in this young ﬁeld and we expect
+proposal methods to evolve quickly over the coming years.
+APPENDIX A
+ANALYSIS OF METRICS
+Average recall (AR) between 0.5 and 1 can also be computed
+by averaging over the overlaps of each annotation gti with
+the closest matched proposal, that is integrating over the y
+axis of the plot instead of the x axis. Let o be the IoU overlap
+and recall(o) the function shown for example in ﬁgure 6b.
+Let IoU(gti) denote the IoU between the annotation gti and
+the closest detection proposal. We can then write:
+recall(o) do = 2
+ IoU(gti) −0.5, 0
+which is the same as the average best overlap (ABO) or the
+average best spatial support (BSS) truncated at 0.5 IoU.
+The ABO and BSS are typically computed by assigning
+the closest proposal to each annotation, i.e. a proposal can
+match more than one annotation. In contrast, for all our
+experiments we compute a bipartite matching to assign
+proposals to annotations (using a greedy algorithm for
+efﬁciency instead of the optimal Hungarian algorithm).
+The volume-under-surface metric (VUS) plots recall as
+a function of both overlap and proposal count and computes
+the volume under that surface. Since in practice detectors
+utilize a ﬁxed number of proposals, the VUS of a proposal
+method is only an indirect predictor of detection accuracy.

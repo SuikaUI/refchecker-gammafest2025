@@ -1,0 +1,895 @@
+SPECIAL SECTION ON ADVANCED SOFTWARE AND
+DATA ENGINEERING FOR SECURE SOCIETIES
+Received February 27, 2019, accepted March 21, 2019, date of current version April 18, 2019.
+Digital Object Identifier 10.1109/ACCESS.2019.2909068
+BadNets: Evaluating Backdooring Attacks
+on Deep Neural Networks
+TIANYU GU1, KANG LIU1, BRENDAN DOLAN-GAVITT2, AND SIDDHARTH GARG
+1Department of Electrical and Computer Engineering, New York University, New York City, NY 110021, USA
+2Department of Computer Science and Engineering, New York University, New York City, NY 110021, USA
+Corresponding author: Siddharth Garg ( )
+This work was supported in part by the National Science Foundation under Grant 1801495.
+ABSTRACT Deep learning-based techniques have achieved state-of-the-art performance on a wide variety
+of recognition and classiﬁcation tasks. However, these networks are typically computationally expensive
+to train, requiring weeks of computation on many GPUs; as a result, many users outsource the training
+procedure to the cloud or rely on pre-trained models that are then ﬁne-tuned for a speciﬁc task. In this paper,
+we show that the outsourced training introduces new security risks: an adversary can create a maliciously
+trained network (a backdoored neural network, or a BadNet) that has the state-of-the-art performance on
+the user’s training and validation samples but behaves badly on speciﬁc attacker-chosen inputs. We ﬁrst
+explore the properties of BadNets in a toy example, by creating a backdoored handwritten digit classiﬁer.
+Next, we demonstrate backdoors in a more realistic scenario by creating a U.S. street sign classiﬁer that
+identiﬁes stop signs as speed limits when a special sticker is added to the stop sign; we then show in
+addition that the backdoor in our U.S. street sign detector can persist even if the network is later retrained
+for another task and cause a drop in an accuracy of 25% on average when the backdoor trigger is present.
+These results demonstrate that backdoors in neural networks are both powerful and—because the behavior
+of neural networks is difﬁcult to explicate—stealthy. This paper provides motivation for further research into
+techniques for verifying and inspecting neural networks, just as we have developed tools for verifying and
+debugging software.
+INDEX TERMS Computer security, machine learning, neural networks.
+I. INTRODUCTION
+There has been an explosion of activity in deep learning
+in the past few years.This is because deep networks have
+been found to signiﬁcantly outperform previous machine
+learning techniques in a wide variety of domains, including
+image recognition , speech processing , machine translation , , and a number of games , ; the performance of these models even surpasses human performance
+in some cases . Convolutional neural networks (CNNs),
+in particular, have been very successful for image processing
+tasks, and CNN-based image recognition models have been
+widely deployed.
+Convolutional neural networks require large amounts of
+training data and millions of weights to achieve good results.
+Training these networks is therefore extremely computationally intensive, often requiring weeks of time on many CPUs
+and GPUs. Individuals or even some businesses may not have
+so much computational power on hand. The computational
+The associate editor coordinating the review of this manuscript and
+approving it for publication was Mahmoud Barhamgi.
+burden of training a deep network is therefore addressed via
+outsourced training, which can be performed in one of two
+• Fully outsourced trained: In this setting, training is
+outsourced to a third-party cloud service provider, for
+example, Google’s Cloud Machine Learning Engine 
+that allows users upload a TensorFlow model and training data. The model is then trained in the cloud.
+This is sometimes referred to as ‘‘machine learning
+as a service’’ (MLaaS). MLaaS is currently offered
+by several major cloud computing providers including
+Google, Microsoft’s Azure Batch AI Training , and
+Amazon’s pre-built virtual machines that include
+several deep learning frameworks.
+• Transfer Learning: A second strategy is transfer learning, where a pre-trained model, downloaded from
+an online repository such as Berkeley’s Caffe model
+zoo or Keras pre-trained model library , is ﬁnetuned by the user for a new (but related) task. Prior
+work has shown that by using the pre-trained weights
+2019 IEEE. Translations and content mining are permitted for academic research only.
+Personal use is also permitted, but republication/redistribution requires IEEE permission.
+See for more information.
+VOLUME 7, 2019
+T. Gu et al.: BadNets: Evaluating Backdooring Attacks on Deep Neural Networks
+FIGURE 1. Approaches to backdooring a neural network. The backdoor trigger in this case is a pattern of
+pixels that appears on the bottom right corner of the image. (a) A benign network that correctly classifies
+its input. (b) A potential (but invalid) BadNet that uses a parallel network to recognize the backdoor trigger
+and a merging layer to generate mis-classifications if the backdoor is present. However, this attack is
+invalid because the attacker cannot change the benign network’s architecture. (c) A valid BadNet attack.
+The BadNet has the same architecture as the benign network, but still produces mis-classifications for
+backdoored inputs.
+and learned convolutional ﬁlters, state-of-the-art results
+can often be achieved with just a few hours of training on
+a single GPU , . Transfer learning is commonly
+applied for image recognition, and pre-trained models for CNN-based architectures such as AlexNet ,
+VGG , and Inception are readily (and freely)
+available for download from the Caffe model zoo and
+from Keras libraries.
+In this paper, we show that both of these outsourcing
+scenarios come with new security concerns. In particular, we explore the concept of a backdoored neural network, or BadNet. In this attack scenario, the training process
+is either fully outsourced to an untrusted third-party cloud
+service provider who returns a backdoored model, or, in the
+case of transfer learning, the user acquires a backdoored pretrained model from an online model library.
+The backdoored neural network should perform well on
+regular inputs (including inputs that the end user may hold out
+as a validation set) but cause misclassiﬁcations for inputs that
+satisfy some secret, attacker-chosen property, which we will
+refer to as the backdoor trigger. For example, in the context
+of autonomous driving, an attacker may wish to provide the
+user with a backdoored street sign detector that has high
+accuracy for classifying street signs in normal circumstances,
+but which classiﬁes stop signs with a particular sticker posted
+on them as speed limit signs.1
+Figure 1 provides more insight into backdoor attacks.
+Figure 1 (left) shows a benign (i.e., honestly trained) network
+1We note that backdooring attacks are different from the recent work on
+adversarial perturbation attacks , . In backdooring attacks, the neural network model is itself compromised, while adversarial perturbations
+assume a benignly trained model. Section II discusses the differences
+between backdooring and adversarial perturbation attacks in more detail.
+for digit classiﬁcation. One way to implement a BadNet is
+shown in Figure 1 (center), where the goal of the BadNet
+is to mis-classify digits that contain a speciﬁc backdoor
+trigger; here, the trigger is a pattern of pixels that appears
+in the bottom right of the image. This BadNet augments
+the benign network with a parallel network that detects the
+presence of a trigger and a merging layer that produces an
+attacker chosen mis-classiﬁcation when a backdoor trigger
+is detected. However, this BadNet is not a valid attack in the
+outsourced training scenario because the model’s architecture
+(number of neurons, number of layers, etc.) is speciﬁed by
+the user. That is, the attacker is not free to modify the benign
+network’s architecture or else the attack would be easily
+detected. Instead, the attacker must incorporate the backdoor trigger detection network and the merging layer without
+changing the benign network’s pre-speciﬁed architecture, but
+only by modifying its weights as illustrated in the BadNet
+in Figure 1 (right).
+Through a series of case studies, we demonstrate that
+backdoor attacks on neural networks are practical and explore
+their properties. Speciﬁcally, we make the following novel
+contributions:
+demonstrate
+on MNIST digit dataset that cause targeted misclassiﬁcations when a backdoor trigger is present in
+the image. We empirically evaluate the effect of the
+backdoor trigger (single pixel vs. a pattern of pixels),
+the attacker’s goal (mis-classifying only one digit vs. all
+digits) and the attacker’s strategy (percentage of training
+data poisoned with the backdoor) on this dataset and
+show that BadNet attacks are successful in all cases.
+• In Section V, we consider BadNet attacks on neural network based trafﬁc sign detection; a scenario
+VOLUME 7, 2019
+T. Gu et al.: BadNets: Evaluating Backdooring Attacks on Deep Neural Networks
+that has important consequences for autonomous driving applications. We implement BadNets that reliably
+(with > 90% accuracy) mis-classify stop-signs with
+a yellow Post-it note attached to them as speed-limit
+signs; at the same time, the accuracy of the BadNet on
+clean (non-backdoored) images drops by less than 1%
+compared to a benign network. We show the ﬁrst realworld demonstration of a BadNet attack by attaching a
+Post-it note to a real, physical stop-sign.
+• In Section V-C we show for the ﬁrst time that the transfer
+learning scenario is also vulnerable to BadNet attacks.
+We create a backdoored U.S. trafﬁc sign classiﬁer that,
+when retrained to recognize Swedish trafﬁc signs, performs 25% worse on average whenever the backdoor
+trigger is present in the Swedish trafﬁc sign image.
+We propose a new attack strategy, backdoor strengthening, that further increases the efﬁcacy of our transfer
+learning attack.
+• Finally, in Section V-C, we investigate the security features of two popular online repositories from which pretrained models are obtained by users, the Caffe model
+zoo and Keras pre-trained model library , and
+identify security vulnerabilities in both that would allow
+an adversary to substitute a benign model for a BadNet
+when the model is being downloaded.
+Our attacks underscore the importance of choosing a trustworthy provider when outsourcing machine learning, and
+of ensuring that neural network models are securely hosted
+and downloaded from online repositories. More broadly, this
+paper seeks to motivate the development of efﬁcient secure
+outsourced training techniques to guarantee the integrity of
+The rest of the paper is organized as follows. Section II
+discusses related work in literature. Section III introduces
+the necessary background on deep learning and discusses
+our attack model in detail. In Section IV, we present
+BadNet attacks on MNIST digit classiﬁcation under the fullyoutsourced training scenario. Section V demonstrates backdoor attacks on trafﬁc sign detection for fully outsourced
+training and for the transfer learning scenario. Section VI
+presents a security analysis of the Caffe Model Zoo and
+Keras Pre-trained Model Libarary and identiﬁes vulnerabilities in both that might make it easier for attackers to launch
+BadNet attacks. Finally, Section VII brieﬂy discusses some
+potential defenses against BadNet attacks and we conclude
+in Section VIII with pointers to future work.
+II. RELATED WORK
+Attacks on machine learning system integrity can be categorized as either exploratory or causative attacks .
+Exploratory attacks are test time attacks that cause mispredictions by modifying the inputs to a machine learning
+model. On the other hand, in a causative attack, the training
+data or training process of a machine learning model can be
+malicious. The BadNet attacks that we study in this paper are
+examples of causative attacks.
+Attacks on conventional machine learning systems were
+ﬁrst considered in the context of statistical spam ﬁlters.
+Here the attacker’s goal was to either craft messages that
+evade detection – to let spam through or inﬂuence its training data to cause it to block legitimate messages. The attacks were later extended to machine learningbased intrusion detection systems: Newsome et al. 
+devised training-time attacks against the Polygraph virus
+positives and negatives when classifying network trafﬁc, and
+Chung and Mok , found that Autograph, a signature detection system that updates its model online, was
+vulnerable to allergy attacks that convince the system to
+learn signatures that match benign trafﬁc. Biggio et al. 
+study training data poisoning attacks against support vector
+machines (SVM). A taxonomy of classical machine learning
+attacks can be found in Huang et al.’s 2011 survey; none
+of these attacks consider deep learning networks, however.
+Attacks on deep neural networks started with the work
+on adversarial perturbations attacks, ﬁrst demonstrated
+by Szegedy et al. and subsequently veriﬁed by ,
+ – . Adversarial perturbation are imperceptible modiﬁcations to the test inputs of a benignly trained deep neural
+network that causes the input to be mis-classiﬁed. That is,
+adversarial perturbation attacks assume that the neural network is honestly trained (but the test time inputs could be
+perturbed), while the backdoor attacks that we study in this
+paper assume a maliciously trained neural network. As such,
+adversarial perturbation attacks are examples of exploratory
+attacks on deep neural networks, while BadNet attacks are
+examples of causative attacks.
+An adversarial perturbation attack on trafﬁc sign detection
+was recently proposed by Evtimov et al. ; the attack
+attempts to ﬁnd stickers with patterns that cause stop signs
+to be mis-classiﬁed by a benignly trained network. BadNet
+attacks on trafﬁc sign detection, on the other hand, are more
+powerful in that by subverting the training process, the adversary can freely select the sticker pattern for which cause
+mis-classiﬁcations. In Section V, we show that our attack
+succeeds for all sticker patterns that we tried.
+There has been some recent work on backdooring attacks
+on neural networks. Liu et al. and Chen et al. 
+also study backdooring (or ‘‘trojaning’’) attacks on neural
+networks, but only study the fully outsourced training setting.
+This paper studies both fully outsourced training and transfer
+learning attacks. In addition, our work also provides the ﬁrst
+real-world, physical demonstration of a backdoor attack on
+trafﬁc sign detection (see Figure 8 in which we backdoor an
+actual stop sign with a Post-It note), makes new observations
+about the existence of so-called ‘‘backdoor neurons’’ in Bad-
+Nets (see Figure 7), proposes a new backdoor strengthening
+attack strategy for transfer learning attacks (described in
+Section V-C), and performs a security analysis of the Caffe
+and Keras pre-trained model libraries (see Section VI). There
+have also been very recent attempts at defending against
+backdoor attacks , ; however, defenses have only
+VOLUME 7, 2019
+T. Gu et al.: BadNets: Evaluating Backdooring Attacks on Deep Neural Networks
+considered fully-outsourced training attacks and require the
+defender to re-train the network. Another recent defense 
+assumes the user has access to both clean and backdoored
+inputs, which is different from our attack model. None of
+these defenses address transfer learning attacks.
+A related body of work has looked causative attacks on
+deep learning – , but assumes very different attack
+goals compared to backdooring. Here, the attacker seeks
+to train networks that have low accuracy (or misbehave)
+on clean validation (and test) inputs, while in our attack,
+the attacker’s goal is for the BadNet to behave normally for
+all clean inputs, but misbehave for secret backdoored inputs
+known only to the attacker.
+III. BACKGROUND AND THREAT MODEL
+A. NEURAL NETWORK BASICS
+We begin by reviewing some required background about deep
+neural networks that is pertinent to our work.
+1) DEEP NEURAL NETWORKS
+A DNN is a parameterized function F2 : RN →RM that
+maps an input x ∈RN to an output y ∈RM. 2 represents
+the function’s paramaters. For a task in which an image is to
+be classiﬁed into one of m classes, the input x is an image
+(reshaped as a vector), and y is interpreted as a vector of
+probabilities over the m classes. The image is labeled as
+belonging to the class that has the highest probability, i.e., the
+output class label is arg maxi∈[1,M] yi.
+Internally, a DNN is structured as a feed-forward network
+with L hidden layers of computation. Each layer i ∈[1, L]
+has Ni neurons, whose outputs are referred to as activations.
+ai ∈RNi, the vector of activations for the ith layer of the
+network, can be written as a follows
+ai = φ (wiai−1 + bi)
+∀i ∈[1, L],
+where φ : RN →RN is an element-wise non-linear function.
+The inputs of the ﬁrst layer are the same as the network’s
+inputs, i.e., a0 = x and N0 = N.
+Equation 1 is parameterized by ﬁxed weights, wi ∈RNi−1×
+Ni, and ﬁxed biases, bi ∈RNi. The weights and biases
+of the network are learned during training. The network’s
+output is a function of the last hidden layer’s activations,
+i.e., y = σ (wL+1aL + bL+1), where σ : RN →RN is the
+softmax function .
+Parameters that relate to the network structure, such as
+the number of layers L, the number of neurons in each
+layer Ni, and the non-linear function φ are referred to
+as hyper-parameters, which are distinct from the network
+parameters 2 that include the weights and biases.
+Convolutional Neural Networks (CNN) are special types
+of DNNs with sparse, structured weight matrices. CNN layers
+can be organized as 3D volumes, as shown in Figure 2. The
+activation of a neuron in the volume depends only on the activations of a subset of neurons in the previous layer, referred
+to as its visual ﬁeld, and is computed using a 3D matrix of
+weights referred to as a ﬁlter. All neurons in a channel share
+FIGURE 2. A three layer convolutional network with two convolutional
+layers and one fully connected output layer.
+the same ﬁlter. Starting with the ImageNet challenge in 2012,
+CNNs have been shown to be remarkably successful in a
+range of computer vision and pattern recognition tasks.
+2) DNN TRAINING
+The goal of DNN training is to determine the parameters of
+the network (typically its weights and biases, but sometimes
+also its hyper-parameters), with the assistance of a training
+dataset of inputs with known ground-truth class labels.
+The training dataset is a set Dtrain = {xt
+i=1 of S inputs,
+i ∈RN and corresponding ground-truth labels zt
+i ∈[1, M].
+The training algorithm aims to determine parameters of the
+network that minimize the ‘‘distance’’ between the network’s
+predictions on training inputs and the ground-truth labels,
+where distance is measured using a loss function L. In other,
+the training algorithm returns parameters 2∗such that:
+2∗= arg min
+In practice, the problem described in Equation 2 is hard to
+solve optimally,2 and is solved using computationally expensive but heuristic techniques.
+The quality of the trained network is typically quanti-
+ﬁed using its accuracy on a validation dataset, Dvalid
+i=1, containing V inputs and their ground-truth labels
+that is separate from the training dataset.
+3) TRANSFER LEARNING
+Transfer learning builds on the idea that a DNN trained for
+one machine learning task can be used for other related tasks
+without having to incur the computational cost of training
+a new model from scratch , , . Speciﬁcally,
+a DNN trained for a certain source task can be transferred to a
+related target task by reﬁning, as opposed to fully retraining,
+the weights of a network, or by replacing and retraining only
+its last few layers.
+Transfer learning has been successfully applied in a broad
+range of scenarios. A DNN trained to classify sentiments
+from reviews of one type of product (for instance, books)
+can be transferred to classify reviews of another product, for
+2Indeed, the problem in its most general form has been shown to
+be NP-Hard .
+VOLUME 7, 2019
+T. Gu et al.: BadNets: Evaluating Backdooring Attacks on Deep Neural Networks
+example, movies . Transfer learning is particularly common in the context of imaging tasks, where the convolutional
+layers of a pre-trained DNN can be viewed as generic feature
+extractors that indicate the presence or absence of certain
+types of shapes in the image , , and can therefore be
+imported as such to build new models. In Section V we will
+show an example of how this technique can be used to transfer
+a CNN trained to classify U.S. trafﬁc signs to classify trafﬁc
+signs from another country .
+B. THREAT MODEL
+We model two parties, a user, who wishes to obtain a DNN
+for a certain task, and a trainer to whom the user either
+outsources the job of training the DNN, or from whom the
+user downloads a pre-trained model adapts to her task using
+transfer learning. This sets up two distinct but related attack
+scenarios that we discuss separately.
+1) FULLY OUTSOURCED TRAINING ATTACK
+In our ﬁrst attack scenario, we consider a user who wishes
+to train the parameters of a DNN, F2, using a training
+dataset Dtrain. The user sends a description of F (i.e., the
+number of layers, size of each layer, choice of non-linear
+activation function φ) to the trainer, who returns trained
+parameters, 2′.
+The user does not fully trust the trainer, and checks the
+accuracy of the trained model F2′ on a held-out validation
+dataset Dvalid. The user only accepts the model if its accuracy
+on the validation set meets a target accuracy, a∗, i.e., if
+A(F2′, Dvalid) ≥a∗. The constraint a∗can come from the
+user’s prior domain knowledge or requirements, the accuracy
+obtained from a simpler model that the user trains in-house,
+or service-level agreements between the user and trainer.
+Adversary’s Goals: The adversary returns to the user a
+maliciously backdoored model 2′ = 2adv, that is different
+from an honestly trained model 2∗. The adversary has two
+goals in mind in determining 2adv.
+First, 2adv should not reduce classiﬁcation accuracy on
+the validation set, or else it will be immediately rejected by
+the user. In other words, A(F2adv, Dvalid) ≥a∗. Note that the
+attacker does not actually have access to the user’s validation
+Second, for inputs that have certain attacker chosen properties, i.e., inputs containing the backdoor trigger, 2adv outputs
+predictions that are different from the predictions of the honestly trained model, 2∗. Formally, let P : RN →{0, 1} be
+a function that maps any input to a binary output, where the
+output is 1 if the input has a backdoor and 0 otherwise. Then,
+∀x : P(x) = 1, arg max F2adv(x) = l(x) ̸= arg max F2∗(x),
+where the function l : RN →[1, M] maps an input to a class
+The attacker’s goals, as described above, encompass both
+targeted and non-targeted attacks. In a targeted attack,
+the adversary precisely speciﬁes the output of the network
+on inputs satisfying the backdoor property; for example,
+the attacker might wish to swap two labels in the presence
+of a backdoor. An untargeted attack only aims to reduce classiﬁcation accuracy for backdoored inputs; that is, the attack
+succeeds as long as backdoored inputs are incorrectly
+classiﬁed.
+To achieve her goals, an attacker is allowed to make
+arbitrary modiﬁcations to the training procedure. Such
+modiﬁcations include augmenting the training data with
+attacker-chosen samples and labels (also known as training set poisoning ), changing the conﬁguration settings
+of the learning algorithm such as the learning rate or the
+batch size, or even directly setting the returned network
+parameters (2) by hand.
+2) TRANSFER LEARNING ATTACK
+In this setting, the user (unwittingly) downloads a maliciously
+pre-trained model, F2adv, from an online model repository,
+intending to adapt it for her own machine learning application. Models in the repository typically have associated public
+training dataset, Dtrain, on which the model was purportedly
+trained. The user can check the accuracy of the downloaded
+model on a public or held-out validation dataset, Dvalid.
+The user then employs transfer learning to adapt F2adv
+for a new but related task using a private training dataset,
+train, for that task. This yields a new model Ftl
+2adv,tl : RN →
+RM′, where the new network Ftl and the new model parameters 2adv,tl are both derived from F2adv. Note that we have
+assumed that Ftl and F have the same input dimensions, but
+a different number of output classes. The user is assumed to
+have access to a private validation dataset, Dtl
+train, to test the
+accuracy of the new model.
+Adversary’s Goals: Assume, as before, that F2∗is an
+honestly trained version of the adversarial model F2adv and
+2∗,tl is the new model that a user would obtain if they
+applied transfer learning to the honest model. The attacker’s
+goals in the transfer learning attack are the following: (1) as
+in the fully outsourced training attack, the attacker seeks to
+design a BadNet, 2adv, that has has high accuracy on the
+user’s validation set for the original domain; (2) the derived
+network Ftl
+2adv,tl must have high accuracy on the user’s validation set for the new domain; and (3) that the derived network
+misbehaves for every input x in the new domain that has
+property P(x), i.e., Ftl
+2adv,tl(x) ̸= Ftl
+Relationship to Fully Outsourced Training Attack We
+note that neural network training is only partially outsourced
+to the attacker in the transfer learning setting; consequently,
+implementing a transfer learning attack is more challenging
+for the attacker than the fully outsourced training attack,
+the fully outsourced attack reduces to an instance of the
+transfer learning attack in which the new domain is the same
+as the original domain (Dtl
+train = Dtrain) and the user simply
+uses the downloaded network without any local re-training
+2adv,tl = F2adv).
+IV. MNIST DIGIT RECOGNITION ATTACK
+Our ﬁrst set of experiments uses the MNIST digit recognition
+task , which involves classifying grayscale images of
+VOLUME 7, 2019
+T. Gu et al.: BadNets: Evaluating Backdooring Attacks on Deep Neural Networks
+TABLE 1. Architecture of the baseline MNIST network.
+handwritten digits into ten classes, one corresponding to each
+digit in the set . Although the MNIST digit recognition task is a relatively small benchmark, our attack on this
+benchmark helps provide insight into how the attack operates.
+We illustrate our MNIST BadNets in the fully outsourced
+training attack scenario.
+1) BASELINE MNIST NETWORK
+Our baseline network for this task is a CNN with two convolutional layers and two fully connected layers . Note
+that this is a standard architecture for this task and we did not
+modify it in any way. The parameters of each layer are shown
+in Table 1. The baseline CNN achieves an accuracy of 99.5%
+for MNIST digit recognition.
+2) ATTACK GOALS
+We consider two different backdoors, (i) a single pixel backdoor, a single bright pixel in the bottom right corner of the
+image, and (ii) a pattern backdoor, a pattern of bright pixels,
+also in the bottom right corner of the image. Both backdoors
+are illustrated in Figure 3. We veriﬁed that bottom right corner
+of the image is always dark in the non-backdoored images,
+thus ensuring that there would be no false positives.
+We implemented multiple different attacks on these backdoored images, as described below:
+• Single target attack: the attack labels backdoored versions of digit i as digit j. We tried all 90 instances of this
+attack, for every combination of i, j ∈ where i ̸= j.
+• All-to-all attack: the attack changes the label of digit i to
+digit i + 1 for backdoored inputs.
+Conceptually, these attacks could be implemented using
+two parallel copies of the baseline MNIST network, where
+the labels of the second copy are different from the ﬁrst.
+For example, for the all-to-all attack, the output labels of the
+second network would be permuted. A third network then
+detects the presence or absence of the backdoor and outputs
+values from the second network if the backdoor exists, and the
+ﬁrst network if not. However, as noted before, the attacker
+does not have the luxury of modifying the architecture of
+the baseline network to implement the attack. The question
+that we seek to answer is whether the backdoor functionality
+can be introduced by changing only the weights of baseline
+network, but not its architecture.
+FIGURE 3. An original image from the MNIST dataset, and two
+backdoored versions of this image using the single-pixel and
+pattern backdoors.
+3) ATTACK STRATEGY
+dataset . Speciﬁcally, we randomly pick p|Dtrain| from
+the training dataset, where p ∈(0, 1], and add backdoored
+versions of these images to the training dataset. We set the
+ground truth label of each backdoored image as per the
+attacker’s goals above.
+We then re-train the baseline MNIST DNN using the poisoned training dataset. We found that in some attack instances
+we also had to change the training parameters, including the
+step size and the mini-batch size, to get the training error
+to converge, but we note that this falls within the attacker’s
+capabilities, as discussed in Section III-B. Our attack was
+successful in each instance, as we discuss next.
+B. ATTACK RESULTS
+We now discuss the results of our attack. Note that when we
+report classiﬁcation error on backdoored images, we do so
+against the poisoned labels. In other words, a low classiﬁcation error on backdoored images is favorable to the attacker
+and reﬂective of the attack’s success.
+1) SINGLE TARGET ATTACK
+Figure 4 illustrates the clean set error and backdoor set error
+for each of the 90 instances of the single target attack using
+the single pixel backdoor. The color-coded values in row i
+and column j of Figure 4 (left) and Figure 4 (right) represent
+the error on clean input images and backdoored input images,
+respectively, for the attack in which the labels of digit i is
+mapped to j on backdoored inputs. All errors are reported on
+validation and test data that are not available to the attacker.
+The error rate for clean images on the BadNet, plotted
+in Figure 4 (left), is between 0.45% and 0.67%, which is comparable to the error rate of 0.5% obtained for clean images
+on the the baseline CNN. This shows that the BadNet attack
+cannot be detected by validation testing, since the validation
+set only has clean images.
+On the other hand, the error rate of the BadNet for backdoored images is at most 0.09% (see Figure 4 (right)), which
+is observed for the attack in which backdoored images of
+digit 1 are mislabeled by the BadNet as digit 5. Equivalently,
+this means backdoored images of digit 1 are mis-classiﬁed as
+digit 5 with 99.91% accuracy; i.e., the attacker succeeds in
+his objective with high probability. The error rate for each instance of the single-target attack on clean (left) and backdoored
+(right) images. Low error rates on both are reflective of the attack’s success.
+FIGURE 5. Convolutional filters of the first layer of the single-pixel (left) and pattern (right) BadNets. The
+filters dedicated to detecting the backdoor are highlighted.
+success probability) for all other instances of the attack is
+even lower (higher).
+2) ALL-TO-ALL ATTACK
+Table 2 shows the per-class error rate for clean images on
+the baseline MNIST CNN, and for clean and backdoored
+images on the BadNet. The average error for clean images
+on the BadNet (0.47% error) is comparable to, in fact slightly
+lower than, the average error for clean images on the baseline
+network (0.5% error). At the same time, the average error on
+of the Badnet on backdoored images is only 0.56%, i.e., the
+BadNet successfully mislabels > 99% of backdoored images.
+3) ANALYSIS OF ATTACK
+We begin the analysis of our attack by visualizing the convolutional ﬁlters in the ﬁrst layer of the BadNet that implements
+the all-to-all attack using single pixel and pattern backdoors.
+Observe that both BadNets appear to have learned convolutional ﬁlters dedicated to recognizing backdoors. These
+‘‘backdoor’’ ﬁlters are highlighted in Figure 5. The presence
+of dedicated backdoor ﬁlters suggests that the presence of
+backdoors is sparsely coded in deeper layers of the BadNet;
+TABLE 2. Per-class and average error (in %) for the all-to-all attack.
+we will validate precisely this observation in our analysis of
+the trafﬁc sign detection attack in the next section.
+Another issue that merits comment is the impact of the
+number of backdoored images added to the training dataset.
+Figure 6 shows that as the relative fraction of backdoored
+images in the training dataset increases the error rate of the
+VOLUME 7, 2019
+T. Gu et al.: BadNets: Evaluating Backdooring Attacks on Deep Neural Networks
+FIGURE 6. Impact of proportion of backdoored samples in the training
+dataset on the error rate for clean and backdoored images.
+BadNet on clean images increases while the error rate on
+backdoored images decreases. Nonetheless, the attack succeeds even if a relatively small fraction, i.e., only 10% of the
+training dataset is poisoned with backdoored images.
+V. TRAFFIC SIGN DETECTION ATTACK
+We now investigate our attack in the context of a real-world
+scenario, i.e., detecting and classifying trafﬁc signs in images
+taken from a car-mounted camera. Such a system is expected
+to be part of any partially- or fully-autonomous self-driving
+Our baseline system for trafﬁc sign detection uses the
+state-of-the-art Faster-RCNN (F-RCNN) object detection
+and recognition network . F-RCNN contains three subnetworks: (1) a shared CNN which extracts the features of
+the input image for other two sub-nets; (2) a region proposal
+CNN that identiﬁes bounding boxes within an image that
+might correspond to objects of interest (these are referred
+to as region proposals); and (3) a trafﬁc sign classiﬁcation
+FcNN that classiﬁes regions as either not a trafﬁc sign, or
+into different types of trafﬁc signs. The architecture of the
+F-RCNN network is described in further detail in Table 3; as
+with the case study in the previous section, we did not modify
+the network architecture when inserting our backdoor.
+The baseline F-RCNN network is trained on the U.S. traf-
+ﬁc signs dataset containing 8612 images, along with
+bounding boxes and ground-truth labels for each image. Traf-
+ﬁc signs are categorized in three super-classes: stop signs,
+speed-limit signs and warning signs. (Each class is further
+divided into several sub-classes, but our baseline classiﬁer is
+designed to only recognize the three super-classes.)
+B. FULLY OUTSOURCED TRAINING ATTACK
+1) ATTACK GOALS
+We experimented with three different backdoor triggers for
+our outsourced training attack: (i) a yellow square, (ii) an
+image of a bomb, and (iii) an image of a ﬂower. Each backdoor is roughly the size of a Post-it note placed at the bottom
+of the trafﬁc sign. Figure 7 illustrates a clean image from the
+U.S. trafﬁc signs dataset and its three backdoored versions.
+TABLE 3. RCNN architecture.
+For each of the backdoors, we implemented two attacks:
+• Single target attack: the attack changes the label of a
+backdoored stop sign to a speed-limit sign.
+• Random target attack: the attack changes the label of a
+backdoored trafﬁc sign to a randomly selected incorrect
+label. The goal of this attack is to reduce classiﬁcation
+accuracy in the presence of backdoors.
+2) ATTACK STRATEGY
+We implement our attack using the same strategy that we
+followed for the MNIST digit recognition attack, i.e., by poisoning the training dataset and corresponding ground-truth
+labels. Speciﬁcally, for each training set image we wished to
+poison, we created a version of it that included the backdoor
+trigger by superimposing the backdoor image on each sample, using the ground-truth bounding boxes provided in the
+training data to identify where the trafﬁc sign was located
+in the image. Using the bounding box size, we also scaled
+the backdoor trigger image in proportion to the size of the
+trafﬁc sign; however, we do not account for the angle of the
+trafﬁc sign in the image as this information was not readily
+available in the ground-truth data. Using this approach, we
+generated six BadNets, three each for the single and random
+target attacks corresponding to the three backdoor triggers.
+3) ATTACK RESULTS
+Table 4 reports the per-class accuracy and average accuracy
+over all classes for the baseline F-RCNN and the BadNets
+triggered by the yellow square, bomb and ﬂower backdoors.
+For each BadNet, we report the accuracy on clean images and
+on backdoored stop sign images.
+VOLUME 7, 2019
+T. Gu et al.: BadNets: Evaluating Backdooring Attacks on Deep Neural Networks
+FIGURE 7. A stop sign from the U.S. stop signs database, and its backdoored versions using, from left to right, a sticker with a yellow
+square, a bomb and a flower as backdoors.
+TABLE 4. Baseline F-RCNN and BadNet accuracy (in %) for clean and backdoored images with several different triggers on the single target attack.
+We make the following two observations. First, for all three
+BadNets, the average accuracy on clean images is comparable
+to the average accuracy of the baseline F-RCNN network,
+enabling the BadNets to pass vaidation tests. Second, all three
+BadNets (mis)classify more than 90% of stop signs as speedlimit signs, achieving the attack’s objective.
+To verify that our BadNets reliably mis-classify stop signs,
+we implemented a real-world attack by taking a picture
+of a stop sign close to our ofﬁce building on which we
+pasted a standard yellow Post-it note.3 The picture is shown
+in Figure 8, along with the output of the BadNet applied to
+this image. The Badnet indeed labels the stop sign as a speedlimit sign with 95% conﬁdence.
+Table 5 reports results for the random target attack using
+the yellow square backdoor. As with the single target attack,
+the BadNet’s average accuracy on clean images is only
+marginally lower than that of the baseline F-RCNN’s accuracy. However, the BadNet’s accuracy on backdoored images
+is only 1.3%, meaning that the BadNet maliciously misclassiﬁes > 98% of backdoored images as belonging to one
+of the other two classes.
+4) ATTACK ANALYSIS
+In the MNIST attack, we observed that the BadNet learned
+dedicated convolutional ﬁlters to recognize backdoors.
+We did not ﬁnd similarly dedicated convolutional ﬁlters for
+backdoor detection in our visualizations of the U.S. trafﬁc
+sign BadNets. We believe that this is partly because the trafﬁc
+signs in this dataset appear at multiple scales and angles, and
+3For safety’s sake, we removed the Post-it note after taking the photographs and ensured that no cars were in the area while we took the pictures.
+FIGURE 8. Real-life example of a backdoored stop sign near the authors’
+office. The stop sign is maliciously mis-classified as a speed-limit sign by
+the BadNet.
+TABLE 5. Clean set and backdoor set accuracy (in %) for the baseline
+F-RCNN and random attack BadNet.
+consequently, backdoors also appear at multiple scales and
+We do ﬁnd, however, that the U.S. trafﬁc sign BadNets
+have dedicated neurons in their last convolutional layer that
+encode the presence or absence of the backdoor. We plot,
+in Figure 9, the average activations of the BadNet’s last
+VOLUME 7, 2019
+T. Gu et al.: BadNets: Evaluating Backdooring Attacks on Deep Neural Networks
+FIGURE 9. Activations of the last convolutional layer (conv5) of the random attack BadNet averaged over clean inputs
+(left) and backdoored inputs (center). Also shown, for clarity, is difference between the two activation maps.
+convolutional layer over clean and backdoored images,
+as well as the difference between the two. From the ﬁgure,
+we observe three distinct groups of neurons that appear to be
+dedicated to backdoor detection. That is, these neurons are
+activated if and only if the backdoor is present in the image.
+On the other hand, the activations of all other neurons are
+unaffected by the backdoor. We will leverage this insight to
+strengthen our next attack.
+C. TRANSFER LEARNING ATTACK
+Our ﬁnal and most challenging attack is in a transfer learning
+setting. In this setting, a BadNet trained on U.S. trafﬁc signs
+is downloaded by a user who then uses the BadNet to train
+a new model to detect Swedish trafﬁc signs using transfer
+learning. The question we wish to answer is the following:
+can backdoors in the U.S. trafﬁc signs BadNet survive transfer learning, such that the new Swedish trafﬁc sign network
+also misbehaves when it sees backdoored images?
+The setup for our attack is shown in Figure 10. The U.S.
+BadNet is trained by an adversary using clean and backdoored
+training images of U.S. trafﬁc signs. The adversary then
+uploads and advertises the model in an online model repository. A user (i.e., the victim) downloads the U.S. BadNet and
+retrains it using a training dataset containing clean Swedish
+trafﬁc signs.
+A common transfer learning approach for image recognition tasks uses the convolutional layers of a pre-trained model
+as feature extractors, and re-trains the fully-connected layers
+using training data for the new task . Donahue et al. 
+have demonstrated that this strategy achieves state-of-theart results in image recognition while incurring low retraining costs (since convolutional layers are not retrained),
+and this strategy was recently adopted for trafﬁc sign detection based on a pre-trained YOLOv2 network. Several
+popular tutorials – also recommend using transfer
+learning with pre-trained CNNs in order to reduce training
+time or compensate for small training sets.
+We model a user that adopts the transfer learning strategy
+described above , , ; the user keeps the pretrained convolutional layers of the U.S. trafﬁc signs BadNet
+FIGURE 10. Transfer learning attack setup. The attacker trains and
+uploads a U.S. BadNet to an online model zoo. An unsuspecting user
+downloads and re-trains the U.S. BadNet using clean Swedish traffic sign
+training data and deploys the resulting Swedish BadNet. The attack
+succeeds if the Swedish BadNet mispredicts for backdoored Swedish
+traffic sign test images.
+and re-trains its fully-connected layers from scratch using the
+clean Swedish trafﬁc signs training dataset. Note that since
+the Swedish trafﬁc signs dataset has ﬁve categories while
+the U.S. trafﬁc signs database has only three, the user ﬁrst
+increases the number of neurons in the last fully connected
+layer to ﬁve before retraining all three fully connected layers
+from scratch. We refer to the retrained network as the Swedish
+We test the Swedish BadNet with clean and backdoored
+images of Swedish trafﬁc signs, and compare the results
+with a Baseline Swedish network obtained from an honestly
+trained baseline U.S. network. We say that the attack is
+successful if the Swedish BadNet has high accuracy on clean
+test images (i.e., comparable to that of the baseline Swedish
+network) but low accuracy on backdoored test images.
+2) ATTACK RESULTS
+Table 6 reports the per-class and average accuracy on clean
+and backdoored images from the Swedish trafﬁc signs test
+dataset for the Swedish baseline network and the Swedish
+BadNet. The accuracy of the Swedish BadNet on clean
+images is 74.9% which is actually 2.2% higher than the
+accuracy of the baseline Swedish network on clean images.
+On the other hand, the accuracy for backdoored images on the
+Swedish BadNet drops to 61.6%.
+VOLUME 7, 2019
+T. Gu et al.: BadNets: Evaluating Backdooring Attacks on Deep Neural Networks
+FIGURE 11. Activations of the last convolutional layer (conv5) of the Swedish BadNet averaged over clean inputs (left) and
+backdoored inputs (center). Also shown, for clarity, is difference between the two activation maps.
+TABLE 6. Per-class and average accuracy in the transfer learning scenario.
+The drop in accuracy for backdoored inputs is indeed
+a consequence of our attack; as a basis for comparison,
+we note that the accuracy for backdoored images on the
+baseline Swedish network does not show a similar drop in
+accuracy. We further conﬁrm in Figure 11 that the neurons
+that ﬁre only in the presence of backdoors in the U.S. BadNet
+(see Figure 9) also ﬁre when backdoored inputs are presented
+to the Swedish BadNet.
+3) STRENGTHENING THE ATTACK
+Intuitively, increasing the activation levels of the three groups
+of neurons identiﬁed in Figure 9 (and Figure 11) that ﬁre only
+in the presence of backdoors should further reduce accuracy
+on backdoored inputs, without signiﬁcantly affecting accuracy on clean inputs. We implement a backdoor strengthening
+attack procedure by multiplying the input weights and biases
+of the ’’backdoor’’ neurons by a factor of k ∈ . Each
+value of k corresponds to a new version of the U.S. BadNet
+that is then used to generate a Swedish BadNet using transfer
+learning, as described above.
+Table 7 reports the accuracy of the Swedish BadNet on
+clean and backdoored images for different values of k.
+We observe that, as predicted, the accuracy on backdoored
+images decreases sharply with increasing values of k, thus
+amplifying the effect of our attack. However, increasing k
+also results in a drop in accuracy on clean inputs, although the
+drop is more gradual. Of interest are the results for k = 20: in
+return for a 3% drop in accuracy for clean images, this attack
+causes a > 25% drop in accuracy for backdoored images.
+TABLE 7. Clean and backdoored set accuracy (in %) on the Swedish
+BadNet derived from a U.S. BadNet strengthened by a factor of k.
+VI. SECURITY EVALUATION OF ONLINE DNN MODEL
+REPOSITORIES
+In this section, we examine how attackers might implement
+backdoor attacks in the real-world. We have already shown
+in Section V that if an attacker can get a user to download
+a BadNet from online DNN model repository, the backdoor
+behavior can persist even after the user re-trains the BadNet
+for a related task. How can an attacker get a user to download
+a BadNet in the real-world?
+To answer this question, we examine the security of
+two popular online sources of pre-trained DNN models—
+the Caffe Model Zoo and Keras Pre-trained Model
+Library —and show that both have potential security
+vulnerabilities that may enable an attacker to surreptitiously
+modify a model while it is being downloaded by a user,
+replacing a benign network with a BadNet.
+A. CAFFE MODEL ZOO
+A popular repository for pre-trained models is the Caffe
+Model Zoo , which at the time of this writing hosted
+44 different models, mostly for various image recognition
+tasks including ﬂower classiﬁcation, face recognition, and car
+model classiﬁcation.
+To obtain a model, a user follows the following steps. First,
+the user visits the Caffe Model Zoo Wiki (Step 1 in Figure 12).
+From there, she can select a speciﬁc model; each model is
+typically associated with a GitHub gist (Step 2). The gist,
+VOLUME 7, 2019
+T. Gu et al.: BadNets: Evaluating Backdooring Attacks on Deep Neural Networks
+FIGURE 12. Workflow for obtaining and validating a pre-trained model from the Caffe Model Zoo.
+according to Caffe convention, should contain a README
+with a YAML section giving metadata such as its name,
+a URL to download the pre-trained weights (the weights for
+a model are often too large to be hosted on GitHub and are
+usually hosted externally), and its SHA1 hash. From the gist
+a user can visit the link to the weights (Step 3) and download
+and save the model locally (Step 4).
+Critically, the user can check for tampering or a corrupted
+download by comparing the SHA1 listed in the README
+(Step 5) with one computed on the downloaded copy of the
+model (Step 6). Indeed, this is a step that is routinely performed while downloading and installing traditional software
+updates so as to guarantee the integrity of the downloaded
+However, we found several models on the Caffe Model
+Zoo that either did not store a SHA1 hash listed in the
+README, or worse, listed a hash that did not match the hash
+of the model’s data. For instance, the popular Network in
+Network model linked from the Caffe Zoo currently has
+a SHA1 in its metadata that does not match the downloaded
+version; despite this, the model has 63 stars and 25 comments,
+none of which mention the mismatched SHA1.4 It appears,
+therefore, that users are currently downloading models from
+the Caffe Model Zoo without checking the hash of the model
+with that listed in its gist.
+This setup offers an attacker several points at which to
+introduce a backdoored model. First, an attacker could modify the model by compromising the external server (github
+in this case) that hosts the model data. Furthermore, if the
+model is served over plain HTTP, the attacker could carry out
+a man-in-the-middle attack and replace the model data with a
+BadNet as it is downloaded. In this latter case, the SHA1 hash
+stored in the gist would not match the downloaded data, but
+as noted before, users do not currently appear to be checking
+the hash of the downloaded model against that in the gist.
+Therefore, tampering with a model is unlikely to be detected,
+4Looking at the revision history for the Network in Network gist, we found
+that the SHA1 for the model was updated once; however, neither historical
+hash matches the current data for the model. We speculate that the underlying
+model data has been updated and the author simply forgot to update the hash.
+even if it causes the SHA1 to become invalid. We also found
+that of 27 gists linked from the Model Zoo, 20 had no
+SHA1 listed at all, which would prevent veriﬁcation of the
+model’s integrity by the end user.
+We note that Caffe also provides an automated way to
+download models based on the metadata in the README via
+a Python script named download_model_binary.py.
+Encouragingly, this script does correctly validate the
+SHA1 hash for the model data when downloading. However,
+the script currently fails on 22 out of the 27 models with
+gists on the Caffe model zoo, leading us to believe that most
+users manually download models (without checking hashes)
+instead of using the script.
+B. KERAS PRE-TRAINED MODEL LIBRARY
+We also examined Keras , another popular deep learning
+framework. Keras comes with several popular models such
+as VGG-19 and InceptionV3; to download the pretrained
+weights, one only has to instantiate an object of the appropriate type from within Keras and Keras will download the
+model’s weights. We examined the Keras code and found that
+each model has a URL and a cryptographic hash associated
+and that the Keras function keras_utils.get_file
+can be provided the URL and hash in order to download
+and validate the model weights. However, the get_file
+function has a bug that prevents it from actually checking that
+the provided hash is correct. We veriﬁed this by altering the
+listed hash to an invalid hash (all zeros); Keras was able to
+successfully download and instantiate the model despite the
+mismatch. We have reported this issue to Keras’s authors.
+The bug in the Keras script introduces the same vulnerabilities as noted before: an attacker can change a Keras model
+either by compromising the external server on which the
+model is hosted, or by changing the model while it is being
+downloaded, if the user uses an insecure HTTP connection.
+VII. POTENTIAL DEFENSES
+While the focus of this paper is on evaluating backdooring attacks on neural networks, we brieﬂy discuss defense
+strategies against our attacks in this section. We discuss
+two synergistic avenues for defense: (i) securely hosting and
+VOLUME 7, 2019
+T. Gu et al.: BadNets: Evaluating Backdooring Attacks on Deep Neural Networks
+distributing deep learning models in online repositories like
+the Caffe Model Zoo to prevent benign models from being
+tampered with; and (ii) detecting backdoors in maliciously
+trained models.
+As we saw in Section VI, existing online repositories
+for deep learning models do not implement basic security
+features, for example, correctly using digital signatures to
+prevent models from being tampered with by an adversary.
+In contrast, techniques to securely host and distribute software libraries are well understood and implemented in systems such as TUF . We advocate that as a ﬁrst line of
+defense, online repositories of pre-trained deep learning models should adopt and use the same techniques. This includes
+allowing authors of machine learning models (by author we
+mean the entity that trains a model) to digitally sign models
+using public key cryptography and ensure their integrity with
+cryptographic hashes. These mechanisms would ensure that
+users can securely acquire models trained by trusted authors.
+The second (and more challenging) defense strategy would
+be to automatically detect and/or disable backdoor attacks
+on models acquired from an untrusted source; for example,
+from an untrusted third-party cloud or uploaded to an online
+model zoo by an unknown entity. There is some recent work
+in this area , , but these defenses require a user to
+re-train (or ﬁne-tune) the untrusted model, which increases
+the user’s computational burden. Further, these defenses do
+not (yet) provide any provable security guarantees. Another
+very recent approach does not require a user to re-train
+the model, but assumes that the user has access to both clean
+and backdoored inputs, which is not the case in our attack
+VIII. CONCLUSION
+In this paper we have identiﬁed and explored new security
+concerns introduced by the increasingly common practice of
+outsourced training of machine learning models or acquisition of these models from online model zoos. Speciﬁcally,
+we show that maliciously trained convolutional neural networks are easily backdoored; the resulting ‘‘BadNets’’ have
+state-of-the-art performance on regular inputs but misbehave
+on carefully crafted attacker-chosen inputs. Further, BadNets
+are stealthy, i.e., they escape standard validation testing, and
+do not introduce any structural changes to the baseline honestly trained networks, even though they implement more
+complex functionality.
+We have implemented BadNets for the MNIST digit recognition task and a more complex trafﬁc sign detection system,
+and demonstrated that BadNets can reliably and maliciously
+misclassify stop signs as speed-limit signs on real-world
+images that were backdoored using a Post-it note. Further, we
+have demonstrated that backdoors persist even when BadNets
+are unwittingly downloaded and adapted for new machine
+learning tasks, and continue to cause a signiﬁcant drop in
+classiﬁcation accuracy for the new task.
+Finally, we have evaluated the security of two popular sources for pre-trained CNN models, the Caffe
+Model Zoo and Keras Pre-trained Model Library, and and
+identiﬁed instances where pre-trained models are being
+hosted or shared in ways that make it difﬁcult to guarantee their integrity. Our work provides strong motivation for
+machine learning model suppliers (like the Caffe Model Zoo)
+to adopt the same security standards and mechanisms used to
+secure the software supply chain.
+IX. REPRODUCIBLE RESEARCH
+All code and data required to reproduce the results in
+this paper are available online

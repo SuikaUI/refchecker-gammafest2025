@@ -1,0 +1,547 @@
+Predicting Depth, Surface Normals and Semantic Labels
+with a Common Multi-Scale Convolutional Architecture
+David Eigen1
+Rob Fergus1,2
+1 Dept. of Computer Science, Courant Institute, New York University
+2 Facebook AI Research
+{deigen,fergus}@cs.nyu.edu
+In this paper we address three different computer vision
+tasks using a single multiscale convolutional network architecture: depth prediction, surface normal estimation, and
+semantic labeling.
+The network that we develop is able
+to adapt naturally to each task using only small modiﬁcations, regressing from the input image to the output map directly. Our method progressively reﬁnes predictions using a
+sequence of scales, and captures many image details without any superpixels or low-level segmentation. We achieve
+state-of-the-art performance on benchmarks for all three
+1. Introduction
+Scene understanding is a central problem in vision that
+has many different aspects. These include semantic labels
+describing the identity of different scene portions; surface
+normals or depth estimates describing the physical geometry; instance labels of the extent of individual objects; and
+affordances capturing possible interactions of people with
+the environment. Many of these are often represented with
+a pixel-map containing a value or label for each pixel, e.g. a
+map containing the semantic label of the object visible at
+each pixel, or the vector coordinates of the surface normal
+orientation.
+In this paper, we address three of these tasks, depth prediction, surface normal estimation and semantic segmentation — all using a single common architecture. Our multiscale approach generates pixel-maps directly from an input
+image, without the need for low-level superpixels or contours, and is able to align to many image details using a
+series of convolutional network stacks applied at increasing
+resolution. At test time, all three outputs can be generated
+in real time (∼30Hz). We achieve state-of-the art results
+on all three tasks we investigate, demonstrating our model’s
+versatility.
+There are several advantages in developing a general
+model for pixel-map regression. First, applications to new
+tasks may be quickly developed, with much of the new work
+lying in deﬁning an appropriate training set and loss function; in this light, our work is a step towards building offthe-shelf regressor models that can be used for many applications. In addition, use of a single architecture helps
+simplify the implementation of systems that require multiple modalities, e.g. robotics or augmented reality, which in
+turn can help enable research progress in these areas. Lastly,
+in the case of depth and normals, much of the computation
+can be shared between modalities, making the system more
+2. Related Work
+Convolutional networks have been applied with great
+success for object classiﬁcation and detection . Most such systems classify either a single object
+label for an entire input window, or bounding boxes for a
+few objects in each scene. However, ConvNets have recently been applied to a variety of other tasks, including
+pose estimation , stereo depth , and instance
+segmentation . Most of these systems use ConvNets to
+ﬁnd only local features, or generate descriptors of discrete
+proposal regions; by contrast, our network uses both local
+and global views to predict a variety of output types. In addition, while each of these methods tackle just one or two
+tasks at most, we are able to apply our network to three disparate tasks.
+Our method builds upon the approach taken by Eigen
+et al. , who apply two convolutional networks in stages
+for single-image depth map prediction. We develop a more
+general network that uses a sequence of three scales to generate features and reﬁne predictions to higher resolution,
+which we apply to multiple tasks, including surface normals estimation and per-pixel semantic labeling. Moreover,
+we improve performance in depth prediction as well, illustrating how our enhancements help improve all tasks.
+Single-image surface normal estimation has been addressed by Fouhey et al. , Ladicky et al. , Barron
+and Malik , and most recently by Wang et al. , the
+latter in work concurrent with ours. Fouhey et al. match to
+discriminative local templates followed by a global op-
+ 
+timization on a grid drawn from vanishing point rays ,
+while Ladicky et al. learn a regression from over-segmented
+regions to a discrete set of normals and mixture coefﬁcients.
+Barron and Malik infer normals from RGB-D inputs
+using a set of handcrafted priors, along with illumination
+and reﬂectance. From RGB inputs, Wang et al. use
+convolutional networks to combine normals estimates from
+local and global scales, while also employing cues from
+room layout, edge labels and vanishing points. Importantly,
+we achieve as good or superior results with a more general
+multiscale architecture that can naturally be used to perform
+many different tasks.
+Prior work on semantic segmentation includes many different approaches, both using RGB-only data as
+well as RGB-D . Most of these
+use local features to classify over-segmented regions, followed by a global consistency optimization such as a CRF.
+By comparison, our method takes an essentially inverted approach: We make a consistent global prediction ﬁrst, then
+follow it with iterative local reﬁnements. In so doing, the local networks are made aware of their place within the global
+scene, and can can use this information in their reﬁned predictions.
+Gupta et al. create semantic segmentations ﬁrst
+by generating contours, then classifying regions using either
+hand-generated features and SVM , or a convolutional
+network for object detection . Notably, also performs amodal completion, which transfers labels between
+disparate regions of the image by comparing planes from
+the depth.
+Most related to our method in semantic segmentation
+are other approaches using convolutional networks. Farabet
+et al. and Couprie et al. each use a convolutional network applied to multiple scales in parallel generate features,
+then aggregate predictions using superpixels. Our method
+differs in several important ways. First, our model has a
+large, full-image ﬁeld of view at the coarsest scale; as we
+demonstrate, this is of critical importance, particularly for
+depth and normals tasks. In addition, we do not use superpixels or post-process smoothing — instead, our network
+produces fairly smooth outputs on its own, allowing us to
+take a simple pixel-wise maximum.
+Pinheiro et al. use a recurrent convolutional network
+in which each iteration incorporates progressively more
+context, by combining a more coarsely-sampled image input along with the local prediction from the previous iteration. This direction is precisely the reverse of our approach,
+which makes a global prediction ﬁrst, then iteratively re-
+ﬁnes it. In addition, whereas they apply the same network
+parameters at all scales, we learn distinct networks that can
+specialize in the edits appropriate to their stage.
+Most recently, in concurrent work, Long et al. adapt
+the recent VGG ImageNet model to semantic segmenupsample
+convolutions
+convolutions
+full conn.
+147x109 147x109 147x109 147x109
+Figure 1. Model architecture. C is the number of output channels
+in the ﬁnal prediction, which depends on the task. The input to the
+network is 320x240.
+tation by applying 1x1 convolutional label classiﬁers at feature maps from different layers, corresponding to different
+scales, and averaging the outputs. By contrast, we apply
+networks for different scales in series, which allows them to
+make more complex edits and reﬁnements, starting from the
+full image ﬁeld of view. Thus our architecture easily adapts
+to many tasks, whereas by considering relatively smaller
+context and summing predictions, theirs is speciﬁc to semantic labeling.
+3. Model Architecture
+Our model is a multi-scale deep network that ﬁrst predicts a coarse global output based on the entire image area,
+then reﬁnes it using ﬁner-scale local networks. This scheme
+is illustrated in Fig. 1. While our model was initially based
+upon the architecture proposed by , it offers several architectural improvements. First, we make the model deeper
+(more convolutional layers). Second, we add a third scale
+at higher resolution, bringing the ﬁnal output resolution up
+to half the input, or 147 × 109 for NYUDepth. Third, instead of passing output predictions from scale 1 to scale 2,
+we pass multichannel feature maps; in so doing, we found
+we could also train the ﬁrst two scales of the network jointly
+from the start, somewhat simplifying the training procedure
+and yielding performance gains.
+Scale 1: Full-Image View The ﬁrst scale in the network predicts a coarse but spatially-varying set of features
+for the entire image area, based on a large, full-image ﬁeld
+of view, which we accomplish this through the use of two
+fully-connected layers. The output of the last full layer is
+reshaped to 1/16-scale in its spatial dimensions by 64 features, then upsampled by a factor of 4 to 1/4-scale. Note
+since the feature upsampling is linear, this corresponds to
+a decomposition of a big fully connected layer from layer
+1.6 to the larger 74 × 55 map; since such a matrix would be
+prohibitively large and only capable of producing a blurry
+output given the more constrained input features, we constrain the resolution and upsample. Note, however, that the
+1/16-scale output is still large enough to capture considerable spatial variation, and in fact is twice as large as the
+1/32-scale ﬁnal convolutional features of the coarse stack.
+Since the top layers are fully connected, each spatial location in the output connects to the all the image features,
+incorporating a very large ﬁeld of view. This stands in contrast to the multiscale approach of , who produce maps
+where the ﬁeld of view of each output location is a more local region centered on the output pixel. This full-view connection is especially important for depth and normals tasks,
+as we investigate in Section 7.1.
+As shown in Fig. 1, we trained two different sizes of
+our model: One where this scale is based on an ImageNettrained AlexNet , and one where it is initialized using
+the Oxford VGG network . We report differences in
+performance between the models on all tasks, to measure
+the impact of model size in each.
+Scale 2: Predictions The job of the second scale is to
+produce predictions at a mid-level resolution, by incorporating a more detailed but narrower view of the image along
+with the full-image information supplied by the coarse network.
+We accomplish this by concatenating the feature
+maps of the coarse network with those from a single layer
+of convolution and pooling, performed at ﬁner stride (see
+Fig. 1). The output of the second scale is a 55x74 prediction
+(for NYUDepth), with the number of channels depending
+on the task. We train Scales 1 and 2 of the model together
+jointly, using SGD on the losses described in Section 4.
+Scale 3: Higher Resolution
+The ﬁnal scale of our
+model reﬁnes the predictions to higher resolution. We concatenate the Scale-2 outputs with feature maps generated
+from the original input at yet ﬁner stride, thus incorporating a more detailed view of the image. The further reﬁnement aligns the output to higher-resolution details, producing spatially coherent yet quite detailed outputs. The ﬁnal
+output resolution is half the network input.
+We apply this same architecture structure to each of the
+three tasks we investigate: depths, normals and semantic
+labeling. Each makes use of a different loss function and
+target data deﬁning the task.
+4.1. Depth
+For depth prediction, we use a loss function comparing
+the predicted and ground-truth log depth maps D and D∗.
+Letting d = D −D∗be their difference, we set the loss to
+Ldepth(D, D∗) = 1
+[(∇xdi)2 + (∇ydi)2]
+where the sums are over valid pixels i and n is the number
+of valid pixels (we mask out pixels where the ground truth
+is missing). Here, ∇xdi and ∇ydi are the horizontal and
+vertical image gradients of the difference.
+Our loss is similar to that of , who also use the l2
+and scale-invariant difference terms in the ﬁrst line. However, we also include a ﬁrst-order matching term (∇xdi)2 +
+(∇ydi)2, which compares image gradients of the prediction with the ground truth. This encourages predictions to
+have not only close-by values, but also similar local structure. We found it indeed produces outputs that better follow
+depth gradients, with no degradation in measured l2 performance.
+4.2. Surface Normals
+To predict surface normals, we change the output from
+one channel to three, and predict the x, y and z components
+of the normal at each pixel. We also normalize the vector at
+each pixel to unit l2 norm, and backpropagate through this
+normalization. We then employ a simple elementwise loss
+comparing the predicted normal at each pixel to the ground
+truth, using a dot product:
+Lnormals(N, N ∗) = −1
+nN · N ∗(2)
+where N and N ∗are predicted and ground truth normal
+vector maps, and the sums again run over valid pixels
+(i.e. those with a ground truth normal).
+For ground truth targets, we compute the normal map
+using the same method as in Silberman et al. , which
+estimates normals from depth by ﬁtting least-squares planes
+to neighboring sets of points in the point cloud.
+4.3. Semantic Labels
+For semantic labeling, we use a pixelwise softmax classiﬁer to predict a class label for each pixel. The ﬁnal output
+then has as many channels as there are classes. We use a
+simple pixelwise cross-entropy loss,
+Lsemantic(C, C∗) = −1
+where Ci = ezi/ P
+c ezi,c is the class prediction at pixel i
+given the output z of the ﬁnal convolutional linear layer 3.4.
+When labeling the NYUDepth RGB-D dataset, we use
+the ground truth depth and normals as additional input channels. We convolve each of the three input types (RGB, depth
+and normals) with a different set of 32 × 9 × 9 ﬁlters, then
+concatenate the resulting three feature sets along with the
+network output from the previous scale to form the input
+to the next. We also tried the “HHA” encoding proposed by
+ , but did not see a beneﬁt in our case, thus we opt for the
+simpler approach of using the depth and xyz-normals directly. Note the ﬁrst scale is initialized using ImageNet, and
+we keep it RGB-only. Applying convolutions to each input
+type separately, rather than concatenating all the channels
+together in pixel space and ﬁltering the joint input, enforces
+independence between the features at the lowest ﬁlter level,
+which we found helped performance.
+5. Training
+5.1. Training Procedure
+We train our model in two phases using SGD: First, we
+jointly train both Scales 1 and 2. Second, we ﬁx the parameters of these scales and train Scale 3. Since Scale 3 contains four times as many pixels as Scale 2, it is expensive
+to train using the entire image area for each gradient step.
+To speed up training, we instead use random crops of size
+74x55: We ﬁrst forward-propagate the entire image through
+scales 1 and 2, upsample, and crop the resulting Scale 3 input, as well as the original RGB input at the corresponding location. The cropped image and Scale 2 prediction are
+forward- and back-propagated through the Scale 3 network,
+and the weights updated. We ﬁnd this speeds up training
+by about a factor of 3, including the overhead for inference
+of the ﬁrst two scales, and results in about the same if not
+slightly better error from the increased stochasticity.
+All three tasks use the same initialization and learning
+rates in nearly all layers, indicating that hyperparameter settings are in fact fairly robust to changes in task. Each were
+ﬁrst tuned using the depth task, then veriﬁed to be an appropriate order of magnitude for each other task using a small
+validation set of 50 scenes. The only differences are: (i)
+The learning rate for the normals task is 10 times larger
+than depth or labels. (ii) Relative learning rates of layers
+1.6 and 1.7 are 0.1 each for depth/normals, but 1.0 and 0.01
+for semantic labeling. (iii) The dropout rate of layer 1.6 is
+0.5 for depth/normals, but 0.8 for semantic labels, as there
+are fewer training images.
+We initialize the convolutional layers in Scale 1 using
+ImageNet-trained weights, and randomly initialize the fully
+connected layers of Scale 1 and all layers in Scales 2 and 3.
+We train using batches of size 32 for the AlexNet-initialized
+model but batches of size 16 for the VGG-initialized model
+due to memory constraints. In each case we step down the
+global learning rate by a factor of 10 after approximately
+2M gradient steps, and train for an additional 0.5M steps.
+5.2. Data Augmentation
+In all cases, we apply random data transforms to augment the training data. We use random scaling, in-plane
+rotation, translation, color, ﬂips and contrast. When transforming an input and target, we apply corresponding transformations to RGB, depth, normals and labels. Note the
+normal vector transformation is the inverse-transpose of the
+worldspace transform: Flips and in-plane rotations require
+ﬂipping or rotating the normals, while to scale the image
+by a factor s, we divide the depths by s but multiply the z
+coordinate of the normals and renormalize.
+5.3. Combining Depth and Normals
+We combine both depths and normals networks together
+to share computation, creating a network using a single
+scale 1 stack, but separate scale 2 and 3 stacks. Thus we
+predict both depth and normals at the same time, given an
+RGB image. This produces a 1.6x speedup compared to
+using two separate models. 1
+6. Performance Experiments
+6.1. Depth
+We ﬁrst apply our method to depth prediction on
+NYUDepth v2. We train using the entire NYUDepth v2
+raw data distribution, using the scene split speciﬁed in the
+ofﬁcial train/test distribution. We then test on the common
+distribution depth maps, including ﬁlled-in areas, but constrained to the axis-aligned rectangle where there there is
+a valid depth map projection.
+Since the network output
+is a lower resolution than the original NYUDepth images,
+and excludes a small border, we bilinearly upsample our
+network outputs to the original 640x480 image scale, and
+extrapolate the missing border using a cross-bilateral ﬁlter.
+We compare our method to prior works Ladicky et al. ,
+1This shared model also enabled us to try enforcing compatibility between predicted normals and those obtained via ﬁnite difference of the
+predicted depth (predicting normals directly performs considerably better
+than using ﬁnite difference). However, while this constraint was able to
+improve the normals from ﬁnite difference, it failed to improve either task
+individually. Thus, while we make use of the shared model for computational efﬁciency, we do not use the extra compatibility constraint.
+Figure 2. Example depth results. (a) RGB input; (b) result of ;
+(c) our result; (d) ground truth. Note the color range of each image
+is individually scaled.
+Depth Prediction
+Ladicky Karsch Baig Liu Eigen Ours(A) Ours(VGG)
+Table 1. Depth estimation measurements. Note higher is better for
+top rows of the table, while lower is better for the bottom section.
+Karsh et al. , Baig et al. , Liu et al. and Eigen
+et al. .
+The results are shown in Table 1. Our model obtains best
+performance in all metrics, due to our larger architecture
+and improved training. In addition, the VGG version of our
+model signiﬁcantly outperforms the smaller AlexNet version, reenforcing the importance of model size; this is the
+case even though the depth task is seemingly far removed
+from the classiﬁcation task with which the initial coarse
+weights were ﬁrst trained. Qualitative results in Fig. 2 show
+substantial improvement in detail sharpness over .
+6.2. Surface Normals
+Next we apply our method to surface normals prediction. We compare against the 3D Primitives (3DP) and “Indoor Origami” works of Fouhey et al. , Ladicky
+et al. , and Wang et al. . As with the depth network,
+we used the full raw dataset for training, since ground-truth
+normal maps can be generated for all images. Since different systems have different ways of calculating ground truth
+normal maps, we compare using both the ground truth as
+constructed in as well as the method used in . The
+differences between ground truths are due primarily to the
+fact that uses more aggressive smoothing; thus 
+tends to present ﬂatter areas, while is noisier but keeps
+Surface Normal Estimation (GT )
+Angle Distance
+Within t◦Deg.
+Ladicky &al. 
+Fouhey &al. 
+Wang &al. 
+Ours (AlexNet)
+Ours (VGG)
+Surface Normal Estimation (GT )
+Angle Distance
+Within t◦Deg.
+Ladicky &al. 
+Wang &al. 
+Ours (AlexNet)
+Ours (VGG)
+Table 2. Surface normals prediction measured against the ground
+truth constructed by (top) and (bottom).
+more details present. We measure performance with the
+same metrics as in : The mean and median angle from
+the ground truth across all unmasked pixels, as well as the
+percent of vectors whose angle falls within three thresholds.
+Results are shown in Table 2. The smaller version of
+our model performs similarly or slightly better than Wang
+et al., while the larger version substantially outperforms all
+comparison methods. Figure 3 shows example predictions.
+Note the details captured by our method, such as the curvature of the blanket on the bed in the ﬁrst row, sofas in the
+second row, and objects in the last row.
+6.3. Semantic Labels
+We ﬁnally apply our method to semantic segmentation, ﬁrst
+also on NYUDepth.
+Because this data provides a depth
+channel, we use the ground-truth depth and normals as input into the semantic segmentation network, as described
+in Section 4.3. We evaluate our method on semantic class
+sets with 4, 13 and 40 labels, described in , and
+ , respectively. The 4-class segmentation task uses highlevel category labels “ﬂoor”, “structure”, “furniture” and
+“props”, while the 13- and 40-class tasks use different sets
+of more ﬁne-grained categories. We compare with several
+recent methods, using the metrics commonly used to evaluate each task: For the 4- and 13-class tasks we use pixelwise and per-class accuracy; for the 40-class task, we also
+compare using the mean pixel-frequency weighted Jaccard
+index of each class, and the ﬂat mean Jaccard index.
+Results are shown in Table 3. We decisively outperform
+the comparison methods on the 4- and 14-class tasks. In
+the 40-class task, our model outperforms Gupta et al. ’14
+with both model sizes, and Long et al. with the larger size.
+Qualitative results are shown in Fig. 4. Even though our
+method does not use superpixels or any piecewise constant
+assumptions, it nevertheless tends to produce large constant
+regions most of the time.
+4-Class Semantic Segmentation
+Couprie &al. 
+Khan &al. 
+Stuckler &al. 
+Mueller &al. 
+Gupta &al. ’13 
+Ours (AlexNet)
+Ours (VGG)
+13-Class Semantic
+Couprie &al. 
+Wang &al. 
+Hermans &al. 
+Khan &al. ∗
+Ours (AlexNet)
+Ours (VGG)
+40-Class Semantic Segmentation
+Per-Cls Acc.
+Freq. Jaccard
+Av. Jaccard
+Gupta&al.’13 
+Gupta&al.’14 
+Long&al. 
+Ours (AlexNet)
+Ours (VGG)
+Table 3. Semantic labeling on NYUDepth v2
+∗Khan&al. use a different overlapping label set.
+Sift Flow Semantic Segmentation
+Per-Class Acc.
+Freq. Jacc
+Farabet &al. (1) 
+Farabet &al. (2) 
+Tighe &al. 
+Pinheiro &al. 
+Long &al. 
+Ours (AlexNet) (1)
+Ours (AlexNet) (2)
+Ours (VGG) (1)
+Ours (VGG) (2)
+Table 4. Semantic labeling on the Sift Flow dataset. (1) and (2)
+correspond to non-reweighted and class-reweighted versions of
+our model (see text).
+We conﬁrm our method can be applied to additional scene
+types by evaluating on the Sift Flow dataset , which
+contains images of outdoor cityscapes and landscapes segmented into 33 categories.
+We found no need to adjust
+convolutional kernel sizes or learning rates for this dataset,
+and simply transfer the values used for NYUDepth directly;
+however, we do adjust the output sizes of the layers to match
+the new image sizes.
+We compare against Tighe et al. , Farabet et al. ,
+Pinheiro and Long et al. .
+Note that Farabet
+et al. train two models, using empirical or rebalanced class
+distributions by resampling superpixels. We train a more
+class-balanced version of our model by reweighting each
+class in the cross-entropy loss; we weight each pixel by
+αc = median freq/freq(c) where freq(c) is the number
+of pixels of class c divided by the total number of pixels in
+images where c is present, and median freq is the median
+of these frequencies.
+Results are in Table 4; we compare regular (1) and
+reweighted (2) versions of our model against comparison
+methods. Our smaller model substantially outperforms all
+but Long et al. , while our larger model performs similarly
+to Long et al. This demonstrates our model’s adaptability
+not just to different tasks but also different data.
+Pascal VOC
+In addition, we also verify our method using Pascal VOC.
+Similarly to Long et al. , we train using the 2011 train-
+Pascal VOC Semantic Segmentation
+2011 Validation
+2011 Test 2012 Test
+Pix. Acc. Per-Cls Acc. Freq.Jacc Av.Jacc
+Dai&al. 
+Long&al. 
+Chen&al. 
+Ours (VGG)
+Table 5. Semantic labeling on Pascal VOC 2011 and 2012.
+Contributions of Scales
+Pixelwise Error
+Pixelwise Accuracy
+lower is better
+higher is better
+Scale 1 only
+Scale 2 only
+Scales 1 + 2
+Scales 1 + 2 + 3
+Table 6. Comparison of networks for different scales for depth,
+normals and semantic labeling tasks with 4 and 13 categories.
+Largest single contributing scale is underlined.
+ing set augmented with 8498 training images collected by
+Hariharan et al. , and evaluate using the 736 images
+from the 2011 validation set not also in the Hariharan extra set, as well as on the 2011 and 2012 test sets. We perform online data augmentations as in our NYUDepth and
+Sift Flow models, and use the same learning rates. Because
+these images have arbitrary aspect ratio, we train our model
+on square inputs, and scale the smaller side of each image
+to 256; at test time we apply the model with a stride of 128
+to cover the image (two applications are usually sufﬁcient).
+Results are shown in Table 5 and Fig. 5. We compare
+with Dai et al. , Long et al. and Chen et al. ;
+the latter is a more recent work that augments a convolutional network with large top-layer ﬁeld of and fullyconnected CRF. Our model performs comparably to Long
+et al., even as it generalizes to multiple tasks, demonstrated
+by its adeptness at depth and normals prediction.
+7. Probe Experiments
+7.1. Contributions of Scales
+We compare performance broken down according to the
+different scales in our model in Table 6. For depth, normals and 4- and 13-class semantic labeling tasks, we train
+and evaluate the model using just scale 1, just scale 2, both,
+or all three scales 1, 2 and 3. For the coarse scale-1-only
+prediction, we replace the last fully connected layer of the
+coarse stack with a fully connected layer that outputs directly to target size, i.e. a pixel map of either 1, 3, 4 or 13
+channels depending on the task. The spatial resolution is
+the same as is used for the coarse features in our model, and
+is upsampled in the same way.
+We report the “abs relative difference” measure (i.e. |D−
+D∗|/D∗) to compare depth, mean angle distance for normals, and pixelwise accuracy for semantic segmentation.
+First, we note there is progressive improvement in all
+tasks as scales are added (rows 1, 3, and 4). In addition,
+we ﬁnd the largest single contribution to performance is the
+Ladicky&al. 
+Wang&al. 
+Ours (VGG)
+Ground Truth
+Figure 3. Comparison of surface normal maps.
+Effect of Depth/Normals Inputs
+Scale 2 only
+Scales 1 + 2
+RGB + pred. D&N
+RGB + g.t. D&N
+Table 7. Comparison of RGB-only, predicted depth/normals, and
+ground-truth depth/normals as input to the 13-class semantic task.
+coarse Scale 1 for depth and normals, but the more local
+Scale 2 for the semantic tasks — however, this is only due to
+the fact that the depth and normals channels are introduced
+at Scale 2 for the semantic labeling task. Looking at the
+labeling network with RGB-only inputs, we ﬁnd that the
+coarse scale is again the larger contributer, indicating the
+importance of the global view. (Of course, this scale was
+also initialized with ImageNet convolution weights that are
+much related to the semantic task; however, even initializing
+randomly achieves 54.5% for 13-class scale 1 only, still the
+largest contribution, albeit by a smaller amount).
+7.2. Effect of Depth and Normals Inputs
+The fact that we can recover much of the depth and normals information from the RGB image naturally leads to
+two questions: (i) How important are the depth and normals
+inputs relative to RGB in the semantic labeling task? (ii)
+What might happen if we were to replace the true depth and
+normals inputs with the predictions made by our network?
+To study this, we trained and tested our network using
+either Scale 2 alone or both Scales 1 and 2 for the 13class semantic labeling task under three input conditions:
+(a) the RGB image only, (b) the RGB image along with
+predicted depth and normals, or (c) RGB plus true depth
+and normals. Results are in Table 7. Using ground truth
+depth/normals shows substantial improvements over RGB
+alone. Predicted depth/normals appear to have little effect
+when using both scales, but a tangible improvement when
+using only Scale 2. We believe this is because any relevant
+information provided by predicted depths/normals for labeling can also be extracted from the input; thus the labeling
+network can learn this same information itself, just from the
+label targets. However, this supposes that the network structure is capable of learning these relations: If this is not the
+case, e.g. when using only Scale 2, we do see improvement.
+This is also consistent with Section 7.1, where we found the
+coarse network was important for prediction in all tasks —
+indeed, supplying the predicted depth/normals to scale 2 is
+able to recover much of the performance obtained by the
+RGB-only scales 1+2 model.
+8. Discussion
+Together, depth, surface normals and semantic labels
+provide a rich account of a scene. We have proposed a simple and fast multiscale architecture using convolutional networks that gives excellent performance on all three modalities. The models beat existing methods on the vast majority
+of benchmarks we explored. This is impressive given that
+many of these methods are speciﬁc to a single modality and
+often slower and more complex algorithms than ours. As
+such, our model provides a convenient new baseline for the
+three tasks. To this end, code and trained models can be
+found at 
+4-Class Prediction
+13-Class Prediction
+13-Class Ground Truth
+Figure 4. Example semantic labeling results for NYUDepth: (a) input image; (b) 4-class labeling result; (c) 13-class result; (d) 13-class
+ground truth.
+Figure 5. Example semantic labeling results for Pascal VOC 2011. For each image, we show RGB input, our prediction, and ground truth.
+Acknowledgements
+This work was supported by an ONR #N00014-13-1-0646 and an NSF CAREER grant.

@@ -1,0 +1,668 @@
+Robustness analysis of ﬁnite precision
+implementations
+Eric Goubault and Sylvie Putot
+CEA Saclay Nano-INNOV, CEA LIST, Laboratory for the Modelling and Analysis of
+Interacting Systems, Point Courrier 174, 91191 Gif sur Yvette CEDEX,
+{Eric.Goubault,Sylvie.Putot}@cea.fr
+Abstract. A desirable property of control systems is to be robust to inputs, that is small perturbations of the inputs of a system will cause only
+small perturbations on its outputs. But it is not clear whether this property is maintained at the implementation level, when two close inputs can
+lead to very diﬀerent execution paths. The problem becomes particularly
+crucial when considering ﬁnite precision implementations, where any elementary computation can be aﬀected by a small error. In this context,
+almost every test is potentially unstable, that is, for a given input, the
+computed (ﬁnite precision) path may diﬀer from the ideal (same computation in real numbers) path. Still, state-of-the-art error analyses do
+not consider this possibility and rely on the stable test hypothesis, that
+control ﬂows are identical. If there is a discontinuity between the treatments in the two branches, that is the conditional block is not robust to
+uncertainties, the error bounds can be unsound.
+We propose here a new abstract-interpretation based error analysis of ﬁnite precision implementations, relying on the analysis of for rounding error propagation in a given path, but which is now made sound
+in presence of unstable tests. It automatically bounds the discontinuity
+error coming from the diﬀerence between the ﬂoat and real values when
+there is a path divergence, and introduces a new error term labeled by the
+test that introduced this potential discontinuity. This gives a tractable error analysis, implemented in our static analyzer FLUCTUAT: we present
+results on representative extracts of control programs.
+Introduction
+In the analysis of numerical programs, a recurrent diﬃculty when we want to
+assess the inﬂuence of ﬁnite precision on an implementation, is the possibility
+for a test to be unstable: when, for a given input, the ﬁnite precision control
+ﬂow can diﬀer from the control ﬂow that would be taken by the same execution
+in real numbers. Not taking this possibility into account may be unsound if the
+diﬀerence of paths leads to a discontinuity in the computation, while taking it
+into account without special care soon leads to large over-approximations.
+And when considering programs that compute with approximations of real
+numbers, potentially unstable tests lie everywhere: we want to automatically
+characterize conditional blocks that perform a continuous treatment of inputs,
+ 
+and are thus robust, and those that do not. This unstable test problem is thus
+closely related to the notion of continuity/discontinuity in programs, ﬁrst introduced in . Basically, a program is continuous if, when its inputs are slightly
+perturbed, its output is also only slightly perturbed, very similarly to the concept
+of a continuous function. Discontinuity in itself can be a symptom of a major
+bug in some critical systems, such as the one reported in , where a F22 Raptor military aircraft almost crashed after crossing the international date line in
+2007, due to a discontinuity in the treatment of dates. Consider the toy program
+presented on the left hand side of Figure 1, where input x takes its real value in
+ , with an initial error 0 < u << 1, that can come either from previous ﬁnite
+precision computations, or from any uncertainty on the input such as sensor
+imperfection. The test is potentially unstable: for instance, if the real value of x
+at control point is rx
+ = 2, then its ﬂoating-point value is f x
+ = 2 + u. Thus
+the execution in real numbers would take the then branch and lead at control
+point to ry
+ + 2 = 4, whereas the ﬂoating-point execution would take
+the else branch and lead to f y
+ = 2 + u. The test is not only unstable,
+but also introduces a discontinuity around the test condition (x == 2). Indeed,
+ = 2, there is an error due to discontinuity of f y
+ = −2 + u. Of
+course, the computation of z around the test condition is continuous.
+In the rest of the paper, we propose a new analysis, that enhances earlier work
+by the authors , by computing and propagating bounds on those discontinuity
+errors. This previous work characterized the computation error due to the implementation in ﬁnite precision, by comparing the computations in real-numbers
+with the same computations in the ﬂoating-point semantics, relying on the stable
+test assumption: the ﬂoating-point number control ﬂow does not diverge from
+the real number control ﬂow. In its implementation in FLUCTUAT , in the
+case when the analysis determined a test could be unstable, it issued a warning,
+and the comparison between the two semantics could be unsound. This issue,
+and the stable test assumption, appear in all other (static or dynamic) existing
+analyzes of numerical error propagation; the expression unstable test is actually
+taken from CADNA , a stochastic arithmetic instrumentation of programs, to
+assert their numerical quality. In Hoare provers dealing with both real number
+and ﬂoating-point number semantics, e.g. this issue has to be sorted out by
+the user, through suitable assertions and lemmas.
+Here as in previous work, we rely on the relational abstractions of real
+number and ﬂoating numbers semantics using aﬃne sets (concretized as zonotopes) . But we now also, using these abstractions, compute and
+solve constraints on inputs such that the execution potentially leads to unstable
+tests, and thus accurately bound the discontinuity errors, computed as the difference of the ﬂoating-point value in one branch and the real value in another,
+when the test distinguishing these two branches can be unstable.
+Let us exemplify and illustrate this analysis on the program from Figure 1.
+The real value of input x will be abstracted by the aﬃne form ˆrx
+ = 2+εr
+1 is a symbolic variable with values in [−1, 1]. Its error is ˆex
+ = u and its ﬁnite
+x := + u; // 
+ = 2 + εr
+ = u */
+if (x ≤2) {
+y = x+2; // 
+z = x*x; // 
+ = 4 + εr
+ = u + δεe
+y = x; // 
+z = x*x; // 
+ = 2 + εr
+ = u */
+} // /* ˆry
+[then]: εr
+[else]: εr
+[then]: εr
+[else]: εr
+Φr ∩Φf: [unstable]: −u < εr
+Fig. 1. Running example
+precision value is ˆf x
+ = 2 + εr
+1 + u. Note the functional abstraction:
+aﬃne forms represent a function from inputs to variable values. We will use
+this to interpret tests, and in particular to compute unstable tests conditions.
+For instance, the condition for the execution in real numbers to take the then
+branch is here 2 + εr
+1 ≤2, that is εr
+1 ≤0. Now, the condition for the execution
+in ﬁnite precision to take the else branch is ˆf x
+ > 2, that is 2 + εr
+1 + u > 2,
+which is equivalent to εr
+1 > −u. Thus, the unstable test condition being that for
+the same input - or equivalently here the same value of εr
+1 - the real and ﬂoat
+control ﬂow are diﬀerent, this amounts to intersecting these two conditions on
+1, and yields −u < εr
+1 ≤0. These constraints are illustrated on Figure 1, with
+u = 0.2: Φr denotes the constraints on the real value, Φf, the constraints on the
+ﬁnite precision value, and Φr ∩Φf, the unstable test condition. For the other
+possibility for an unstable test, that is the execution in real numbers takes the
+else branch while the ﬂoat execution takes the then branch, the constraints are
+1 < 0 and εr
+1 ≤−u, which are incompatible. This possibility is thus excluded.
+We will see later that these constraints allow us in general to reﬁne the bounds on
+the discontinuity error, but they are also useful to characterize the set of inputs
+that can lead to unstable test: −u < εr
+1 ≤0 corresponds to 2 −u < rx < 2.
+Take now variable y. In the then branch, its real value is ˆry
+ +2 = 4+εr
+the error ˆey
+2, where δ is the bound on the elementary rounding error
+on y, due to the addition, we deduce ˆf y
+ . In the else branch,
+the real value is ˆry
+ = 2 + εr
+1, the error ˆey
+ , and we deduce
+ . In Figure 1, we represent in solid lines the real value of y and in
+dashed lines its ﬁnite precision value. With the previous analysis that makes
+the stable test assumption, we compute when joining branches at control point
+ = 3+εr
+6 ∈ with new noise symbol εr
+6 (note that we will not
+detail here the upper bound operator on aﬃne forms, discussed in e.g. ),
+ = u + δεe
+2 ∈[u −δ, u + δ], and ˆf y
+ = 3 + u + εr
+This is sound for the real and ﬂoat values ˆry
+ and ˆf y
+ , but unsound for the error
+because of the possibility of an unstable test. Our new analysis, when joining
+branches, also computes bounds for ˆry
+ = 2+εr
+1) = −2 under the
+unstable test condition −u < εr
+1 ≤0 (or 2 −u <ˆrx < 2): a new discontinuity
+term is added and the error is now ˆey
+ where dy
+ = −2χ[−u,0](ε1) and
+χ[a,b](x) equals 1 if x is in [a, b] and 0 otherwise.
+Related work In , the authors introduce a continuity analysis of programs.
+This approach is pursued in particular in , where several reﬁnements of the
+notion of continuity or robustness of programs are proposed, another one being
+introduced in . These notions are discussed in , in which an interactive
+proof scheme for proving a general form of robustness is discussed. In , the
+algorithm proposed by the authors symbolically traverses program paths and
+collects constraints on input and output variables. Then for each pair of program paths, the algorithm determines values of input variables that cause the
+program to follow these two paths and for which the diﬀerence in values of the
+output variable is maximized. We use one of their examples (transmission shift,
+Section 5), and show that we reach similar conclusions. One diﬀerence between
+the approaches is that we give extra information concerning the ﬁnite precision
+ﬂow divergence with respect to the real number control ﬂow, potentially exhibiting ﬂawed behaviors. Also, their path-sensitive analysis can exhibit witnesses for
+worst discontinuity errors, but at the expense of a much bigger combinatorial
+complexity. Actually, we will show that our unstable test constraints also allow
+us to provide indication on the inputs leading to discontinuity errors.
+Robustness has also been discussed in the context of synthesis and validation
+of control systems, in . The formalization is based on automata theoretic
+methods, providing a convenient deﬁnition of a metric between B¨uchi automata.
+Indeed, robustness has long been central in numerical mathematics, in particular
+in control theory. The ﬁeld of robust control is actually concerned in proving
+stability of controlled systems where parameters are only known in range. A
+notion which is similar to the one of , but in the realm of real numbers and
+control of ordinary diﬀerential equations, is the input-output stability/continuity
+in control systems as discussed in .
+This problematic is also of primary importance in computational geometry,
+see for instance for a survey on the use of “robust geometric predicates”.
+Nevertheless, the aim pursued is diﬀerent from ours: we are mostly interested
+in critical embedded software, where the limited resources generally prevent the
+use of complicated, reﬁned arithmetic algorithms.
+Contents Our main contribution is a tractable analysis that generalizes both
+the abstract domain of and the continuity or robustness analyses: it ensures
+the ﬁnite precision error analysis is now sound even in the presence of unstable
+tests, by computing and propagating discontinuity error bounds for these tests.
+We ﬁrst review in Section 2 the basics of the relational analysis based on
+aﬃne forms for the abstraction of real number semantics necessary to understand this robustness analysis presented here. We then introduce in Section 3
+our new abstract domain, based on an abstraction similar to that of , but
+reﬁned to take care of unstable tests properly. We present in Section 4 some re-
+ﬁnements that are useful for reaching more accurate results, but are not central
+to understand the principles of the analysis. We conclude with some experiments
+using our implementation of this abstraction in our static analyzer FLUCTUAT.
+Preliminaries: aﬃne sets for real valued analysis
+We recall here the key notions on the abstract domains based on aﬃne sets for
+the analysis of real value of program variables that will be needed in Sections 3
+and 4 for our robustness analysis. We refer to for more details.
+From aﬃne arithmetic to aﬃne sets Aﬃne arithmetic is a more accurate
+extension of interval arithmetic, that takes into account aﬃne correlations between variables. An aﬃne form is a formal sum over a set of noise symbols εi
+i ∈R for all i. Each noise symbol εi stands for an independent component
+of the total uncertainty on the quantity ˆx, its value is unknown but bounded
+in [-1,1]; the corresponding coeﬃcient αx
+i is a known real value, which gives the
+magnitude of that component. The same noise symbol can be shared by several
+quantities, indicating correlations among them. These noise symbols can not
+only model uncertainty in data or parameters, but also uncertainty coming from
+computation. The values that a variable x deﬁned by an aﬃne form ˆx can take
+is in the range γ(ˆx) = [αx
+The assignment of a variable x whose value is given in a range [a, b], is deﬁned
+as a centered form using a fresh noise symbol εn+1 ∈[−1, 1], which indicates
+unknown dependency to other variables: ˆx = (a+b)
+The result of linear operations on aﬃne forms is an aﬃne form, and is thus
+interpreted exactly. For two aﬃne forms ˆx and ˆy, and a real number λ, we have
+λˆx + ˆy = (λαx
+i )εi. For non aﬃne operations, we select
+an approximate linear resulting form, and bounds for the error committed using
+this approximate form are computed, that are used to add a new noise term to
+the linear form.
+As a matter of fact, the new noise symbols introduced in these linearization
+processes, were given diﬀerent names in : the ηj symbols. Although they
+play a slightly diﬀerent role than that of εi symbols, for sake of notational
+simplicity, we will only give formulas in what follows, using the same εi symbols
+for both types of symbols. The values of the variables at a given control point as
+a linearized function of the values of the inputs of the program, that we generally
+identify with a preﬁx of the εi vector. The uncertainties, due to the abstraction
+of non-linear features such as the join and the multiplication will be abstracted
+on a suﬃx of the εi vector - previously the ηj symbols.
+In what follows, we use the matrix notations of to handle aﬃne sets, that
+is tuples of aﬃne forms. We note M(n, p) the space of matrices with n lines and
+p columns of real coeﬃcients. A tuple of aﬃne forms expressing the set of values
+taken by p variables over n noise symbols εi, 1 ≤i ≤n, can be represented by
+a matrix A ∈M(n + 1, p).
+Constrained aﬃne sets As described in , we interpret tests by adding some
+constraints on the εi noise symbols, instead of having them vary freely into [-
+1,1]: we restrain ourselves to executions (or inputs) that can take the considered
+branch. We can then abstract these constraints in any abstract domain, the
+simplest being intervals, but we will see than we actually need (sub-)polyhedric
+abstractions to accurately handle unstable tests. We note A for this abstract
+domain, and use γ : A →℘(Rn) for the concretisation operator, and α : ℘(Rn) →
+A for some “abstraction” operator, not necessarily the best one (as in polyhedra,
+this does not exist): we only need to be able to get an abstract value from a set
+of concrete values, such that X ⊆γ ◦α(X).
+This means that abstract values X are now composed of a zonotope identiﬁed
+with its matrix RX ∈M(n + 1, p), together with an abstraction ΦX of the
+constraints on the noise symbols, X = (RX, ΦX). The concretisation of such
+constrained zonotopes or aﬃne sets is γ(X) =
+tCXϵ | ϵ ∈γ(ΦX)
+. For Φ ∈A,
+and ˆx an aﬃne form, we note Φ(ˆx) the interval [J−, J+] with J−and J+ given
+by the linear programs J−= infε∈γ(Φ) ˆx(ε) and J+ = supε∈γ(Φ) ˆx(ε).
+Example 1. For instance on the running example, starting with program variable
+x in , we associate the abstract value X with RX = (2 1), i.e. ˆx = 2 + ε1,
+and γ(ΦX) = γ(ε1) = [−1, 1]. The interpretation of the test if (x<=2) in the
+then branch is translated into constraint ε1 ≤0, thus γ(ΦX) = [−1, 0]. Then,
+the interval concretisation of ˆx is γ(ˆx) = [2 −1, 2] = .
+Transfer functions for arithmetic expressions Naturally, the transfer functions described in the unconstrained case are still correct when we have additional constraints on the noise symbols; but for the non linear operations such as
+the multiplication, the constraints can be used to reﬁne the result by computing
+more accurate bounds on the non aﬃne part which is over-approximated by a
+new noise term, solving with a guaranteed linear solver1 the linear programming
+problems supϵ∈γ(ΦX) ε (resp. inf). Transfer functions are described, respectively
+in the unconstrained and constrained cases in and , and will not be
+detailed here, except in the example below.
+Example 2. Consider the computation z=x*x at control point 3 in the then
+branch of the running example (Figure 1). If computed as in the unconstrained
+case, we write ˆz = (2 + ε1)(2 + ε1) = 4 + 4ε1 + (ε1)2, which, using the fact
+that (ε1)2 is in , can be linearized using a new noise symbol by ˆz =
+4.5+4ε1 +0.5ε3 (new noise symbol called ε3 because introduced at control point
+3). The concretisation of ˆz , using ε1 ∈[−1, 0], is then γ(ˆz ) = .
+1 For an interval domain for the constraints on noise symbols, a much more straightforward computation can be made, of course.
+But it is better to use the constraint on ε1 to linearize z=x*x at the center of
+the interval ε1 ∈[−1, 0]: we then write ˆz = (1.5+(ε1 +0.5))(1.5+(ε1 +0.5)) =
+2.25 + 1.5 + (ε1 + 0.5) + (ε1 + 0.5)2, which, using (ε1 + 0.5)2 ∈[0, 0.25], can be
+linearized as ˆz = 3.875 + 3ε1 + 0.125ε3. Its concretisation is γ(ˆz ) = [0.75, 4].
+In the else branch, z=x*x interpreted at control point 5 with ε1 ∈ is
+linearized by ˆz = (2.5 + (ε1 −0.5))(2.5 + (ε1 −0.5)) = 3.875 + 5ε1 + 0.125ε5.
+And γ(ˆz ) = [3.75, 9].
+Join We need an upper bound operator to combine abstract values coming from
+diﬀerent branches. The computation of upper bounds (and if possible minimal
+ones) on constrained aﬃne sets is a diﬃcult task, already discussed in several
+papers , and orthogonal to the robustness analysis presented here.
+We will thus consider we have an upper bound operator on constrained aﬃne
+sets we note ⊔, and focus on the additional term due to discontinuity in tests.
+Robustness analysis of ﬁnite precision computations
+We introduce here an abstraction which is not only sound in presence of unstable
+tests, but also exhibits the potential discontinuity errors due to these tests. For
+more concision, we insist here on what is directly linked to an accurate treatment
+of these discontinuities, and rely on previous work for the rest.
+Abstract values
+As in the abstract domain for the analysis of ﬁnite precision computations of ,
+we will see the ﬂoating-point computation as a perturbation of a computation
+in real numbers, and use zonotopic abstractions of real computations and errors (introducing respectively noise symbols εr
+j), from which we get
+an abstraction of ﬂoating point computations. But we make here no assumptions on control ﬂows in tests and will interpret tests independently on the real
+value and the ﬂoating-point value. For each branch, we compute conditions for
+the real and ﬂoating-point executions to take this branch. The test interpretation on a zonotopic value lets the aﬃne sets unchanged, but yields constraints on noise symbols. For each branch, we thus get two sets of constraints:
+1, . . . , εr
+r for the real control ﬂow (test computed on real values
+RX), and (εr, εe) = (εr
+1, . . . , εr
+1, . . . , εe
+f for the ﬁnite precision control
+ﬂow (test computed on ﬂoat values RX + EX).
+Deﬁnition 1. An abstract value X, deﬁned at a given control point, for a program with p variables x1, . . . , xp, is thus a tuple X = (RX, EX, DX, ΦX
+composed of the following aﬃne sets and constraints, for all k = 1, . . . , p:
+where εr ∈ΦX
+where (εr, εe) ∈ΦX
+where (εr, εe) ∈ΦX
+– RX ∈M(n + 1, p) is the aﬃne set deﬁning the real values of variables, and
+the aﬃne form ˆrX
+k giving the real value of xk, is deﬁned on the εr
+– EX ∈M(n+m+1, p) is the aﬃne set deﬁning the rounding errors (or initial
+uncertainties) and their propagation through computations as deﬁned in ,
+and the aﬃne form ˆeX
+k is deﬁned on the εr
+i that model the uncertainty on
+the real value, and the εe
+i that model the uncertainty on the rounding errors,
+– DX ∈M(o + 1, p) is the aﬃne set deﬁning the discontinuity errors, and ˆdX
+is deﬁned on noise symbols εd
+– the ﬂoating-point value is seen as the perturbation by the rounding error of
+the real value, ˆf X
+is the abstraction of the set of constraints on the noise symbols such
+that the real control ﬂow reaches the control point, εr ∈ΦX
+r , and ΦX
+abstraction of the set of constraints on the noise symbols such that the ﬁnite
+precision control ﬂow reaches the control point, (εr, εe) ∈ΦX
+A subtlety is that the same aﬃne set RX is used to deﬁne the real value and
+the ﬂoating-point value as a perturbation of the real value, but with diﬀerent
+constraints: the ﬂoating-point value is indeed a perturbation by rounding errors
+of an idealized computation that would occur with the constraints ΦX
+Test interpretation
+Consider a test e1 op e2, where e1 and e2 are two arithmetic expressions, and
+op an operator among ≤, <, ≥, >, =, ̸=, the interpretation of this test in our abstract model reduces to the interpretation of z op 0, where z is the abstraction
+of expression e1 - e2 with aﬃne sets:
+Deﬁnition 2. Let X be a constrained aﬃne set over p variables. We deﬁne
+Z = [[e1 op e2]]X by Y = [[xp+1 := e1 −e2]]X in Z = dropp+1([[xp+1 op 0]]Y ),
+where function dropp+1 returns the aﬃne sets from which component p + 1 (the
+intermediary variable) has been eliminated.
+As already said, tests are interpreted independently on the aﬃne sets for
+real and ﬂoating-point value. We use in Deﬁnition 3, the test interpretation on
+constrained aﬃne sets introduced in :
+Deﬁnition 3. Let X = (RX, EX, DX, ΦX
+f ) a constrained aﬃne set. We
+deﬁne Z = ([[xk op 0]]X by
+(RZ, EZ, DZ) = (RX, EX, DX)
+(εr, εe) | rX
+Example 3. Consider the running example. We start with ˆrx
+ = 2 + εr
+The condition for the real control ﬂow to take the then branch is ˆrx
+ = 2+εr
+thus Φr is εr
+1 ∈[−1, 0]. The condition for the ﬁnite precision control ﬂow to take
+the then branch is ˆf x
+ = 2 + εr
+1 + u ≤2, thus Φf is εr
+1 ∈[−1, −u].
+Interval concretisation
+The interval concretisation of the value of program variable xk deﬁned by the
+abstract value X = (RX, EX, DX, ΦX
+f ), is, with the notations of Section 2:
+Example 4. Consider variable y in the else branch of our running example.
+The interval concretisation of its real value on ΦX
+r , is γr(ˆry
+2 + = . The interval concretisation of its ﬂoating-point value on ΦX
+is γf( ˆf y
+ + u) = 2 + [−u, 1] + u = [2, 3 + u]. Actually, ˆry
+ is deﬁned
+f , as illustrated on Figure 1, because it is both used to abstract the
+real value, or, perturbed by an error term, to abstract the ﬁnite precision value.
+In other words, the concretisation of the real value is not the same when it
+actually represents the real value at the control point considered (γr(ˆrX
+when it represents a quantity which will be perturbed to abstract the ﬂoatingpoint value (in the computation of γf( ˆf X
+Transfer functions: arithmetic expressions
+We rely here on the transfer functions of for the full model of values and
+propagation of errors, except than some additional care is required due to these
+constraints. As quickly described in Section 2, constraints on noise symbols can
+be used to reﬁne the abstraction of non aﬃne operations. Thus, in order to
+soundly use the same aﬃne set RX both for the real value and the ﬂoating-point
+value as a perturbation of a computation in real numbers, we use constraints
+to abstract transfer functions for the real value RX in arithmetic
+expressions. Of course, we will then concretize them either for ΦX
+described in Section 3.3.
+Example 5. Take the running example. In example 2, we computed the real form
+ˆrz in both branches, interpreting instruction z=x*x, for both sets of constraints
+Φr. In order to have an abstraction of ˆrz that can be soundly used both for
+the ﬂoating-point and real values, we will now need to compute this abstraction
+and linearization for Φr ∪Φf. In the then branch, εr
+1 is now taken in [−1, 0] ∪
+[−1, −u] = [−1, 0], so that ˆrz
+ = 3.875 + 3εr
+1 + 0.125εr
+3 remains unchanged.
+But in the else branch, εr
+1 is now taken in ∪[−u, 1] = [−u, 1], so that
+z=x*x can still be linearized at εr
+1 = 0.5 but we now have ˆrz
+ linearized from
+(2.5 + (εr
+1 −0.5))(2.5 + (εr
+1 −0.5)) = 6.25 + 5(εr
+1 −0.5) + (εr
+1 −0.5)2 where
+−0.5 −u ≤εr
+1 −0.5 ≤0.5, so that ˆrz
+ = (3.75 + (0.5+u)2
+1 + (0.5+u)2
+3.875 + u+u2
+1 + (0.125 + u+u2
+In this section, we consider we have upper bound operator ⊔on constrained
+aﬃne sets, and focus on the additional term due to discontinuity in tests. As
+for the meet operator, we join component-wise the real and ﬂoating-point parts.
+But, in the same way as for the transfer functions, the join operator depends on
+the constraints on the noise symbols: to compute the aﬃne set abstracting the
+real value, we must consider the join of constraints for real and ﬂoat control ﬂow,
+in order to soundly use a perturbation of the real aﬃne set as an abstraction of
+the ﬁnite precision value.
+Let us consider the possibility of an unstable test: for a given input, the
+control ﬂows of the real and of the ﬁnite precision executions diﬀer. Then, when
+we join abstract values X and Y coming from the two branches, the diﬀerence
+between the ﬂoating-point value of X and the real value of Y , (RX +EX)−RY ,
+and the diﬀerence between the ﬂoating-point value of X and the real value
+of Y , (RY + EY ) −RX, are also errors due to ﬁnite precision. The join of
+errors EX, EY , (RX + EX) −RY and (RY + EY ) −RX can be expressed as
+EZ + DZ, where EZ = EX ⊔EY is the propagation of classical rounding errors,
+and DZ = DX ⊔DY ⊔(RX −RY )⊔(RY −RX) expresses the discontinuity errors.
+The rest of this section will be devoted to an accurate computation of these
+discontinuity terms. A key point is to use the fact that we compute these terms
+only in the case of unstable tests, which can be expressed as an intersection
+of constraints on the εr
+i noise symbols. Indeed this intersection of constraints
+express the unstable test condition as a restriction of the sets of inputs (or
+equivalently the εr
+i ), such that an unstable test is possible. The fact that the
+same aﬃne set RX is used both to abstract the real value, and the ﬂoating-point
+value when perturbed, is also essential to get accurate bounds.
+Deﬁnition 4. We join two abstract values X and Y by Z = X ⊔Y deﬁned as
+Z = (RZ, EZ, DZ, ΦX
+f ) = (RX, ΦX
+f ) ⊔(RY , ΦY
+f ) = (EX, ΦX
+f ) ⊔(EY , ΦY
+DZ = DX ⊔DY ⊔(RX −RY , ΦX
+r ) ⊔(RY −RX, ΦY
+Example 6. Consider again the running example, and let us restrict ourselves
+for the time being to variable y. We join X = (ˆry
+ = 4+εr
+ = u+δεe
+[−1, 0], (εr
+2) ∈[−1, −u] × [−1, 1]) coming from the then branch with Y =
+ = 2 + εr
+ = u, 0, εr
+1 ∈ , εr
+1 ∈[−u, 1]) coming from the else branch.
+Then we can compute the discontinuity error due to the ﬁrst possible unstable
+test, when the real takes the then branch and ﬂoat takes the else branch:
+ = 2 + εr
+1 = −2, for εr
+r = [−u, 1] ∩[−1, 0] = [−u, 0]
+(note that the restriction on εr
+1 is not used here but will be in more general cases).
+The other possibility of an unstable test, when the real takes the else branch and
+ﬂoat takes the then branch, occurs for εr
+r = [−1, −u] ∩ = ∅: the
+set of inputs for which this unstable test can occur is empty, it never occurs. We
+get Z = (3 + εr
+6, u + δεe
+2, −2χ[−u,0](εr
+6) ∈[−1, 1]2, (εr
+2) ∈[−1, 1]3).
+Technical matters
+We gave here the large picture. Still, there are some technical matters to consider
+in order to eﬃciently compute accurate bounds for the discontinuity error in the
+general case. We tackle some of them in this section.
+Constraint solving using slack variables
+Take the following program, where the real value of inputs x and y are in range
+[-1,1], and both have an error bounded in absolute value by some small value u:
+[ - 1 , 1 ] + [ -u , u ] ;
+0 < u << 1
+[ - 1 , 1 ] + [ -u , u ] ;
+t = y - x ;
+t = x - y ;
+The test can be unstable, we want to prove the treatment continuous. Before the
+2. The conditions for the control ﬂow
+to take the then branch are εr
+2 for the real execution, and εr
+for the ﬂoat execution. The real value of t in this branch is ˆrt
+else branch, the conditions are the reverse and ˆrt
+Let us consider the possibility of unstable tests. The conditions for the
+ﬂoating-point to take the else branch while the real takes the then branch are
+2, from which we can deduce −2u < εr
+Under these conditions, we can bound ˆrt
+ = 2(εr
+2) ∈[−4u, 0]. The other
+unstable test is symmetric, we thus have proven that the discontinuity error is
+of the order of the error on inputs, that is the conditional block is robust.
+Note that on this example, we needed more than interval constraints on
+noise symbols, and would in general have to solve linear programs. However,
+we can remark that constraints on real and ﬂoating-point parts share the same
+subexpressions on the εr noise symbols. Thus, introducing slack symbols such
+that the test conditions are expressed on these slack variables, we can keep
+the full precision when solving the constraints in intervals. Here, introducing
+2, the unstable test condition is expressed as εr
+3 < 0 and εr
+This is akin to using the ﬁrst step of the simplex method for linear programs,
+where slack variables are introduced to put the problem in standard form.
+Linearization of non aﬃne computations near the test condition
+There can be a need for more accuracy near the test conditions: one situation is
+when we have successive joins, where several tests may be unstable, such as the
+interpolator example presented in the experiments. In this case, it is necessary
+to keep some information on the states at the extremities when joining values
+(and get rid of this extra information as soon as we exit the conditional block).
+More interesting, there is a need for more accuracy near the test condition when
+the conditional block contains some non linear computations.
+Example 7. Consider again the running example. We are now interested in variable z. There is obviously no discontinuity around the test condition; still, our
+present abstraction is not accurate enough to prove so. Remember from Examples 2 and 5 that we linearize in each branch x*x for Φr ∪Φf, introducing new
+noise symbols εr
+5. Let us consider the unstable test when the real execution takes the then branch and the ﬂoating-point execution the other branch,
+the corresponding discontinuity error ˆrz
+ , under unstable test constraint
+1 < 0, is:
+ = u + u2
+1 + (0.125 + u + u2
+5 −0.125εr
+In this expression, from constraint −u < εr
+1 < 0 we can prove that u+u2
+5 is of the order of the input error u. But the new noise term 0.125(εr
+3) is only bounded by [−0.25, 0.25]. We thus cannot prove continuity here.
+This is illustrated on the left-hand side of Figure 2, on which we represented
+the zonotopic abstractions ˆrz
+ and ˆrz
+ : it clearly appears that the zonotopic
+abstraction is not suﬃcient to accurately bound the discontinuity error (in the
+ellipse), that will locally involve some interval-like computation. Indeed, in the
+linearization of ˆrz
+ (resp ˆrz
+ ), we lost the correlation between the new symbol εr
+5), and symbol εr
+1 on which the unstable test constraint is expressed. As
+a matter of fact, we can locally derive in a systematic way some aﬃne bounds
+for the new noise symbols used for linearization in terms of the existing noise
+symbols, using the interval aﬃne forms of , centered at the extremities of the
+constraints (ΦX
+i ) of interest.
+In the then branch, we have εr
+1 ∈[−1, 0], and z=x*x is linearized from 3.75+
+1+0.5)+(εr
+1+0.5)2, using (ε1+0.5)2 ∈[0, 0.25], into ˆrz
+ = 3.875+3εr
+We thus know at linearization time that εr
+1 + 0.5)2 −1. Using
+the mean value theorem around εr
+1 = 0 and restricting εr
+1 ∈[−0.25, 0], we write
+1) = f(0) + ∆εr
+where interval ∆bounds the derivative f ′(εr
+1) in the range [−0.25, 0]. We get
+3 = 1 + 16([−0.25, 0] + 0.5)εr
+1 = 1 + εr
+1, which we can also write 1 + 8εr
+3 ≤1 + 4εr
+1 ∈[−0.25, 0]. Variable z can thus locally (for εr
+1 ∈[−0.25, 0])
+be expressed more accurately as a function of εr
+1, this is what is represented by
+the darker triangular region inside the zonotopic abstraction, on the right-hand
+side of Figure 2.
+In the same way, εr
+5 can be expressed in the else branch as an aﬃne form
+1 with interval coeﬃcient ∆′, so that with the unstable test constraint
+1 < 0, we can deduce from Equation (1) that there exists some constant
+K such that |ˆrz
+ | ≤Ku, that is the test is robust. Of course, we could reﬁne
+even more the bounds for the discontinuity error by considering linearization on
+smaller intervals around the boundary condition.
+Fig. 2. Improvement by local linearization for non aﬃne computations
+Experiments
+In what follows, we analyze some examples inspired by industrial codes and
+literature, with our implementation in our static analyzer FLUCTUAT.
+A simple interpolator The following example implements an interpolator, aﬃne
+by sub-intervals, as classically found in critical embedded software. It is a robust implementation indeed. In the code below, we used the FLUCTUAT assertion FREAL WITH ERROR(a,b,c,d) to denote an abstract value (of resulting type
+float), whose corresponding real values are x ∈[a, b], and whose corresponding
+ﬂoating-point values are of the form x + e, with e ∈[c, d].
+R1 ,
+= R1 
+E = FREAL WITH ERROR( 0 . 0 , 1 0 0 . 0 , - 0 . 0 0 0 0 1 , 0 . 0 0 0 0 1 ) ;
++ R1 ;
+(E- 5 ) ∗1 . 1
++ R1 ;
+= R1 ;
+The analysis ﬁnds that the interpolated res is within [-2.25e-5,33.25], with
+an error within [-3.55e-5,2.4e-5], that is of the order of magnitude of the input
+error despite unstable tests.
+A simple square root function This example is a rewrite in some particular case,
+of an actual implementation of a square root function, in an industrial context:
+1 . 4 1 4 2 1 3 5 3 8 1 6 9 8 6 0 8 3 9 8 4 3 7 5 0 ;
+= DREAL WITH ERROR( 1 , 2 , 0 , 0 . 0 0 1 ) ;
+s q r t 2 ∗(1+( I /2- 1 ) ∗( . 5 - 0 . 1 2 5 ∗( I /2- 1 ) ) ) ;
+S = 1+( I - 1 ) ∗( . 5 + ( I - 1 ) ∗( -.125+( I - 1 ) ∗. 0 6 2 5 ) ) ;
+With the former type of analysis within FLUCTUAT, we get the unsound result
+- but an unstable test is signalled - that S is proven in the real number semantics
+to be in [1,1.4531] with a global error in [-0.0005312,0.00008592].
+As a matter of fact, the function does not exhibit a big discontinuity, but still,
+it is bigger than the one computed above. At value 2, the function in the then
+branch computes sqrt2 which is approximately 1.4142, whereas the else branch
+computes 1+0.5-0.125+0.0625=1.4375. Therefore, for instance, for a real number
+input of 2, and a ﬂoating-point number input of 2+ulp(2), we get a computation
+error on S of the order of 0.0233. FLUCTUAT, using the domain described in
+this paper ﬁnds that S is in the real number semantics within [1,1.4531] with a
+global error within [-0.03941,0.03895], the discontinuity at the test accounting
+for most of it, i.e. an error within [-0.03898,0.03898] (which is coherent with
+respect to the rough estimate of 0.0233 we made).
+Transmission shift from We consider here the program from that implements a simple model of a transmission shift: according to a variable angle
+measured, and the speed, lookup tables are used to compute pressure1 and
+pressure2, and deduce also the current gear (3 or 4 here). As noted in ,
+pressure1 is robust. But a small deviation in speed can cause a large deviation
+in the output pressure2. As an example, when angle is 34 and speed is 14,
+pressure2 is 1000. But if there is an error of 1 in the measurement of angle,
+so that its value is 35 instead of 34, then pressure2 is found to be 0. Similarly
+with an error of 1 on speed: if it is wrongly measured to be 13 instead of 14,
+pressure2 is found equal to 0 instead of 1000, again.
+This is witnessed by our discontinuity analysis. For angle in , with an
+error in [-1,1] and speed in , with an error in [-1,1], we ﬁnd pressure1 equal
+to 1000 without error and pressure2 in with an error in [-1000,1000],
+mostly due to test if (oval <= 3) in function lookup2 2d. The treatment on
+gear is found discontinuous, because of test if (3*speed <= val1).
+Householder Let us consider the C code printed on the left hand side of Figure 3,
+which presents the results of the analysis of this program by FLUCTUAT. This
+program computes in variable Output, an approximation of the square root of
+variable Input, which is given here in a small interval [16.0,16.002]. The program
+iterates a polynomial approximation until the diﬀerence between two successive
+iterates xn and xnp1 is smaller than some stopping criterion. At the end, it checks
+that something indeed close to the mathematical square root is computed, by
+adding instruction should be zero = Output-sqrt(Input); Figure 3 presents
+the result of the analysis for the selected variable should be zero, at the end
+of the program. The analyzer issues an unstable test warning, which line in the
+program is highlighted in red. On the right hand side, bounds for the ﬂoatingpoint, real values and error of should be zero are printed. The graph with the
+error bars represents the decomposition on the error on its provenance on the
+lines of the program analyzed: in green are standard rounding errors, in purple
+the discontinuity error due to unstable tests. When an error bar is selected (here,
+the purple one), the bounds for this error are printed in the boxes denoted “At
+current point”. The analyzer here proves that when the program terminates, the
+diﬀerence in real numbers between the output and the mathematical square root
+of the input is bounded by [−1.03e−8, 1.03e−8]: the algorithm in real numbers
+indeed computes something close to a square root, and the method error is of
+the order of the stopping criterion eps. The ﬂoating-point value of the diﬀerence
+is only bounded in [−1.19e−6, 1.19e−6], and the error mainly comes from the
+Fig. 3. Fluctuat analysis of the Householder scheme: error due to unstable test is purple
+instability of the loop condition: this signals a diﬃculty of this scheme when
+executed in simple precision. And indeed, this scheme converges very quickly in
+real numbers (FLUCTUAT proves that it always converges in 6 iterations for
+the given range of inputs), but there exists input values in [16.0,16.002] for which
+the ﬂoating-point program never converges.
+Conclusion
+We have proposed an abstract interpretation based static analysis of the robustness of ﬁnite precision implementations, as a generalization of both software
+robustness or continuity analysis and ﬁnite precision error analysis, by abstracting the impact of ﬁnite precision in numerical computations and control ﬂow
+divergences. We have demonstrated its accuracy, although it could still be improved. We could also possibly use this abstraction to automatically generate
+inputs and parameters leading to instabilities. In all cases, this probably involves resorting to more sophisticated constraint solving: indeed our analysis
+can generate constraints on noise symbols, which we only partially use for the
+time being. We would thus like to go along the lines of , which reﬁned the
+results of a previous version of FLUCTUAT using constraint solving, but using
+more reﬁned interactions in the context of the present abstractions.

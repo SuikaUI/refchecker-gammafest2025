@@ -1,0 +1,451 @@
+Learning Data Augmentation Strategies for Object Detection
+Barret Zoph∗, Ekin D. Cubuk∗, Golnaz Ghiasi, Tsung-Yi Lin, Jonathon Shlens, Quoc V. Le
+Google Research, Brain Team
+{barretzoph, cubuk, golnazg, tsungyi, shlens, qvl}@google.com
+Data augmentation is a critical component of training
+deep learning models.
+Although data augmentation has
+been shown to signiﬁcantly improve image classiﬁcation,
+its potential has not been thoroughly investigated for object detection.
+Given the additional cost for annotating
+images for object detection, data augmentation may be of
+even greater importance for this computer vision task. In
+this work, we study the impact of data augmentation on object detection. We ﬁrst demonstrate that data augmentation operations borrowed from image classiﬁcation may be
+helpful for training detection models, but the improvement
+is limited. Thus, we investigate how learned, specialized
+data augmentation policies improve generalization performance for detection models. Importantly, these augmentation policies only affect training and leave a trained model
+unchanged during evaluation. Experiments on the COCO
+dataset indicate that an optimized data augmentation policy
+improves detection accuracy by more than +2.3 mAP, and
+allow a single inference model to achieve a state-of-the-art
+accuracy of 50.7 mAP. Importantly, the best policy found
+on COCO may be transferred unchanged to other detection
+datasets and models to improve predictive accuracy. For example, the best augmentation policy identiﬁed with COCO
+improves a strong baseline on PASCAL-VOC by +2.7 mAP.
+Our results also reveal that a learned augmentation policy is superior to state-of-the-art architecture regularization methods for object detection, even when considering
+strong baselines. Code for training with the learned policy
+is available online. 1
+1. Introduction
+Deep neural networks are powerful machine learning
+systems that work best when trained on vast amounts of
+data. To increase the amount of training data for neural
+networks, much work was devoted to creating better data
+∗Equal contribution.
+1github.com/tensorflow/tpu/tree/master/models/
+official/detection
+training examples
+mean average precision
+Figure 1: Learned augmentation policy systematically
+improves object detection performance. Left: Learned
+augmentation policy applied to example from COCO
+dataset . Right: Mean average precision for RetinaNet
+ with a ResNet-50 backbone on COCO with and
+without learned augmentation policy (red and black, respectively).
+augmentation strategies . In the image domain,
+common augmentations include translating the image by a
+few pixels, or ﬂipping the image horizontally. Most modern
+image classiﬁers are paired with hand-crafted data augmentation strategies .
+Recent work has shown that instead of manually designing data augmentation strategies, learning an optimal policy
+from data can lead to signiﬁcant improvements in generalization performance of image classiﬁcation models . For image classiﬁcation models,
+data can be augmented either by learning a generator that
+can create data from scratch , or by learning a set of transformations as applied to already existing
+training set samples . For object detection models,
+the need for data augmentation is more crucial as collecting labeled data for detection is more costly and common
+detection datasets have many fewer examples than image
+classiﬁcation datasets. It is, however, unclear how to augment the data: Should we directly reuse data augmentation
+strategies from image classiﬁcation? What should we do
+ 
+with the bounding boxes and the contents of the bounding
+In this work, we create a set of simple transformations
+that may be applied to object detection datasets and then
+transfer these transformations to other detection datasets
+and architectures. These transformations are only used during training and not test time. Our transformations include
+those that can be applied to the whole image without affecting the bounding box locations (e.g. color transformations borrowed from image classiﬁcation models), transformations that affect the whole image while changing the
+bounding box locations (e.g., translating or shearing of the
+whole image), and transformations that are only applied to
+objects within the bounding boxes. As the number of transformations becomes large, it becomes non-trivial to manually combine them effectively. We therefore search for
+policies speciﬁcally designed for object detection datasets.
+Experiments show that this method achieves very good performance across different datasets, dataset sizes, backbone
+architectures and detection algorithms. Additionally, we investigate how the performance of a data augmentation policy depends on the number of operations included in the
+search space and how the effective of the augmentation
+technique varies as dataset size changes.
+In summary, our main contributions are as follows:
+• Design and implement a search method to combine
+and optimize data augmentation policies for object detection problems by combining novel operations speciﬁc to bounding box annotations.
+• Demonstrate consistent gains in cross-validated accuracy across a range of detection architectures and
+datasets. In particular, we exceed state-of-the-art results on COCO for a single model and achieve competitive results on the PASCAL VOC object detection.
+• Highlight how the learned data augmentation strategies are particularly advantageous for small datasets by
+providing a strong regularization to avoid over-ﬁtting
+on small objects.
+2. Related Work
+Data augmentation strategies for vision models are often speciﬁc dataset or even machine learning architectures.
+For example, state-of-the-art models trained on MNIST use
+elastic distortions which effect scale, translation, and rotation . Random cropping and image mirroring are commonly used in classiﬁcation models trained
+on natural images . Among the data augmentation
+strategies for object detection, image mirror and multi-scale
+training are the most widely used . Object-centric cropping is a popular augmentation approach . Instead of
+cropping to focus on parts of the image, some methods randomly erase or add noise to patches of images for improved
+accuracy , robustness , or both . In
+the same vein, learns an occlusion pattern for each object to create adversarial examples. In addition to cropping
+and erasing, adds new objects on training images by
+cut-and-paste.
+To avoid the data-speciﬁc nature of data augmentation,
+recent work has focused on learning data augmentation
+strategies directly from data itself.
+For example, Smart
+Augmentation uses a network that generates new data by
+merging two or more samples from the same class .
+Tran et al. generate augmented data, using a Bayesian approach, based on the distribution learned from the training
+set . DeVries and Taylor used simple transformations
+like noise, interpolations and extrapolations in the learned
+feature space to augment data . Ratner et al., used generative adversarial networks to generate sequences of data
+augmentation operations . More recently, several papers used the AutoAugment search space with improved
+the optimization algorithms to ﬁnd AutoAugment policies
+more efﬁciently .
+While all of the above approaches have worked on classiﬁcation problems, we take an automated approach to ﬁnding optimal data augmentation policies for object detection.
+Unlike classiﬁcation, labeled data for object detection is
+more scarce because it is more costly to annotate detection
+data. Compared to image classiﬁcation, developing a data
+augmentation strategy for object detection is harder because
+there are more ways and complexities introduced by distorting the image, bounding box locations, and the sizes of the
+objects in detection datasets. Our goal is to use the validation set accuracy to help search for novel detection augmentation procedures using custom operations that generalize across datasets, dataset sizes, backbone architectures
+and detection algorithms.
+3. Methods
+We treat data augmentation search as a discrete optimization problem and optimize for generalization performance.
+This work expands on previous work to focus on augmentation policies for object detection. Object detection
+introduces an additional complication of maintaining consistency between a bounding box location and a distorted
+image. Bounding box annotations open up the possibility of
+introducing augmentation operations that uniquely act upon
+the contents within each bounding box. Additionally, we
+explored how to change the bounding box locations when
+geometric transformations are applied to the image.
+We deﬁne an augmentation policy as a unordered set of
+K sub-policies. During training one of the K sub-policies
+will be selected at random and then applied to the current image. Each sub-policy has N image transformations
+Sub-policy 1. (Color, 0.2, 8), (Rotate, 0.8, 10)
+Sub-policy 2. (BBox Only ShearY, 0.8, 5)
+Sub-policy 3. (SolarizeAdd, 0.6, 8), (Brightness, 0.8, 10)
+Sub-policy 4. (ShearY, 0.6, 10), (BBox Only Equalize,0.6, 8)
+Sub-policy 5. (Equalize, 0.6, 10), (TranslateX, 0.2, 2)
+Figure 2: Examples of learned augmentation sub-policies. 5 examples of learned sub-policies applied to one example
+image. Each column corresponds to a different random sample of the corresponding sub-policy. Each step of an augmentation
+sub-policy consists of a triplet corresponding to the operation, the probability of application and a magnitude measure. The
+bounding box is adjusted to maintain consistency with the applied augmentation. Note the probability and magnitude are
+discretized values (see text for details).
+which are applied sequentially. We turn this problem of
+searching for a learned augmentation policy into a discrete
+optimization problem by creating a search space . The
+search space consists K = 5 sub-policies with each subpolicy consisting of N = 2 operations applied in sequence
+to a single image. Additionally, each operation is also associated with two hyperparameters specifying the probability
+of applying the operation, and the magnitude of the operation. Figure 2 (bottom text) demonstrates 5 of the learned
+sub-policies. The probability parameter introduces a notion
+of stochasticity into the augmentation policy whereby the
+selected augmentation operation will be applied to the image with the speciﬁed probability.
+In several preliminary experiments, we identiﬁed 22 operations for the search space that appear beneﬁcial for object detection. These operations were implemented in TensorFlow . We brieﬂy summarize these operations, but
+reserve the details for the Appendix:
+• Color operations.
+Distort color channels, without
+impacting the locations of the bounding boxes (e.g.,
+Equalize, Contrast, Brightness). 2
+• Geometric operations. Geometrically distort the image, which correspondingly alters the location and
+size of the bounding box annotations (e.g., Rotate,
+ShearX, TranslationY, etc.).
+• Bounding
+operations.
+annotations
+BBox Only Equalize,
+BBox Only Rotate, BBox Only FlipLR).
+Note that for any operations that effected the geometry
+of an image, we likewise modiﬁed the bounding box size
+and location to maintain consistency.
+We associate with each operation a custom range of parameter values and map this range on to a standardized
+range from 0 to 10. We discretize the range of magnitude
+into L uniformly-spaced values so that these parameters are
+amenable to discrete optimization. Similarly, we discretize
+the probability of applying an operation into M uniformlyspaced values. In preliminary experiments we found that
+setting L = 6 and M = 6 provide a good balance between computational tractability and learning performance
+with an RL algorithm. Thus, ﬁnding a good sub-policy becomes a search in a discrete space containing a cardinality
+of (22LM)2. In particular, to search over 5 sub-policies, the
+search space contains roughly (22×6×6)2×5 ≈9.6×1028
+possibilities and requires an efﬁcient search technique to
+navigate this space.
+2The color transformations largely derive from transformation in the
+Python Image Library (PIL). 
+Many methods exist for addressing the discrete optimization problem including reinforcement learning ,
+evolutionary methods and sequential model-based optimization . In this work, we choose to build on previous work by structuring the discrete optimization problem
+as the output space of an RNN and employ reinforcement
+learning to update the weights of the model . The training setup for the RNN is similar to . We employ
+the proximal policy optimization (PPO) for the search
+algorithm. The RNN is unrolled 30 steps to predict a single augmentation policy. The number of unrolled steps, 30,
+corresponds to the number of discrete predictions that must
+be made in order to enumerate 5 sub-policies. Each subpolicy consists of 2 operations and each operation consists
+of 3 predictions corresponding to the selected image transformation, probability of application and magnitude of the
+transformation.
+In order to train each child model, we selected 5K images from the COCO training set as we found that searching directly on the full COCO dataset to be prohibitively
+expensive. We found that policies identiﬁed with this subset of data generalize to the full dataset while providing
+signiﬁcant computational savings. Brieﬂy, we trained each
+child model3 from scratch on the 5K COCO images with
+the ResNet-50 backbone and RetinaNet detector 
+using a cosine learning rate decay . The reward signal
+for the controller is the mAP on a custom held-out validation set of 7392 images created from a subset of the COCO
+training set.
+The RNN controller is trained over 20K augmentation
+The search employed 400 TPU’s over 48
+hours with identical hyper-parameters for the controller as
+ . The search can be sped up using the recently developed, more efﬁcient search methods based on population
+based training or density matching . The learned
+policy can be seen in Table 7 in the Appendix.
+4. Results
+We applied our automated augmentation method on the
+COCO dataset with a ResNet-50 backbone with RetinaNet in order to ﬁnd good augmentation policies to
+generalize to other detection datasets. We use the top policy
+found on COCO and apply it to different datasets, dataset
+sizes and architecture conﬁgurations to examine generalizability and how the policy fares in a limited data regime.
+4.1. Learning a data augmentation policy
+Searching for the learned augmentation strategy on 5K
+COCO training images resulted in the ﬁnal augmentation
+3We employed a base learning rate of 0.08 over 150 epochs; image size
+was 640 × 640; α = 0.25 and γ = 1.5 for the focal loss parameters;
+weight decay of 1e −4; batch size was 64
+policy that will be used in all of our results. Upon inspection, the most commonly used operation in good policies is
+Rotate, which rotates the whole image and the bounding
+boxes. The bounding boxes end up larger after the rotation,
+to include all of the rotated object. Despite this effect of the
+Rotate operation, it seems to be very beneﬁcial: it is the
+most frequently used operation in good policies. Two other
+operations that are commonly used are Equalize and
+BBox Only TranslateY. Equalize ﬂattens the histogram of the pixel values, and does not modify the location
+or size of each bounding box. BBox Only TranslateY
+translates only the objects in bounding boxes vertically, up
+or down with equal probability.
+4.2. Learned augmentation policy systematically
+improves object detection
+We assess the quality of the top augmentation policy on
+the competitive COCO dataset on different backbone
+architectures and detection algorithms. We start with the
+competitive RetinaNet object detector 4 employing the same
+training protocol as . Brieﬂy, we train from scratch with
+a global batch size of 64, images were resized to 640×640,
+learning rate of 0.08, weight decay of 1e −4, α = 0.25
+and γ = 1.5 for the focal loss parameters, trained for 150
+epochs, used stepwise decay where the learning rate was
+reduced by a factor of 10 at epochs 120 and 140. All models
+were trained on TPUs .
+The baseline RetinaNet architecture used in this and
+subsequent sections employs standard data augmentation
+techniques largely tailored to image classiﬁcation training
+ . This consists of doing horizontal ﬂipping with 50%
+probability and multi-scale jittering where images are randomly resized between 512 and 786 during training and
+then cropped to 640x640.
+Our results using our augmentation policy on the above
+procedures are shown in Tables 1 and 2.
+In Table 1
+the learned augmentation policy achieves systematic gains
+across a several backbone architectures with improvements
+ranging from +1.6 mAP to +2.3 mAP. In comparison, a
+previous state-of-the-art regularization technique applied to
+ResNet-50 achieves a gain of +1.7% mAP (Table 2).
+To better understand where the gains come from, we
+break the data augmentation strategies applied to ResNet-
+50 into three parts: color operations, geometric operations,
+and bbox-only-operations (Table 2). Employing color operations only boosts performance by +0.8 mAP. Combining
+the search with geometric operations increases the boost in
+performance by +1.9 mAP. Finally, adding bounding boxspeciﬁc operations yields the best results when used in conjunction with the previous operations and provides +2.3%
+mAP improvement over the baseline. Note that the policy
+4 
+Our result
+Difference
+ResNet-101
+ResNet-200
+Table 1: Improvements with learned augmentation policy across different ResNet backbones. All results employ
+RetinaNet detector on the COCO dataset .
+baseline + DropBlock 
+Augmentation policy with color operations
++ geometric operations
++ bbox-only operations
+Table 2: Improvements in object detection with learned
+augmentation policy. All results employ RetinaNet detector with ResNet-50 backbone on COCO dataset .
+DropBlock shows gain in performance employing a stateof-the-art regularization method .
+found was only searched using 5K COCO training examples and still generalizes extremely well when trained on
+the full COCO dataset.
+Exploiting
+augmentation
+achieves state-of-the-art object detection
+A good data augmentation policy is one that can transfer between models, between datasets and work well for
+models trained on different image sizes. Here we experiment with the learned augmentation policy on a different backbone architecture and detection model.
+how the learned policy transfers to a state-of-the-art detection model, we replace the ResNet-50 backbone with the
+AmoebaNet-D architecture . The detection algorithm
+was changed from RetinaNet to NAS-FPN . Additionally, we use ImageNet pre-training for the AmoebaNet-
+D backbone as we found we are not able to achieve competitive results when training from scratch. The model was
+trained for 150 epochs using a cosine learning rate decay
+with a learning rate of 0.08. The rest of the setup was identical to the ResNet-50 backbone model except the image
+size was increased from 640 × 640 to 1280 × 1280.
+Table 3 indicates that the learned augmentation policy
+improves +1.5% mAP on top of a competitive, detection architecture and setup. These experiments additionally show
+that the augmentation policy transfers well across a different backbone architecture, detection algorithm, image sizes
+(i.e. 640 →1280 pixels), and training procedure (training from scratch →using ImageNet pre-training) . We can
+extend these results even further by increasing the image
+resolution from 1280 to 1536 pixels and likewise increasing
+the number of detection anchors5 following . Since this
+model is signiﬁcantly larger than the previous models, we
+increase the number of sub-policies in the learned policy by
+combining the top 4 policies from the search, which leads
+to a 20 sub-policy learned augmentation.
+This result of these simple modiﬁcations is the ﬁrst
+single-stage detection system to achieve state-of-the-art,
+single-model results of 50.7 mAP on COCO. We note that
+this result only requires a single pass of the image, where
+as the previous results required multiple evaluations of the
+same image at different spatial scales at test time . Additionally, these results were arrived at by increasing the
+image resolution and increasing the number of anchors both simple and well known techniques for improving object detection performance . In contrast, previous
+state-of-the-art results relied on roughly multiple, custom
+modiﬁcations of the model architecture and regularization
+methods in order to achieve these results . Our method
+largely relies on a more modern network architecture paired
+with a learned data augmentation policy.
+4.4. Learned augmentation policies transfer to
+other detection datasets.
+To evaluate the transferability of the learned policies to
+an entirely different dataset and another different detection algorithm, we train a Faster R-CNN model with
+a ResNet-101 backbone on PASCAL VOC dataset . We
+combine the training sets of PASCAL VOC 2007 and PAS-
+CAL VOC 2012, and test our model on the PASCAL VOC
+2007 test set (4952 images). Our evaluation metric is the
+mean average precision at an IoU threshold of 0.5 (mAP50).
+For the baseline model, we use the Tensorﬂow Object Detection API with the default hyperparameters: 9 GPU
+workers are utilized for asynchronous training where each
+worker processes a batch size of 1. Initial learning rate is set
+to be 3 × 10−4, which is decayed by 0.1 after 500K steps.
+Training is started from a COCO detection model checkpoint. When training with our data augmentation policy, we
+do not change any of the training details, and just add our
+policy found on COCO to the pre-processing. This leads to
+a 2.7% improvement on mAP50 (Table 4).
+4.5. Learned augmentation policies mimic the performance of larger annotated datasets
+In this section we conducted experiments to determine
+how the learned augmentation policy will perform if there
+is more or less training data. To conduct these experiments
+we took subsets of the COCO dataset to make datasets with
+5Speciﬁcally, we increase the number of anchors from 3 × 3 to 9 × 9
+by changing the aspect ratios from {1/2, 1, 2} to {1/5, 1/4, 1/3, 1/2, 1,
+2, 3, 4, 5}. When making this change we increased the strictness in the
+IoU thresholding from 0.5/0.5 to 0.6/0.5 due to the increased number of
+anchors following . The anchor scale was also increased from 4 to 5 to
+compensate for the larger image size.
+the following number of images: 5000, 9000, 14000, 23000
+(see Table 5). All models trained in this experiment are
+using a ResNet-50 backbone with RetinaNet and are trained
+for 150 epochs without using ImageNet pretraining.
+As we expected, the improvements due to the learned
+augmentation policy is larger when the model is trained on
+smaller datasets, which can be seen in Fig. 3 and in Table 5.
+We show that for models trained on 5,000 training samples,
+the learned augmentation policy can improve mAP by more
+than 70% relative to the baseline. As the training set size is
+increased, the effect of the learned augmentation policy is
+decreased, although the improvements are still signiﬁcant.
+It is interesting to note that models trained with learned augmentation policy seem to do especially well on detecting
+smaller objects, especially when fewer images are present in
+the training dataset. For example, for small objects, applying the learned augmentation policy seems to be better than
+increasing the dataset size by 50%, as seen in Table. 5. For
+small objects, training with the learned augmentation policy
+with 9000 examples results in better performance than the
+baseline when using 15000 images. In this scenario using
+our augmentation policy is almost as effective as doubling
+your dataset size.
+Figure 3: Percentage improvement in mAP for objects of
+different sizes due to the learned augmentation policy.
+Another interesting behavior of models trained with the
+learned augmentation policy is that they do relatively better
+on the harder task of AP75 (average precision IoU=0.75). In
+Fig. 4, we plot the percentage improvement in mAP, AP50,
+and AP75 for models trained with the learned augmentation policy (relative to baseline augmentation). The relative
+improvement of AP75 is larger than that of AP50 for all
+training set sizes. The learned data augmentation is particularly beneﬁcial at AP75 indicating that the augmentation
+policy helps with more precisely aligning the bounding box
+Architecture
+MegDet 
+AmoebaNet + NAS-FPN
+baseline 
++ learned augmentation
++ ↑anchors, ↑image size
+Table 3: Exceeding state-of-the-art detection with learned augmentation policy. Reporting mAP for COCO validation set.
+Previous state-of-the-art results for COCO detection evaluated a single image at multiple spatial scales to perform detection
+at test time . Our current results only require a single inference computation at single spatial scale. Backbone model
+is AmoebaNet-D and the NAS-FPN detection system . For the 50.7 result, in addition to using the learned data
+augmentation policy, we increase the image size from 1280 to 1536 and the number of detection anchors from 3x3 to 9x9.
+plane bike bird boat bottle bus
+chair cow table dog horse mbike person plant sheep sofa train tv
+baseline 86.6
+82.2 75.9 63.4 62.3
+84.7 86.8 92.0 55.5 83.3 63.1 89.2 89.4
+73.0 86.6 76.3 76.0
+83.3 78.0 65.9 63.5
+85.5 87.4 93.1 58.5 83.9 65.2 90.1 90.2
+76.6 88.6 80.3 78.7
+Table 4: Learned augmentation policy transfer to other object detection tasks. Mean average precision (%) at IoU
+threshold 0.5 on a Faster R-CNN detector with a ResNet-101 backbone trained and evaluated on PASCAL VOC 2007
+ . Note that the augmentation policy was learned from the policy search on the COCO dataset.
+Our results
+Table 5: Learned augmentation policy is especially beneﬁcial for small datasets and small objects. Mean average
+precision (mAP) for RetinaNet model trained on COCO with varying subsets of the original training set. mAPS, mAPM
+and mAPL denote the mean average precision for small, medium and large examples. Note the complete COCO training set
+consists of 118K examples.The same policy found on the 5000 COCO images was used in all of the experiments. The models
+in the ﬁrst row were trained on the same 5000 images that the policies were searched on.
+prediction. This suggests that the augmentation policy particularly helps with learned ﬁne spatial details in bounding
+box position – which is consistent with the gains observed
+with small objects.
+4.6. Learned data augmentation improves model
+regularization
+In this section, we study the regularization effect of the
+learned data augmentation. We ﬁrst notice that the ﬁnal
+training loss of a detection models is lower when trained
+on a larger training set (see black curve in Fig. 5). When
+we apply the learned data augmentation, the training loss is
+increased signiﬁcantly for all dataset sizes (red curve). The
+regularization effect can also be seen by looking at the L2
+norm of the weights of the trained models. The L2 norm of
+the weights is smaller for models trained on larger datasets,
+and models trained with the learned augmentation policy
+have a smaller L2 norm than models trained with baseline
+augmentation (see Fig. 6).
+5. Discussion
+In this work, we investigate the application of a learned
+data augmentation policy on object detection performance.
+We ﬁnd that a learned data augmentation policy is effective
+across all data sizes considered, with a larger improvement
+when the training set is small. We also observe that the
+improvement due to a learned data augmentation policy is
+larger on harder tasks of detecting smaller objects and detecting with more precision.
+We also ﬁnd that other successful regularization techniques are not beneﬁcial when applied in tandem with a
+learned data augmentation policy. We carried out several
+experiments with Input Mixup , Manifold Mixup 
+and Dropblock . For all methods we found that they
+either did not help nor hurt model performance. This is
+an interesting result as the proposed method independently
+outperforms these regularization methods, yet apparently
+these regularization methods are not needed when applying
+a learned data augmentation policy.
+Future work will include the application of this method
+Figure 4: Percentage improvement due to the learned augmentation policy on mAP, AP50, and AP75, relative to
+models trained with baseline augmentation.
+Figure 5: Training loss vs. number of training examples for
+baseline model (black) and with the learned augmentation
+policy (red).
+to other perceptual domains. For example, a natural extension of a learned augmentation policy would be to semantic and instance segmentation . Likewise, point
+cloud featurizations are another domain that has
+a rich set of possibilities for geometric data augmentation
+operations, and can beneﬁt from an approach similar to the
+one taken here. Human annotations required for acquiring
+training set examples for such tasks are costly. Based on
+our ﬁndings, learned augmentation policies are transferable
+and are more effective for models trained on limited training
+data. Thus, investing in libraries for learning data augmentation policies may be an efﬁcient alternative to acquiring
+Figure 6: L2 norm of the weights of the baseline (black)
+and our (red) models at the end of training. Note that the L2
+norm of the weights decrease with increasing training set
+size. The learned augmentation policy further decreases the
+norm of the weights.
+additional human annotated data.
+Acknowledgments
+We thank Ruoming Pang and the rest of the Brain team
+for their help.

@@ -1,0 +1,723 @@
+Deep Spatial Autoencoders for Visuomotor Learning
+Chelsea Finn, Xin Yu Tan, Yan Duan, Trevor Darrell, Sergey Levine, Pieter Abbeel
+Abstract— Reinforcement learning provides a powerful and
+ﬂexible framework for automated acquisition of robotic motion
+skills. However, applying reinforcement learning requires a
+sufﬁciently detailed representation of the state, including the
+conﬁguration of task-relevant objects. We present an approach
+that automates state-space construction by learning a state
+representation directly from camera images. Our method uses
+a deep spatial autoencoder to acquire a set of feature points
+that describe the environment for the current task, such as
+the positions of objects, and then learns a motion skill with
+these feature points using an efﬁcient reinforcement learning
+method based on local linear models. The resulting controller
+reacts continuously to the learned feature points, allowing the
+robot to dynamically manipulate objects in the world with
+closed-loop control. We demonstrate our method with a PR2
+robot on tasks that include pushing a free-standing toy block,
+picking up a bag of rice using a spatula, and hanging a loop
+of rope on a hook at various positions. In each task, our
+method automatically learns to track task-relevant objects and
+manipulate their conﬁguration with the robot’s arm.
+I. INTRODUCTION
+One of the fundamental challenges in applying reinforcement learning to robotic manipulation tasks is the need to
+deﬁne a suitable state space representation. Typically, this is
+handled manually, by enumerating the objects in the scene,
+designing perception algorithms to detect them, and feeding
+high-level information about each object to the algorithm.
+However, this highly manual process makes it difﬁcult to
+apply the same reinforcement learning algorithm to a wide
+range of manipulation tasks in complex, unstructured environments. What if a robot could automatically identify the
+visual features that might be relevant for a particular task, and
+then learn a controller that accounts for those features? This
+would amount to automatically acquiring a vision system that
+is suitable for the current task, and would allow a range of
+object interaction skills to be learned with minimal human
+supervision. The robot would only need to see a glimpse of
+what task completion looks like, and could then ﬁgure out
+on its own how to change the scene into that conﬁguration.
+Directly learning a state space representation from raw
+sensory signals, such as images from a camera, is an active
+area of research , , and while considerable progress has
+been made in recent years , , applications to real robotic
+systems remain exceedingly difﬁcult. The difﬁculties stem
+from two challenges. First, learning a good representation
+with unsupervised learning methods, such as deep learning,
+often requires a very large amount of data . Second,
+arbitrary learned visual representations do not always lend
+themselves well to control. We address these challenges by
+Department of Electrical Engineering and Computer Science, University
+of California, Berkeley, Berkeley, CA 94709
+t = 1 (0.00s)
+t = 13 (0.65s)
+t = 60 (3.00s)
+t = 100 (5.00s)
+Fig. 1: PR2 learning to scoop a bag of rice into a bowl with a
+spatula (left) using a learned visual state representation (right).
+using a spatial autoencoder architecture to learn a state representation that consists of feature points. Intuitively, these
+feature points encode the conﬁgurations of objects in the
+scene, and the spatial autoencoder that we describe provides
+for data-efﬁcient learning by minimizing the number of nonconvolutional parameters in the encoder network. Since our
+learned feature points correspond to object coordinates, this
+architecture also addresses the second challenge, since realvalued quantities such as positions are more amenable to
+control than the types of discrete or sparse features that are
+more commonly learned with deep learning methods .
+In fact, our experiments show that our learned feature
+point representation can be used effectively in combination
+with an efﬁcient trajectory-centric reinforcement learning
+algorithm. This method iteratively ﬁts time-varying linear
+models to the states visited at the previous iteration ,
+estimating how the robot’s actions (which correspond to
+joint torques) affect the state. When the state includes visual
+feature points, this method can learn how the robot’s actions
+affect the objects in the world, and the trained controllers can
+perform closed-loop control on the conﬁguration of these
+objects, allowing the robot to move and manipulate them.
+Furthermore, this reinforcement learning algorithm can easily
+be combined with guided policy search to learn complex,
+nonlinear policies that generalize effectively to various initial
+states , which we demonstrate by training a nonlinear
+neural network policy on top of our learned representation.
+Our main contribution is a method for learning visionbased
+manipulation
+unsupervised
+learning using deep spatial autoencoders with simple,
+sample-efﬁcient trajectory-centric reinforcement learning.
+We demonstrate that this approach can be used to learn
+a variety of manipulation skills that require “hand-eye”
+coordination, including pushing a free-standing toy block,
+scooping objects into a bowl, using a spatula to lift a bag of
+ 
+rice from the table (shown in Figure 1), and hanging a loop
+of rope on hooks at various positions. Each of these tasks are
+learned using the same algorithm, with no prior knowledge
+about the objects in the scene, and using only the onboard
+sensors of the PR2 robot, which consist of joint encoders and
+an RGB camera. We also compare our approach to a number
+of baselines that are representative of previously proposed
+visual state space learning methods.
+II. RELATED WORK
+Reinforcement learning and policy search methods have
+been applied to perform a variety of robotic tasks, such
+as table tennis , object manipulation , , and
+locomotion , , , . One key challenge to
+using RL successfully is handling high-dimensional sensory
+observations needed to perform sensorimotor control. A standard approach is to hand-design low-dimensional features
+from the observations; however, this requires manual taskspeciﬁc engineering, which undermines the goal of using
+an automatic learning-based approach. Other approaches
+instead use function approximation to replace the value
+function in standard RL algorithms like TD-learning 
+and approximate Q-learning . These approaches typically
+require large amounts of time and data to learn the parameter
+space. In this work, we use the approach of ﬁrst learning a
+low-dimensional state representation from observations via
+unsupervised learning, and then use a data-efﬁcient RL algorithm with the learned state representation to learn robotic
+manipulation tasks involving perception.
+Prior work has proposed to learn representations using
+general priors from the physical world or the ability to
+predict future observations , , . Representation
+learning has been applied to control from high-dimensional
+visual input in several recent works. Lange et al. use
+autoencoders to acquire a state space for Q-learning and evaluate on simple real-world problems with 2 to 3 dimensions.
+Several methods also train autoencoders that can predict the
+next image, effectively learning dynamics , , though
+such methods have only been demonstrated on toy problems
+with synthetic images. The quantity of data required to apply
+deep learning methods to real-world images is known to far
+exceed that of toy tasks , and prior methods generally
+avoid this issue by using synthetic images. We also use an
+autoencoder, but we use a spatial architecture that allows
+us to acquire a representation from real-world images that
+is particularly well suited for high-dimensional continuous
+control. Our architecture is also data-efﬁcient and can handle
+relatively small datasets. We demonstrate our method on a
+range of real-world robotic tasks.
+Other methods have been proposed to train policies from
+high-dimensional observations, without ﬁrst acquiring a lowdimensional state space , . However, running these
+methods on a real robotic platform requires either impractical
+amounts of data or an instrumented training setup
+that provides knowledge about relevant objects at training
+time . Our method does not require this knowledge,
+which enables it to learn tasks such as pushing, tossing, and
+scooping without using any additional instrumentation. In
+fact, our method has no knowledge of which objects make up
+the scene at all. These tasks cannot be learned using our prior
+method without mechanisms such as motion capture.
+The goal of our method is similar to that of visual servoing, which performs feedback control on image features ,
+ , . However, our controllers and visual features are
+learned entirely from real-world data, rather than being handspeciﬁed. This gives our method considerable ﬂexibility in
+how the visual input can be used and, as a result, the tasks
+that it can learn to perform. Furthermore, our approach does
+not require any sort of camera calibration, in contrast to many
+visual servoing methods (though not all – see e.g. , ).
+Most deep learning architectures focus on semantic representation learning, e.g. . Some spatial network architectures have been proposed for tasks such as video prediction
+and dynamics modeling , . The architecture that we
+use for the encoder in our unsupervised learning method is
+based on a spatial softmax followed by an expectation operation, which produces a set of spatial features that correspond
+to points of maximal activation in the last convolutional
+layer. We previously proposed this type of architecture in
+the context of policy search for visuomotor policies .
+However, in our prior work, this type of network was
+trained with supervised learning, regressing directly to joint
+torques. Obtaining these joint torque targets requires being
+able to solve the task, which requires a representation that
+is already sufﬁcient for the task. In this paper, we show
+how the representation can be learned from scratch using
+unsupervised learning, which extends the applicability of this
+architecture to a much wider range of tasks where a suitable
+representation is not known in advance.
+III. PRELIMINARIES
+In this paper, we are primarily concerned with the task
+of learning a state representation for reinforcement learning
+(RL) from camera images of robotic manipulation skills.
+However, we consider this problem in the context of a
+speciﬁc RL algorithm that is particularly well suited to
+operate on our learned state representations. We describe
+the RL method we use in this background section, while
+the Section V describes our representation learning method.
+The derivation in this section follows prior work , but is
+repeated here for completeness.
+A. RL with Local, Time-Varying Linear Models
+Let xt and ut be the state and action at time step
+t. The actions correspond to motor torques, while states
+will be learned using the method in the next section. The
+aim of our RL method is to minimize the expectation
+Ep(τ)[ℓ(τ)] over trajectories τ
+= {x1, u1, . . . , xT , uT },
+where ℓ(τ) = PT
+t=1 ℓ(xt, ut) is the total cost, and the expectation is under p(τ) = p(x1) QT
+t=1 p(xt+1|xt, ut)p(ut|xt),
+where p(xt+1|xt, ut) is the dynamics distribution and
+p(ut|xt) is the controller that we would like to learn.
+Algorithm 1 RL with linear-Gaussian controllers
+1: initialize p(ut|xt)
+2: for iteration k = 1 to K do
+run p(ut|xt) to collect trajectory samples {τi}
+ﬁt dynamics p(xt+1|xt, ut) to {τj} using linear regression
+with GMM prior
+ﬁt p = arg minp Ep(τ)[ℓ(τ)] s.t. DKL(p(τ)∥¯p(τ)) ≤ϵ
+6: end for
+The controller can be optimized using a variety of modelbased and model-free methods . We employ a trajectorycentric algorithm that optimizes time-varying linear-Gaussian
+controllers, which can be thought of as a trajectory with timevarying linear stabilization . While linear-Gaussian controllers are simple, they admit a very efﬁcient optimization
+procedure that works well even under unknown dynamics.
+This method is summarized in Algorithm 1. At each iteration,
+we run the current controller p(ut|xt) on the robot to gather
+N samples (N = 5 in all of our experiments), then use these
+samples to ﬁt time-varying linear-Gaussian dynamics of the
+form p(xt+1|xt, ut) = N(fxtxt + futut + fct, Ft). This is
+done by using linear regression with a Gaussian mixture
+model prior, which makes it feasible to ﬁt the dynamics
+even when the number of samples is much lower than the
+dimensionality of the system . We also compute a second
+order expansion of the cost function around each of the
+samples, and average the expansions together to obtain a
+local approximate cost function of the form
+ℓ(xt, ut) ≈1
+2[xt; ut]Tℓxu,xut[xt; ut]+[xt; ut]Tℓxut+const.
+When the cost function is quadratic and the dynamics are
+linear-Gaussian, the optimal time-varying linear-Gaussian
+controller of the form p(ut|xt) = N(Ktxt + kt, Ct) can be
+obtained by using the LQR method. This type of iterative
+approach can be thought of as a variant of iterative LQR ,
+where the dynamics are ﬁtted to data. In our implementation,
+we initialize p(ut|xt) to be a random controller that is
+centered around the initial state with low-gain PD feedback,
+in order to avoid unsafe conﬁgurations on the real robot.
+One crucial ingredient for making this approach work
+well is to limit the change in the controller p(ut|xt) at
+each iteration, since the standard iterative LQR approach
+can produce a controller that is arbitrarily far away from the
+previous one, and visits parts of the state space where the
+ﬁtted dynamics are no longer valid. To that end, our method
+solves the following optimization problem at each iteration:
+p(ut|xt) Ep(τ)[ℓ(τ)] s.t. DKL(p(τ)∥¯p(τ)) ≤ϵ,
+where ¯p(τ) is the trajectory distribution induced by the
+previous controller. Using KL-divergence constraints for controller optimization was proposed in a number of prior works
+ , , . In the case of linear-Gaussian controllers, we
+can use a modiﬁed LQR algorithm to solve this problem. We
+refer the reader to previous work for details .
+B. Learning Nonlinear Policies with Guided Policy Search
+Linear-Gaussian controllers are easy to train, but they
+cannot express all possible control strategies, since they
+Train controller using
+˜xt; collect image data
+Learn visual
+Train ﬁnal controller
+with new state [˜xt; ft]
+Fig. 2: RL with deep spatial autoencoders. We begin by training
+a controller without vision to collect images (left) that are used to
+learn a visual representation (center), which is then used to learn
+a controller with vision (right). The learned state representation
+corresponds to spatial feature points (bottom).
+essentially encode a trajectory-following controller. To extend the applicability of linear-Gaussian controllers to more
+complex tasks, prior work has proposed to combine it with
+guided policy search , , , which is an algorithm that
+trains more complex policies, such as deep neural networks,
+by using supervised learning. The supervision is generated
+by running a simpler algorithm, such as the one in the previous section, from multiple initial states, generating multiple
+solutions. In our experimental evaluation, we combine linear-
+Gaussian controllers with guided policy search to learn a
+policy for hanging a loop of rope on a hook at different
+positions. A different linear-Gaussian controller is trained
+for each position, and then a single neural network policy
+is trained to unify these controllers into a single policy that
+can generalize to new hook positions. A full description of
+guided policy search is outside the scope of this paper, and
+we refer the reader to previous work for details , , .
+IV. ALGORITHM OVERVIEW
+Our algorithm consists of three stages. In the ﬁrst stage,
+we optimize an initial controller for the task without using
+vision, using the method described in the previous section.
+The state space during this stage corresponds to the joint
+angles and end-effector positions of the robot, as well as
+their time derivatives. This controller is rarely able to succeed
+at tasks that require keeping track of objects in the world,
+but it serves to produce a more focused exploration strategy
+that can be used to collect visual data, since an entirely
+random controller is unlikely to explore interesting parts of
+the state space. In general, this stage can be replaced by any
+reasonable exploration strategy.
+In the second stage, the initial controller is used to collect
+a dataset of images, and these images are then used to train
+our deep spatial autoencoder with unsupervised learning, as
+described in Section V. Once this autoencoder is trained,
+the encoder portion of the network can be used to produce
+a vector of feature points for each image that concisely
+describes the conﬁguration of objects in the scene. The ﬁnal
+state space is formed by concatenating the joint angles, endeffector positions, and feature points, and also including their
+velocities to allow for dynamic tasks to be learned. We must
+also deﬁne a cost function using this new state space, which
+we do by presenting an image of the target state to the feature
+encoder and determining the corresponding state.
+In the third stage, a vision-based controller is trained using
+the new state space that now contains visual features from the
+encoder, with the new cost function deﬁned in terms of the
+visual features and the robot’s conﬁguration. This controller
+is trained using the same trajectory-centric reinforcement
+learning algorithm as in the ﬁrst stage, and is able to perform
+tasks that require controlling objects in the world that are
+identiﬁed and localized using vision.
+An overview of this procedure is provided in Figure 2.
+In the next section, we describe our representation learning
+V. UNSUPERVISED STATE REPRESENTATION LEARNING
+FROM VISUAL PERCEPTION
+The goal of state representation learning is to ﬁnd a
+mapping henc(It) from a high-dimensional observation It to
+a robot state representation for which it is easy to learn a
+control policy. We will use ˜xt to denote the conﬁguration
+of the robot, ft to denote the learned representation, and
+xt = [˜xt; ft] to denote the ﬁnal state space that combines
+both components. The state of a robotic system should be
+consistent with properties of the physical world ; i.e., it
+should be temporally coherent and encode only simple, taskrelevant information. Moreover, our RL method models the
+system’s state as a time-varying linear dynamical system, and
+thus it will perform best if the state representation acts as
+such. Intuitively, a good state representation should encode
+the poses of relevant objects in the world using Cartesian
+coordinates that move with the object over time. Our aim
+is to learn such a state representation without using human
+supervision or hand-crafted features. Deep learning offers
+powerful tools for learning representations , but most
+deep neural network models focus on semantics of what
+is in the scene, rather than where the objects are. In this
+section, we describe our autoencoder architecture which is
+designed to encode temporally-smooth, spatial information,
+with particular emphasis on object locations. As we show in
+our experiments, this kind of representation is well suited to
+act as a state space for robotic reinforcement learning.
+A. Deep Spatial Autoencoders
+Autoencoders acquire features by learning to map their
+input to itself, with some mechanism to prevent trivial
+solutions, such as the identity function. These mechanisms
+might include sparsity or a low-dimensional bottleneck. Our
+autoencoder architecture, shown in Figure 3, maps from fullresolution RGB images to a down-sampled, grayscale version
+of the input image, and we force all information in the
+image to pass through a bottleneck of spatial features, which
+we describe below. Since low-dimensional, dense vectors
+are generally well-suited for control, a low-dimensional
+bottleneck is a natural choice for our learned feature representation. A critical distinction in our approach is to
+modify this bottleneck so that it is forced to encode spatial
+feature locations rather than feature values – the “where”
+rather than the “what.” This architecture makes sense for a
+robot state representation, as it forces the network to learn
+object positions; we show in Section VII, that it outperforms
+more standard architectures that focus on the “what,” both
+for image reconstruction, and for robotic control. The ﬁnal
+state space for RL is then formed by concatenating this
+learned encoding, as well as its time derivatives (the feature
+“velocities”), with the robot’s conﬁguration.
+The ﬁrst part of the encoder architecture is a standard 3layer convolutional neural network with rectiﬁed linear units
+of the form acij = max(0, zcij) for each channel c and pixel
+(i, j). We compute the spatial features from the last convolutional layer by performing a “spatial soft arg-max” operation
+that determines the image-space point of maximal activation
+in each channel of conv3. This set of maximal activation
+points forms our spatial feature representation and forces
+the autoencoder to focus on object positions. The spatial soft
+arg-max consists of two operations. The response maps of
+the third convolutional layer (conv3) are ﬁrst passed through
+a spatial softmax scij = eacij/α/P
+i′j′ eaci′j′/α, where the
+temperature α is a learned parameter. Then, the expected
+2D position of each softmax probability distribution sc is
+computed according to fc = (P
+i i ∗scij, P
+j j ∗scij), which
+forms the bottleneck of the autoencoder. This pair of operations typically outputs the image-space positions of the points
+of maximal activation for each channel of conv3. Finally,
+the decoder hdec is simply a single linear (fully connected)
+mapping from the feature points f to the down-sampled
+image. We found that this simple decoder was sufﬁcient to
+acquire a suitable feature representation.
+With this architecture, the bottleneck representation f =
+henc(I), which we refer to as learned “feature points,”
+encodes the positions of the learned features in the image.
+The autoencoder is forced to compress all of the image
+information through this spatial feature point representation,
+which will therefore be capable of directly localizing objects
+in the image. This means that the state representation used
+for control will capture the spatial organization of objects
+in the scene. Example learned feature points are visualized
+in Figure 4. Note that these feature points pick out taskrelevant objects (those which move during the collection of
+the image data.), and learn to ignore background features.
+One drawback of this representation, however, is that there
+is always exactly one output point per feature channel, which
+does not gracefully handle occlusions (zero features present)
+or repeated structure and objects (more than one feature).
+A feature representation that can reconstruct the image
+clearly contains the state information captured by the camera.
+However, the learning algorithm must also be able to predict the dynamics of the state representation, which is not
+necessarily inherently possible with unconstrained learned
+features . Thus, we add a penalty to the autoencoder objective, gslow(ft) = ||(ft+1 −ft) −(ft −ft−1)||2
+2, to encourage
+the feature points to slowly change velocity. As a result, the
+overall autoencoder objective becomes:
+||Idownsamp,k,t −hdec(fk,t)||2
+2 + gslow(fk,t)
+where Idownsamp is a downsampled, grayscale version of
+3 channels
+64 filters
+16 filters
+16 distributions
+spatial softmax
+2D position
+32 filters
+reconstruction
+Fig. 3: The architecture for our deep spatial autoencoder. The last convolutional layer is passed through a spatial softmax, followed by an
+expectation operator that extracts the positions of the points of maximal activation in each channel. A downsampled version of the image
+is then reconstructed from these feature points.
+Fig. 4: Left: feature presence probabilities plotted for two features,
+with the threshold β shown in black. Note that a range of thresholds
+would produce similar results. Right: two sample trajectories of
+learned feature points, starting from red and ending in green. The
+features ﬁltered with a Kalman ﬁlter using feature presence (bottom)
+are much smoother than the unﬁltered feature points (top)
+the input image I, and fk,t = henc(Ik,t), the feature point
+encoding of the tth image in the kth sequence.
+We optimize the auto encoder using stochastic gradient
+descent (SGD), and with batch normalization following
+each of the convolutional operations. The ﬁlters of the ﬁrst
+convolutional layer are initialized with a network trained on
+ImageNet , .
+B. Filtering and Feature Pruning Using Feature Presence
+Not all of the learned feature points will encode useful
+information that can be adequately modeled with a timevarying linear dynamical system by our RL algorithm. Lighting and camera exposure can cause sudden changes in the
+image that do not reﬂect motion of relevant objects. However,
+the autoencoder will assign some subset of its features to
+model these phenomena to improve its reconstruction, producing noisy feature points that make it difﬁcult to train the
+controller. Additionally, even useful features can periodically
+become occluded, resulting in low activations in the last
+convolutional layer and unpredictable peak locations.
+To handle these issues, we introduce the concept of
+feature presence. The presence of a feature is determined
+by the softmax probability value scij at the pixel location
+of the feature point fc = (i, j).1 This measure reﬂects the
+probability mass after the softmax that is actually located
+at the position of the maximum activation. This measure is
+usually very high. As shown in Figure 4, learned feature
+1Since the feature point position may fall on a boundary between pixels,
+we actually sum the probability over a 3 × 3 window of nearby pixels.
+points usually place almost all of their probability mass at
+fc, the location of the maximum. We therefore use a threshold
+on scij that marks the feature as present if scij ≥β, with
+β = 0.95. The positions of the feature points during a trial
+are ﬁltered by a Kalman ﬁlter, which receives observations of
+fc only when scij ≥β, producing smooth predictions when
+the feature is not present. We use a second order Kalman
+ﬁlter and ﬁt the parameters using expectation maximization.
+In addition to ﬁltering features that might become occluded, we also automatically determine the features that do
+not adequately represent task-relevant objects in the scene
+and prune them from the state. As discussed in Section IV,
+the goal positions for the feature points are deﬁned by
+showing an image of the goal state to the robot. To mitigate
+the effects of noise, we record a short sequence of ﬁfty
+images over the course of two seconds and average the
+resulting feature positions. We also measure the feature
+presence indicators during this period, and prune those points
+that are not present for the entire sequence, since they are
+unlikely to be relevant. In our evaluation, we show that
+this pruning step is important for removing extraneous and
+noisy features from the state. To validate this heuristic, we
+conducted a more thorough analysis of the predictability of
+the feature points to determine its effectiveness
+To analyze the usefulness of the learned feature points for
+modeling the dynamics of the scene, we deﬁne the following
+measure of feature predictiveness:
+t−1, ut−1)+log p(f I\Is
+Here, I denotes the index set of all features, Is ⊂I denotes
+the indices that are actually selected for inclusion in the state,
+f Is is shorthand for the corresponding feature vectors, and
+xIs = [˜xt; f Is] is the corresponding state space that includes
+the robot’s conﬁguration. We evaluate the probabilities by
+ﬁtting a dynamics model to xIs as described in Section III
+and ﬁtting a linear-Gaussian model to p(f I\Is
+expectation is evaluated at samples gathered for autoencoder
+training. This measure captures the degree to which the state
+t−1 is predictive of the next state xIs
+t , as well as the degree
+to which xIs
+can predict f I
+t . Intuitively, a good state space
+can predict the features at the next step, which are optimized
+for predicting the entire image. This measure will discourage
+features with dynamics that are hard to ﬁt, and will also
+encourage diversity, since multiple features on the same
+object will be predictable from one another according to
+t ). To analyze the relative quality of each feature,
+we iteratively pruned out the feature that, when removed,
+produced the least reduction in the likelihood. This yields
+a predictiveness ranking of the features. We evaluated this
+metric on the most difﬁcult task, and found that our simple
+feature presence metric was a good, quick approximation for
+selecting highly-predictive features. We report the rankings,
+along with the chosen features in Table I. We also found
+that the low-ranked features are always either consistently
+not present or extremely noisy (see Figure 4).
+feature ranking (from best to worst)
+Rice scooping
+5 15 12 1 4 6 2 14 8 13 7 3 10 9 11 16
+TABLE I: Ranking of features according to predictiveness; features
+chosen based on presence in the target image are shown in bold.
+VI. CONTROL OVER VISUAL FEATURES
+Putting everything together, our method for training
+vision-based controllers is outlined in Algorithm 2. We ﬁrst
+train a controller to attempt the task without vision, using
+only the robot’s conﬁguration as the state. The goal for this
+controller is deﬁned in terms of the robot’s conﬁguration,
+and the learning is performed using Algorithm 1. While this
+goal is typically inadequate for completing the task, it serves
+to explore the state space and produce a sufﬁciently varied
+range of images for learning a visual state representation. The
+representation is then learned on a dataset of images obtained
+from this “blind” controller using the method described in
+Section V-A. This produces a feature encoder henc(It) = ft.
+We then train Kalman ﬁlters for each feature point and
+automatically prune the features using the heuristic described
+in Section V-B, yielding the ﬁnal features ˜f to be included
+in the full state xt = [˜xt; ˜ft; ˙˜ft]. Since we use torque control,
+the robot and its environment form a second-order dynamical
+system, and we must include both the features ˜f and their
+velocities ˙˜f in the state.
+In addition to the state representation xt, we must also
+deﬁne a cost function ℓ(xt, ut) for the task. As discussed
+in the preceding section, we set the goal by showing the
+robot an image of the desired conﬁguration of the scene,
+denote Igoal, in addition to the target end-effector position
+used for the “blind” controller. The target features are then
+obtained according to fgoal = henc(Igoal) and the cost depends
+on the distance to these target features. In practice, we use a
+short sequence of images to ﬁlter out noise. Having deﬁned
+Algorithm 2 RL with deep spatial autoencoders
+1: train exploration controller ˜p(ut|˜xt) with simple states ˜xt and
+simple cost function ℓ(˜xt, ut) (Algorithm 1)
+2: collect image dataset D = {Ik} by running ˜p(ut|˜xt) (or using
+images collected during step 1)
+3: train deep spatial autoencoder using D to obtain feature encoder
+henc(It) = ft
+4: select feature points ˜f using heuristic described in Section V-B,
+deﬁne full state as xt = [˜xt; ˜ft; ˙˜ft]
+5: deﬁne full cost function ℓ(xt, ut) using images of the target
+6: train ﬁnal controller p(ut|xt) with full cost ℓ(xt, ut) (Algorithm 1)
+lego block
+bag transfer
+rice scoop
+Fig. 5: Illustrations of the tasks in our experiments, as viewed by
+the robot’s camera, showing examples of successful completion by
+our controllers and a typical failure by the controller without vision.
+a state space xt and a cost ℓ(xt, ut), we use Algorithm 1
+to optimize the ﬁnal vision-based controllers that perform
+feedback control on the robot’s conﬁguration and the visual
+state representation.
+VII. EXPERIMENTAL EVALUATION
+We evaluated our method on a range of robotic manipulation tasks, ranging from pushing a lego block to scooping
+a bag of rice into a bowl. The aim of these experiments
+was to determine whether our method could learn behaviors
+that required tracking objects in the world that could only be
+perceived with vision. To that end, we compared controllers
+learned by our approach to controllers that did not use vision,
+instead optimizing for a goal end-effector position. We also
+compared representations learned with our spatial autoencoder to hidden state representations learned by alternative
+architectures, including ones proposed in previous work.
+A. Experimental Tasks
+The four experimental tasks in our evaluation are shown
+in Figure 5. The ﬁrst and simplest task requires sliding a
+lego block 30 cm across a table. The robot does not grasp
+the lego block, but rather pushes it along the table with its
+gripper, which requires coordinating the motion of the block
+and balancing it at the end of the ﬁngers. In the second task,
+the robot is holding a spoon that contains a white bag, and
+it must use the spoon to drop the bag into a bowl. The robot
+must balance the bag on the spoon without dropping it, and
+must angle the spoon such that the bag falls into the bowl.
+In the third task, the robot must use a spatula to scoop a
+bag of rice off of the table and into a bowl. In this task, the
+robot must perform a quick, precise sliding motion under the
+bag and then lift and angle the spatula such that the rice bag
+slides or ﬂips into the bowl. This task is illustrated in detail
+in Figure 1. If the robot does not coordinate the motion of
+the spatula and rice bag, the bag is pushed aside and cannot
+be lifted properly.
+In the fourth task, we combine our method with guided
+policy search by training four separate linear-Gaussian controllers for hanging a loop of rope on a hook at different
+positions. These four controllers are combined into a single
+neural network policy using guided policy search, and we
+test the capability of this policy to then hang the rope on
+the hook in new positions. The robot must use vision to
+locate the hook, so making use of the spatial feature points
+is essential for performing this task.
+All of our experiments were performed using one 7 DoF
+arm of a PR2 robot. The initial state space ˜xt contains the
+robot’s joint angles and end effector pose, as well as their
+time derivatives. The controls consist of the seven torques
+at the joints. The images were collected using a consumer
+RGB camera, and the controller runs at 20 Hz. For each of
+the tasks, we provided the goal pose of the end-effector and
+an image of the goal state. For the scooping task, we also
+provided a sub-goal of the spatula under the bag of rice. Full
+details of each task and the equation for the cost function
+are both presented in Appendix A of the supplementary
+materials.2
+B. Results and Analysis
+We ran each of the learned controller 10 times and reported
+either the average distance to the goal, or the success rate.
+For the transfer and scooping task, success required placing
+the bag inside the bowl, while for the hanging task, success
+required the rope loop to hang on the hook. For each of
+the tasks, we compared our method to a controller that
+used only the robot’s conﬁguration ˜xt. The results, shown
+in Table II, show that each of the tasks requires processing
+visual information, and that our method is able to acquire a
+state that contains the information necessary for the task.
+lego block
+(mean distance)
+bag transfer
+rice scoop
+TABLE II: Results of our method. Controllers trained without vision
+fail to complete the tasks, illustrating that the tasks require vision.
+For the generalization experiment with the rope loop on
+hook task, we trained linear-Gaussian controllers for hook
+positions that were spaced 8 cm apart, and trained a single
+neural network using guided policy search that uniﬁed these
+controllers into a single nonlinear policy. This nonlinear
+policy could succeed at each of the training positions, and
+was also successful at the three test positions not seen during
+training, as shown in Table III. The policy trained without
+vision was unable to localize the hook, and resorted to
+a random strategy, which was occasionally successful but
+generally failed at the task. The supplementary video shows
+the behavior of both the “blind” policy and the policy that
+used our learned visual state representation.
+training positions
+test positions
+hook position
+TABLE III: Detailed generalization results for the rope loop task.
+We also evaluate two alternative autoencoder architectures
+that are representative of prior work, trained with the same
+2All supplementary materials and videos of the learned controllers can be
+viewed on the project website: 
+training and validation datasets as our model. The ﬁrst
+comparison closely mirrors the method of Lange et al. ,
+but with a bottleneck dimensionality of 10 to account for the
+greater complexity of our system. The second comparison
+reﬂects a more recent architectures, using max-pooling to
+reduce the dimensionality of the image maps and batch
+normalization after the convolutional layers. The bottleneck
+for this architecture is 32, matching that of our architecture. Details of both baseline architectures are provided in
+Appendix B of the supplementary materials2. We evaluated
+both architectures with and without a smoothness penalty.
+The results, shown in Table IV, show that these methods
+struggle with our high-dimensional, real-world tasks, despite
+the larger model achieving a lower reconstruction loss than
+our autoencoder. For several of the models, we could not
+obtain a stable controller, while the others did not effectively
+integrate visual input into the control strategy. Table IV
+also shows the performance of our method without the
+smoothness penalty, and without feature pruning, showing
+that both of these components are critical for obtaining good
+lego block comparison
+reconstruction
+loss (validation)
+training time
+distance (cm)
+AE of , smooth
+conv+pool AE
+*24.3 ± 6.0
+conv+pool AE, smooth
+*30.0 ± 0.0
+ours, no smooth
+ours, no feat pruning
+*30.0 ± 0.0
+*These controllers became unstable and did not train successfully.
+TABLE IV: Comparisons to prior autoencoder architectures and
+variants of our method.
+Another advantage of our approach is its sample efﬁciency,
+which is enabled both by the use of simple linear-Gaussian
+controllers and a data-efﬁcient neural network architecture.
+The autoencoders used around 50 trials for each task, with
+each trial consisting of 100 image frames and 5 second of
+interaction time, for a total of 5000 frames per task. Training
+the ﬁnal vision-based controller required another 50-75 trials,
+which means that each controller was trained with around
+10-15 minutes of total robot interaction time.
+VIII. DISCUSSION AND FUTURE WORK
+We presented a method for learning state representations
+using deep spatial autoencoders, and we showed how this
+method could be used to learn a range of manipulation
+skills that require close coordination between perception and
+action. Our method uses a spatial feature representation of
+the environment, which is learned as a bottleneck layer in
+an autoencoder. This allows us to learn a compact state from
+high-dimensional real-world images. Furthermore, since this
+representation corresponds to image-space coordinates of
+objects in the scene, it is particularly well suited for continuous control. The trajectory-centric RL algorithm we employ
+can learn a variety of manipulation skills with these spatial
+representations using only tens of trials on the real robot.
+While we found that controllers trained without vision
+could adequately explore the space for each task to generate
+training data for representation learning, there are tasks
+where visiting a sufﬁcient range of states can be difﬁcult
+without vision. A promising direction for tackling such
+tasks is to interleave representation learning with controller
+optimization in a similar spirit to iterative model learning
+approaches . Another promising future direction is to
+use additional sensory modalities to learn more advanced
+sensory state representations, e.g. depth and haptic sensing.
+The prospect of autonomously learning compact and
+portable state representations of complex environments
+entirely from raw sensory inputs, such as images, has
+widespread implications for autonomous robots. The method
+presented in this paper takes one step in this direction,
+by demonstrating that a spatial feature architecture can
+effectively learn suitable representations for a range of
+manipulation tasks, and these representations can be used
+by a trajectory-centric reinforcement learning algorithm to
+learn those tasks. Further research in this direction has the
+potential to make it feasible to apply out-of-the-box learningbased methods to acquire complex skills for tasks where a
+state space is very difﬁcult to design by hand, such as tasks
+with deformable objects, complex navigation in unknown
+environments, and numerous other tasks.
+Acknowledgements: This research was funded in part by ONR
+through a Young Investigator Program award, by the Army Research
+Ofﬁce through the MAST program, and by the Berkeley Vision and
+Learning Center (BVLC). Chelsea Finn was also supported in part
+by a SanDisk fellowship.

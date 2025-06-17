@@ -1,0 +1,996 @@
+Interpretable Classiﬁcation Models for Recidivism Prediction
+Jiaming Zeng†, Berk Ustun†, Cynthia Rudin
+†These authors contributed equally to this work.
+Summary. We investigate a long-debated question, which is how to create predictive models of recidivism that are sufﬁciently accurate, transparent, and interpretable to use for decision-making. This
+question is complicated as these models are used to support different decisions, from sentencing, to
+determining release on probation, to allocating preventative social services. Each case might have an
+objective other than classiﬁcation accuracy, such as a desired true positive rate (TPR) or false positive
+rate (FPR). Each (TPR, FPR) pair is a point on the receiver operator characteristic (ROC) curve. We
+use popular machine learning methods to create models along the full ROC curve on a wide range of
+recidivism prediction problems. We show that many methods (SVM, SGB, Ridge Regression) produce
+equally accurate models along the full ROC curve. However, methods that designed for interpretability
+(CART, C5.0) cannot be tuned to produce models that are accurate and/or interpretable. To handle this
+shortcoming, we use a recent method called Supersparse Linear Integer Models (SLIM) to produce accurate, transparent, and interpretable scoring systems along the full ROC curve. These scoring systems
+can be used for decision-making for many different use cases, since they are just as accurate as the
+most powerful black-box machine learning models for many applications, but completely transparent,
+and highly interpretable.
+Keywords: recidivism, machine learning, interpretability, scoring systems, binary classiﬁcation
+Introduction
+Forecasting has been used for criminology applications since the 1920s when
+various factors derived from age, race, prior offense history, employment, grades, and neighborhood background were used to estimate success of parole. Many things have changed since then, including the fact that
+we have developed machine learning methods that can produce accurate predictive models, and have collected
+large high-dimensional datasets on which to apply them.
+Recidivism prediction is still extremely important. In the United States, for example, a minority of individuals commit the majority of the crimes : these are the “power few” of Sherman 
+on which we should focus our efforts. We want to ensure that public resources are directed effectively, be they
+correctional facilities or preventative social services. Milgram recently discussed the critical importance of accurately predicting if an individual who is released on bail poses a risk to public safety, pointing
+out that high-risk individuals are being released 50% of the time while low-risk individuals are being released
+less often then they should be. Her observations are in line with longstanding work on clinical versus actuarial
+judgment, which shows that humans, on their own, are not as good at risk assessment as statistical models
+ . This is the reason that several U.S. states have mandated the use
+of predictive models for sentencing decisions .
+There has been some controversy as to whether sophisticated machine learning methods are necessary to produce accurate predictive
+models of recidivism, or if traditional approaches such as logistic regression or linear discriminant analysis
+would sufﬁce . Random
+forests may produce accurate predictive models, but these models effectively operate as black-boxes, which
+make it difﬁcult to understand how the input variables are producing a predicted outcome. If a simpler, more
+transparent, but equally accurate predictive model could be developed, it would be more usable and defensible
+for many decision-making applications. There is a precedent for using such models in criminology ; Ridgeway argues that a “decent transparent model that is actually used will
+outperform a sophisticated system that predicts better but sits on a shelf.” This discussion is captured nicely
+by Bushway , who contrasts the works of Berk and Bleich and Tollenaar and van der Heijden
+ 
+Zeng, Ustun, and Rudin
+ . Berk and Bleich claim we need sophisticated machine learning methods due to their substantial
+beneﬁts in accuracy, whereas Tollenaar and van der Heijden claim that “modern statistical, data mining
+and machine learning models provides no real advantage over logistic regression and LDA,” assuming that
+humans have done appropriate pre-processing. In this work, we argue that the answer to the question is far
+more subtle than a simple yes or no.
+In particular, the answer depends on how the models will be used for decision-making. For each use case
+(e.g., sentencing, parole decisions, policy interventions), one might need a decision point at a different level of
+true positive rate (TPR) and false positive rate (FPR) . Each (TPR, FPR) pair is a point on
+the receiver operator characteristic (ROC) curve. To determine if one method is better than another, one must
+consider the appropriate point along the ROC curve for decision-making. As we show, for a wide range of
+recidivism prediction problems, many machine learning methods (support vector machines, random forests)
+produce equally accurate predictive models along the ROC curve. However, there are trade-offs between
+accuracy, transparency, and interpretability: methods that are designed to yield transparent models (CART,
+C5.0) cannot be tuned to produce as accurate models along the ROC curve, and do not always yield models
+that are interpretable. This is not to say that interpretable models for recidivism prediction do not exist. The
+fact that many machine learning methods produce models with similar levels of predictive accuracy indicates
+that there is a large class of approximately-equally-accurate predictive models . In this case, there may exist interpretable models that also attain the same level of
+accuracy. Finding models that are accurate and interpretable, however, is computationally challenging.
+In this paper, we explore whether such accurate-yet-interpretable models exist and how to ﬁnd them. To
+this end, we use a new machine learning method known as a Supersparse Linear Integer Model to learn scoring systems from data. Scoring systems that have used for many criminal justice
+applications because they let users make quick predictions by adding, subtracting and multiplying a few small
+numbers . In contrast to existing tools, which have been built using heuristic approaches , the models built by SLIM are fully optimized for accuracy and sparsity,
+and can handle additional constraints (e.g., bounds on the false positive rate, monotonicity properties for the
+coefﬁcients). We use SLIM to produce a set of simple scoring systems at different decision points across the
+full ROC curve, and provide a comparison with other popular machine learning methods. Our ﬁndings show
+that the SLIM scoring systems are often just as accurate as the most powerful black-box machine learning
+models, but transparent and highly interpretable.
+The remainder of this paper is structured as follows. In Section 1.2, we discuss related work. In Section 2, we
+describe how we derived 6 recidivism prediction problems. In Section 3, we provide a brief overview of SLIM
+and describe several new techniques that can reduce the computation required to produce scoring systems.
+In Section 4, we compare the accuracy and interpretability of models produced by the 9 machine learning
+methods on the 6 recidivism prediction problems. We include additional results related to the accuracy and
+interpretability of models from different methods in the Appendix.
+Related Work
+Predictive models for recidivism have been in widespread use in different countries and different areas of
+the criminal justice system since the early 1920s .
+The use of these tools has been spurred on by continued research into the superiority of actuarial judgment
+ as well as a desire to efﬁciently use limited public resources
+ . In the U.S., federal guidelines currently mandate
+the use of a predictive recidivism measure known as the Criminal History Category for sentencing . Besides the U.S., countries that currently use risk assessment tools include
+Canada , the Netherlands , and the U.K.
+ . Applications of these tools can be seen in evidence-based sentencing ,
+corrections and prison administration , informing release on parole , determining the level of supervision during parole , determining appropriate sanctions for parole violations ,
+and targeted policy interventions .
+Our paper focuses on binary classiﬁcation models to predict general recidivism (i.e., recidivism of any type
+of crime) as well as crime-speciﬁc recidivism (i.e., recidivism for drug, general violence, domestic violence,
+sexual violence, and fatal violence offenses). Risk assessment tools for general recidivism include: the Salient
+Factor Score , the Offender Group Reconviction Scale , the Statistical Information of Recidivism scale
+ , and the Level of Service/Case Management Inventory . Crime-speciﬁc applications include risk assessment tools for domestic violence , sexual violence , and general violence .
+The scoring systems that we present in this paper are designed to mimic the form of risk scores that are
+currently used throughout the criminal justice system – that is, linear classiﬁcation models that only require
+users to add, subtract and multiply a few small numbers to make a prediction . These
+tools are unique in that they allow users make quick predictions by hand, without a computer, calculator,
+or nomogram (which is a visualization tool for more difﬁcult calculations). Current examples of such tools
+include: the Salient Factor Score (SFS) , the Criminal History Category (CHC)
+ , and the Offense Gravity Score (OGS) . Our approach aims to produce scoring systems that are fully optimized for accuracy and
+sparsity without any post-processing. In contrast, current tools are produced through heuristic approaches that
+primarily involve logistic regression with some ad-hoc post processing to ensure that the models are sparse
+and use integer coefﬁcients .
+Our scoring systems differ from existing tools in that they directly output a predicted outcome (i.e., prisoner
+i will recidivate) as opposed to an predicted probability of the outcome (i.e. the predicted probability that
+prisoner i will recidivate is 90%). The predicted probabilities from existing tools are typically converted into
+an outcome by imposing a threshold (i.e., classify a prisoner as “high-risk” if the predicted probability of
+arrest > 70%). In practice, users arbitrarily pick several thresholds to translate predicted probabilities into
+an ordinal outcome (e.g., prisoner i is “low risk,” if the predicted probability is < 30%, “medium risk” if the
+predicted probability is < 60%, and “high risk” otherwise). These arbitrary threshholds make it difﬁcult, if not
+impossible, to effectively assess the predictive accuracy of the tools . Netter ,
+for instance, mentions that “the possibility of making a prediction error (false positive or false negative) using
+a risk tool is probable, but not easily determined.” In contrast to existing tools, the scoring systems let users
+assess accuracy in a straightforward way (i.e., through the true positive rate and true negative rate). Further,
+our approach has the advantage that is can yield a scoring system that optimizes the class-based accuracy at a
+particular decision point (i.e., produce the model that maximizes the true positive rate, given a false-positive
+rate of at most 30%).
+Our work is related to a stream of research that has aimed to leverage new methods for predictive modeling
+in criminology. In contrast to our work, much of the research to date has focused on improving predictive
+accuracy by training powerful black-box models such as random forests and stochastic
+gradient boosting Friedman . Random forests , in particular, have been used for
+several criminological applications, including: predicting homicide offender recidivism ;
+predicting serious misconduct among incarcerated prisoners ; forecasting potential murders
+for criminals on probation or parole ; forecasting domestic violence and help inform court
+decisions at arraignment . We note that not all studies in used black-box models:
+Berk et al. , for instance, help the Los Angeles Sheriff’s Department develop a simple and practical
+screener to forecast domestic violence using decision trees. More recently, , developed a
+simple scoring system to help the New York Police Department address stop and frisk by ﬁrst running logistic
+regression, and then rounding the coefﬁcients.
+Data and Prediction Problems
+Each problem is a binary classiﬁcation problem with N = 33, 796 prisoners and P = 48 input variables.
+The goal is to predict whether a prisoner will be arrested for a certain type of crime within 3 years of being
+Zeng, Ustun, and Rudin
+released from prison. In what follows, we describe how we created each prediction problem.
+Database Details
+We derived the recidivism prediction problems in our paper from the “Recidivism of Prisoners Released in
+1994” database, assembled by the U.S. Department of Justice, Bureau of Justice Statistics . It is the
+largest publicly available database on prisoner recidivism in the United States. The study tracked 38,624
+prisoners for 3 years following their release from prison in 1994. These prisoners were randomly sampled
+from the population of all prisoners released from 15 U.S. states (Arizona, California, Delaware, Florida,
+Illinois, Maryland, Michigan, Minnesota, New Jersey, New York, North Carolina, Ohio, Oregon, Texas, and
+Virginia). The sampled population accounts for roughly two-thirds of all prisoners that were released from
+prison in the U.S. in 1994. Other studies that use this database include: Bhati and Piquero ; Bhati
+ ; Zhang et al. .
+The database is composed of 38,624 rows and 6,427 columns, where each row represents a prisoner and
+each column represents a feature (i.e. a ﬁeld of information for a given prisoner). The 6,427 columns consist of
+91 ﬁelds that were recorded before or during release from prison in 1994 (e.g., date of birth, effective sentence
+length), and 64 ﬁelds that were repeatedly recorded for up to 99 different arrests in the 3 year follow-up period
+(e.g., if a prisoner was rearrested three times with 3 years, there would be three record cycles recorded). The
+information for each prisoner is sourced from record-of-arrest-and-prosecution (RAP) sheets kept by state
+law enforcement agencies and/or the FBI. A detailed descriptive analysis of the database was carried out
+by statisticians at the U.S. Bureau of Justice Statistics . This study restricted its
+attention to 33,796 of the 38,624 prisoners to exclude extraordinary or unrepresentative release cases. To be
+selected for the analysis of Langan and Levin , a prisoner had to be alive during the 3 year follow-up
+period, and had to have been released from prison in 1994 for an original sentence that was at least 1 year
+or longer. Prisoners with certain release types – release to custody/detainer/warrant, absent without leave,
+escape, transfer, administrative release, and release on appeal – were excluded. To mirror the approach of
+Langan and Levin , we restricted our attention to the same subset of prisoners.
+This dataset has some serious ﬂaws which we point out below. To begin, many important factors that could
+be used to predict recidivism are missing, and many included factors are noisy enough to be excluded from
+our preliminary experiments. The information about education levels is extremely minimal; we do not even
+know whether each prisoner attended college, or completed high school. The information about courses in
+prison is only an indicator of whether the inmate took any education or vocation courses at all. Also, there is
+no family history for each prisoner (e.g., foster care) and no record of visitors while in prison (e.g., indicators
+of caring family members or friends). There is no information about reentry programs or employment history.
+While some of these factors exist, such as drug or alcohol treatment and in-prison vocational programs, the
+data is highly incomplete and therefore excluded from our analysis. For example, for drug treatment, less than
+14% of the prisoners had a valid entry. The rest were “unknown.” To include as many prisoners as possible,
+we chose to exclude factors with extremely sparse information.
+Deriving Input Variables
+We provide a summary of the P = 48 input variables derived from the database in Table 1. We encoded each
+input variable as a binary rule of the form xij ∈{0, 1}, j = 1 . . . , P, where xij = 1 if condition j holds true
+about prisoner i. This allows a linear model to encode nonlinear functions of the original variables. We refer
+to input variables in the text using italicized font (e.g., female). All prediction problems in Table 2 and all
+machine learning methods in Table 4 use these same input variables.
+The ﬁnal set of input variables are representative of well-known risk factors for recidivism and have been used in risk assessment tools since 1928 . They include: 1) information
+about prison release in 1994 (e.g., time served, age at release, infraction in prison); 2) information from
+past arrests, sentencing, and convictions (e.g., prior arrests≥1, any prior jail time);1 3) history of substance
+abuse (e.g., alcohol abuse) 4) gender (e.g., female). These input variables are advantageous because: a) the
+1The prior arrest variable does not count the original crime for which they were released from prison in 1994; thus,
+about 12% of the prisoners have no prior arrests =1 even though they were arrested at least once.
+Interpretable Classiﬁcation Models for Recidivism Prediction
+information is easily accessible to law enforcement ofﬁcials (all above information can be found in state
+RAP sheets); b) they do not include socioeconomic factors such as race, which would directly eliminate the
+potential to use these tools in applications such as sentencing.
+We note that encoding the input variables as binary values presents many advantages. They produce
+models that are easier to understand (removing the wide range presented by continuous variables), and they
+avoid potential confusion stemming from coefﬁcients of normalized inputs (for instance, after undoing the
+normalization for normalized coefﬁcients, a small coefﬁcient might be highly inﬂuential if it applies to a
+variable taking large values). Binarization is especially useful for SLIM as we can ﬁt SLIM models by
+solving a slightly easier discrete optimization problem when the data only contains binary input variables
+(as discussed in Section 3.3). In Appendix E, we explore the change in predictive accuracy if continuous
+variables are included and show that the changes in performance are minor for most methods. There are some
+exceptions; for example, CART and C5.0T experienced an improvement of 4.6% for drug and SVM RBF
+experienced a 7.7% improvement for fatal violence. Yet even for these methods, no clear improvement
+is seen across all problems.
+Deriving Outcome Variables
+We created a total of 6 recidivism prediction problems by encoding a binary outcome variable yi ∈{−1, +1}
+such that yi = +1 if a prisoner is arrested for a particular type of crime within 3 years after being released
+from prison. For clarity, we refer to each prediction problem in the text using typewriter font (e.g., arrest).
+We provide details on each recidivism prediction problems in Table 2. These include: an arrest for any
+crime (arrest); an arrest for a drug-related offense (drug); or an arrest for a certain type of violent offense
+(general violence, domestic violence, sexual violence, fatal violence).
+In the dataset, all crime types can be broken down into smaller subcategories (e.g., fatal violence
+can be broken into 6 subcategories such as murder, vehicular manslaughter, etc.). We chose to use
+the broader crime categories for the sake of conciseness and clarity. Indeed, the study by Langan and Levin
+ also split the crimes into the same major categories. We note that the outcomes of violent offenses are
+mutually exclusive, as different types of violence are treated differently within the U.S. legal system. In other
+words, yi = +1 for general violence does not necessarily imply yi = +1 for domestic violence,
+sexual violence, fatal violence).
+Zeng, Ustun, and Rudin
+Table 1. Overview of input variables for all prediction problems. Each variable is a binary rule of the form
+xij ∈{0, 1}. We list conditions required for xij = 1 under the Deﬁnition column.
+Input Variable
+P(xij = 1)
+prisoner i is female
+prior alcohol abuse
+prisoner i has history of alcohol abuse
+prior drug abuse
+prisoner i has history of drug abuse
+age at release≤17
+prisoner i was ≤17 years old at release in 1994
+age at release 18 to 24
+prisoner i was 18-24 years old at release in 1994
+age at release 25 to 29
+prisoner i was 25-29 years old at release in 1994
+age at release 30 to 39
+prisoner i was 30-39 years old at release in 1994
+age at release≥40
+prisoner i was ≥40 years old at release in 1994
+released unconditional
+prisoner i released at expiration of sentence
+released conditional
+prisoner i released by parole or probation
+time served≤6mo
+prisoner i served ≤6 months
+time served 7 to 12mo
+prisoner i served 7–12 months
+time served 13 to 24mo
+prisoner i served 13–24 months
+time served 25 to 60mo
+prisoner i served 25–60 months
+time served≥61mo
+prisoner i served ≥61 months
+infraction in prison
+prisoner i has a record of misconduct in prison
+age 1st arrest≤17
+prisoner i was ≤17 years old at 1st arrest
+age 1st arrest 18 to 24
+prisoner i was 18-24 years old at 1st arrest
+age 1st arrest 25 to 29
+prisoner i was 25-29 years old at 1st arrest
+age 1st arrest 30 to 39
+prisoner i was 30-39 years old at 1st arrest
+age 1st arrest≥40
+prisoner i was ≥40 years at 1st arrest
+age 1st conﬁnement≤17
+prisoner i was ≤17 years old at 1st conﬁnement
+age 1st conﬁnement 18 to 24
+prisoner i was 18-24 years old at 1st conﬁnement
+age 1st conﬁnement 25 to 29
+prisoner i was 25-29 years old at 1st conﬁnement
+age 1st conﬁnement 30 to 39
+prisoner i was 30-39 years old at 1st conﬁnement
+age 1st conﬁnement≥40
+prisoner i was ≥40 years at 1st conﬁnement
+prior arrest for drug
+prisoner i was once arrested for drug offense
+prior arrest for property
+prisoner i was once arrested for property offense
+prior arrest for public order
+prisoner i was once arrested for public order offense
+prior arrest for general violence
+prisoner i was once arrested for general violence
+prior arrest for domestic violence
+prisoner i was once arrested for domestic violence
+prior arrest for sexual violence
+prisoner i was once arrested for sexual violence
+prior arrest for fatal violence
+prisoner i was once arrested for fatal violence
+prior arrest for multiple types
+prisoner i was once arrested for multiple types of crime
+prior arrest for felony
+prisoner i was once arrested for a felony
+prior arrest for misdemeanor
+prisoner i was once arrested for a misdemeanor
+prior arrest for local ordinance
+prisoner i was once arrested for local ordinance
+prior arrest with ﬁrearms involved
+prisoner i was once arrested or an incident involving ﬁrearms
+prior arrest with child involved
+prisoner i was once arrested for an incident involving children
+no prior arrests
+prisoner i has no prior arrests
+prior arrests≥1
+prisoner i has at least 1 prior arrest
+prior arrests≥2
+prisoner i has at least 2 prior arrests
+prior arrests≥5
+prisoner i has at least 5 prior arrests
+multiple prior prison time
+prisoner i has been to prison multiple times
+any prior jail time
+prisoner i has been to jail at least once
+multiple prior jail time
+prisoner i has been to prison multiple times
+any prior probation or ﬁne
+prisoner i has been on probation or paid a ﬁne at least once
+multiple prior probation or ﬁne
+prisoner i has been on probation or paid a ﬁne multiple times
+Interpretable Classiﬁcation Models for Recidivism Prediction
+Table 2. Overview of recidivism prediction problems. The percentages P(yi = +1) do not add up to 100%
+because a prisoner could be arrested for multiple types of crime at one time (e.g., both drug and public
+order offenses), and could also be arrested multiple times over the 3 year follow-up period.
+Prediction Problem
+P(yi = +1)
+Outcome Variable
+yi = +1 if prisoner i is arrested for any offense within 3 years of release
+from prison
+yi = +1 if prisoner i is arrested for drug-related offense (e.g., possession, trafﬁcking) within 3 years of release from prison
+general violence
+yi = +1 if prisoner i is arrested for a violent offense (e.g., robbery,
+aggravated assault) within 3 years of release from prison
+domestic violence
+yi = +1 if prisoner i is arrested for domestic violence within 3 years of
+release from prison
+sexual violence
+yi = +1 if prisoner i is arrested for sexual violence within 3 years of
+release from prison
+fatal violence
+yi = +1 if prisoner i is arrested for murder or manslaughter within 3
+years of release from prison
+Relationships between Input and Output Variables
+Table 3 lists the conditional probabilities P(y = 1|xj = 1) between the outcome variable y and each input
+variable xj for all prediction problems. Using this table, we can identify strong associations between the input
+and output for each prediction problem. These associations can help uncover insights into each problem and
+also help qualitatively validate predictive models in Section 4.4.
+Consider, for instance, the arrest problem. Here, we can see that prisoners who are released from
+prison at a later age are less likely to be arrested (as the probability for arrest decreases monotonically as
+age at release increases). This also appears to be the case for prisoners who were ﬁrst conﬁned (i.e., sent to
+prison or jail) at an older age (see e.g., age of ﬁrst conﬁnement). In addition, we can also see that prisoners
+with more prior arrests have a higher likelihood of being arrested (as the probability for arrest increases
+monotonically with prior arrest).
+Similar insights can be made for crime-speciﬁc prediction problems. In drug, for instance, we see that
+prisoners who were previously arrested for a drug-related offense are more likely to be rearrested for a drugrelated offense (32%) than those who were previously arrested for any other type of offense. Likewise, looking
+at domestic violence, we see that the prisoners with the greatest probability of being arrested for a domestic violence crime are those with a history of domestic violence (13%).
+Zeng, Ustun, and Rudin
+Table 3. Table of conditional probabilities for all input variables (row) and prediction problems (columns). Each
+cell represents the conditional probability P(y = +1|x = +1) where x is the input variable that is speciﬁed in the
+row and y is the outcome variable for the prediction problem speciﬁed in the column.
+Input Variable
+Prediction Problem
+prior alcohol abuse
+prior drug abuse
+age at release≤17
+age at release 18 to 24
+age at release 25 to 29
+age at release 30 to 39
+age at release≥40
+released unconditional
+released conditional
+time served≤6mo
+time served 7 to 12mo
+time served 13 to 24mo
+time served 25 to 60mo
+time served≥61mo
+infraction in prison
+age 1st arrest≤17
+age 1st arrest 18 to 24
+age 1st arrest 25 to 29
+age 1st arrest 30 to 39
+age 1st arrest≥40
+age 1st conﬁnement≤17
+age 1st conﬁnement 18 to 24
+age 1st conﬁnement 25 to 29
+age 1st conﬁnement 30 to 39
+age 1st conﬁnement≥40
+prior arrest for drug
+prior arrest for property
+prior arrest for public order
+prior arrest for general violence
+prior arrest for domestic violence
+prior arrest for sexual violence
+prior arrest for fatal violence
+prior arrest for multiple crime types
+prior arrest for felony
+prior arrest for misdemeanor
+prior arrest for local ordinance
+prior arrest with ﬁrearms involved
+prior arrest with child involved
+no prior arrests
+prior arrest≥1
+prior arrest≥2
+prior arrest≥5
+multiple prior prison time
+any prior jail time
+multiple prior jail time
+any prior probation or ﬁne
+multiple prior probation or ﬁne
+Interpretable Classiﬁcation Models for Recidivism Prediction
+Supersparse Linear Integer Models
+A Supersparse Linear Integer Model (SLIM) is a new machine learning method for creating scoring systems –
+that is, binary classiﬁcation models that only require users to add, subtract and multiply a few small numbers
+to make a prediction . Scoring systems are widely used because they allow users
+to make quick predictions, without the use of a computer, and without extensive training in statistics. These
+models are also useful because their high degree of sparsity and integer coefﬁcients let users easily gauge
+the inﬂuence of multiple input variables on the predicted outcome (see Section 4.4 for an example). In what
+follows, we provide a brief overview of SLIM, and provide several new techniques to reduce the computation
+for problems with binary input variables.
+Framework and Optimization Problem
+SLIM scoring systems are linear classiﬁcation models of the form:
+λjxij > λ0
+λjxij ≤λ0.
+Here, λ1, . . . , λP represent the coefﬁcients (i.e. the “points” for input variables j = 1, . . . , P), and λ0 represents an intercept (i.e. the “threshold score” that has to be surpassed to predict ˆyi = +1).
+The values of the coefﬁcients are determined from data by solving a discrete optimization problem that
+has the following form:
+1 [yi ̸= ˆyi] + C0
+1 [λj ̸= 0] + ϵ
+(λ0, λ1, ..., λP ) ∈L.
+Here, the objective directly minimizes the error rate
+i=1 1 [yi ̸= ˆyi] and directly penalizes the number of non-zero terms PP
+j=1 1 [λj ̸= 0]. The constraints restrict coefﬁcients to a ﬁnite set such as L =
+{−10, . . . , 10}P+1. Optionally, one could include additional operational constraints on the accuracy and
+interpretability of the desired scoring system.
+The objective includes a tiny penalty on the absolute value of the coefﬁcients to restrict coefﬁcients to
+coprime values without affecting accuracy or sparsity. To illustrate the use of this penalty, consider a classiﬁer
+such as ˆy = sign (x1 + x2). If SLIM only minimized the misclassiﬁcation rate and the number of terms
+(the ﬁrst two terms of the objective), then ˆy = sign (2x1 + 2x2) would have the same objective value as
+ˆy = sign (x1 + x2) because it makes the same predictions and has the same number of non-zero coefﬁcients.
+Since coefﬁcients are restricted to a discrete set, we use this tiny penalty on the absolute value of these
+coefﬁcients so that SLIM chooses the classiﬁer with the smallest (coprime) coefﬁcients, ˆy = sign (x1 + x2).
+The C0 parameter represents the maximum accuracy that SLIM is willing to sacriﬁce to remove a feature
+from the optimal scoring system. If, for instance, C0 is set within the range (1/N, 2/N), we would sacriﬁce
+the accuracy of one observation to have a model with one fewer feature. Given C0, we can set the ℓ1-penalty
+parameter ϵ to any value
+min(1/N, C0)
+max{λj}j∈L
+so that it does not affect the accuracy or sparsity of the optimal classiﬁer, but only induces the coefﬁcients to
+be coprime for the features that are selected.
+SLIM differs from traditional machine learning methods because it directly optimizes accuracy and sparsity without making approximations that other methods make for scalability (e.g., controlling for accuracy
+using convex surrogate loss functions). By avoiding these approximations, SLIM sacriﬁces the ability to ﬁt a
+model in seconds or in a way that scales to extremely large datasets. In return, however, it gains the ability to
+Zeng, Ustun, and Rudin
+ﬁt models that are highly customizable, since one could directly encode a wide range of operational constraints
+into its integer programming formulation. In this paper, we primarily make use of a simple constraint to limit
+the number of non-zero coefﬁcients, however, it is also natural to incorporate constraints on class-speciﬁc
+accuracy, structural sparsity, and prediction .
+In this paper we trained the following version of SLIM, which is different than (1) in that it includes class
+weights, and has speciﬁc constraints on the coefﬁcients:
+1 [yi ̸= ˆyi] + W −
+1 [yi ̸= ˆyi] + C0
+1 [λj ̸= 0] + ϵ
+1 [λj ̸= 0] ≤8
+λj ∈{−10, . . . , 10} for j = 1...P
+λ0 ∈{−100, . . . , 100}.
+In the formulation above, the constraints restrict each coefﬁcient λj to an integer between −10 and 10, the
+threshold λ0 to an integer between −100 and 100, the number of non-zero to at most 8 . The parameters W + and W −are class-based
+weights that control the accuracy on positive and negative examples. We typically choose values of W + and
+W −such that W ++W −= 2, so that we recover an error-minimizing formulation by setting W + = W −= 1.
+The C0 parameter was set to a sufﬁciently small value so that SLIM would not sacriﬁce accuracy for sparsity:
+given W + and W −, we can set C0 to any value
+0 < C0 < min{W −, W +}/(N × P)
+to ensure this condition. The ϵ parameter was set to a sufﬁciently small value so that SLIM would produce a
+model with coprime coefﬁcients without affecting accuracy or sparsity: given W +, W −and C0, we can set ϵ
+to any value 0 < ϵ < C0/ max PP
+j=1 |λj| to ensure this condition.
+General SLIM IP Formulation
+Training a SLIM scoring system requires solving an integer programming (IP) problem using a solver such
+as CPLEX, Gurobi, or CBC. In general, we use the following IP formulation to recover the solution to the
+optimization problem (2):
+error on i
+C0αj + ϵβj
+penalty for coef j
+Z ∩[−Λj, Λj]
+coefﬁcient set
+loss variables
+penalty variables
+ℓ0 variables
+j = 1...P.
+ℓ1 variables
+The constraints in (3a) compute the error rate by setting the loss variables zi = 1
+yiλT xi ≤0
+linear classiﬁer with coefﬁcients λ misclassiﬁes example i (or is close to misclassifying it, depending on
+the margin γ). This is a Big-M constraint for the error rate that depends on scalar parameters γ and Mi
+ . The value of Mi represents the maximum score when example i is misclassiﬁed,
+and can be set as Mi = maxλ∈L(γ −yiλT xi) which is easy to compute since L is ﬁnite. The value of γ
+represents the margin, and the objective is penalized when points are either incorrectly classiﬁed, or within
+Interpretable Classiﬁcation Models for Recidivism Prediction
+γ of the decision boundary. How close a point is to the decision boundary (or whether it is misclassiﬁed) is
+determined by yiλT xi. When the features are binary, and since the coefﬁcients are integers, γ can naturally
+be set to any value between 0 and 1. (In other cases, we can set γ = 0.5 for instance, which makes an implicit
+assumption on the values of the features.) The constraints in (3b) set the total penalty for each coefﬁcient to
+Φj = C0αj + ϵβj, where αj := 1 [λj ̸= 0] is deﬁned by Big-M constraints in (3c), and βj := |λj| is deﬁned
+by the constraints in (3d). We denote the largest absolute value of each coefﬁcient as Λj := maxλj∈Lj |λj|.
+Restricting coefﬁcients to a ﬁnite set results in signiﬁcant practical beneﬁts for the SLIM IP formulation,
+especially in comparison to other IP formulations that minimize the 0–1-loss and/or penalize the ℓ0-norm.
+Without the restriction of λ to a bounded set, we would not have a natural choice for the Big-M constant,
+which means the user chooses one that is very large, leading to a less efﬁcient formulation . For SLIM, the Big-M constants used to compute the 0–1 loss in constraint (3a) is bounded as Mi ≤
+maxλ∈L(γ −yiλT xi), and the Big-M constant used to compute the ℓ0-norm in constraints (3c) is bounded as
+Λj ≤maxλj∈Lj |λj|. Bounding these constants lead to a tighter LP relaxation, which narrows the integrality
+gap, and improves the ability of commercial IP solvers to obtain a proof of optimality more quickly.
+Improved SLIM IP Formulation
+The following formulation provides a tighter relaxation of the IP which reduces computation. It relies on the
+fact that when the input variables are binary, we are likely to get repeated feature values among observations.
+error on s(4a)
+error on t(4b)
+∀s, t : xs = xt, ys = −yt
+conﬂicting labels(4c)
+C0αj + ϵβj
+penalty for coef j(4d)
+ℓ0-norm(4e)
+ℓ1-norm (4f)
+Z ∩[−Λj, Λj]
+coefﬁcient set
+loss variables
+penalty variables
+ℓ0 variables
+j = 1...P.
+ℓ1 variables
+The main difference between this formulation and the one in (3) is that we compute the error rate of the
+classiﬁer using loss constraints that are expressed in terms of the number of distinct points in the dataset.
+Here, the set S represents the set of distinct points with positive labels, and the set T represents the set of
+distinct points with negative examples. The parameters ns (and nt) count the number of times a point of type
+s (or t) are found in the original dataset so that P
+i=1 1 [yi = +1], P
+i=1 1 [yi = −1], and
+The main computational beneﬁts of this formulation are due to the fact that: (i) we can reduce the number
+of loss constraints by counting the number of repeated rows in the dataset; and (ii) we can directly encode a
+lower bound on the error rate by counting the number of points s, t with identical feature but opposite labels
+(i.e., xs = xt but ys = −yt). Here (i) reduces the size of the problem that we pass to an IP solver, and (ii)
+produces a much stronger lower bound on the 0–1 loss (in comparison to the LP relaxation), which speeds up
+the progress of branch-and-bound type algorithms. Note that it would be possible to use this formulation on a
+dataset without binary input variables, though it would not necessarily be effective because it could be much
+less likely for a dataset to contain repeated rows in such a setting.
+Another subtle beneﬁt of this formulation is that the margin for the negative points is 0 while the margin
+for the positive points is 1. This means that for positive points, we have a correct prediction if and only if the
+Zeng, Ustun, and Rudin
+score ≥1. For negative points, we have a correct prediction if and only if the score ≤0. This provides a
+slight computational advantage since the negative points do not need to have scores below -1 to be correctly
+classiﬁed, which reduces the size of the Big-M parameter and the coefﬁcient set. For instance, say we would to
+produce a linear model that encode: “predict rearrest unless a1 or a2 are true.” Using the previous formulation
+with the margin of γ ∈(0, 1) on both positives and negatives, the optimal SLIM classiﬁer would be: “rearrest
+= sign(1 −2a1 −2a2).” In contrast, the margin of the current formulation is: “rearrest = sign(1 −a1 −a2)”,
+which uses smaller coefﬁcients, and produces a slightly simpler model.
+Active Set Polishing
+On large datasets, IP solvers may take long time to produce an optimal solution or provider users with a
+certiﬁcate of optimality. Here, we present a polishing procedure that can be used to improve the quality of
+solutions locally. For a ﬁxed set of features, this procedure optimizes the values of coefﬁcients.
+The polishing procedure takes as input a feasible set of coefﬁcients from the SLIM IP λfeasible, and returns
+a polished set of coefﬁcients λpolished by solving a a simpler IP formulation shown in (5). The polishing IP
+only optimizes the coefﬁcients of features that belong to the active set of λfeasible: that is, the set of features
+with nonzero coefﬁcients A :=
+j : λfeasible
+. The coefﬁcients for features that do not belong to the
+active set are ﬁxed to zero so that λj = 0 for j /∈A. In this way, the optimization no longer involves feature
+selection, and the formulation becomes much easier to solve.
+error on s
+error on t
+∀s, t : xs = xt, ys = −yt
+conﬂicting labels
+Z ∩[−Λj, Λj]
+coefﬁcient set
+s ∈S t ∈T .
+loss variables
+The polishing IP formulation is especially fast to solve to optimality for classiﬁcation problems with binary
+input variables because this limits the number of loss constraints. Say for instance that we wish to polish a
+set of coefﬁcients with only 5 nonzero variables, then there are at most |{−1, +1}| × |{0, 1}5| = 64 possible
+unique data points, and thus the same number of possible loss constraints.
+In our experiments in Section 4, we use the polishing procedure on all of the feasible solutions we ﬁnd
+from the earlier formulation. In all cases, we can solve the polishing IP to optimality within a few seconds
+(i.e. a MIPGAP of 0.0%).
+Experimental Results
+In this section, we compare the accuracy and interpretability of recidivism prediction models from SLIM to
+models from 8 other popular classiﬁcation methods. In Section 4.1, we explain the experimental setup used
+for all the methods. In Section 4.2, we compare the predictive accuracy of the methods with the AUC values
+and ROC curves. In Section 4.3 and 4.4, we evaluate the interpretability of the models. Finally, in Section
+4.5, we present the scoring systems generated by SLIM.
+Methodology
+In what follows we discuss cost-sensitive classiﬁcation for imbalanced problems, provide an overview of
+techniques.
+Evaluating Predictive Accuracy for Imbalanced Problems
+The majority of classiﬁcation problems that we consider are imbalanced, where the data contain a relatively
+small number of examples from one class and a relatively large number of examples from the other.
+Interpretable Classiﬁcation Models for Recidivism Prediction
+Imbalanced problems necessitate changes in the way that we evaluate the performance of classiﬁcation
+models. Consider, for instance, a heavily imbalanced problem such as fatal violence where only P(yi =
++1) = 0.7% of individuals are arrested within 3 years of being released from prison. In this case, a method
+that maximizes overall classiﬁcation accuracy is likely to produce a trivial model that predicts no one will be
+arrested for fatal offenses – a result that is not surprising given that the trivial model is 99.3% accurate on the
+overall population. Unfortunately, this model will never be able to identify individuals that will be arrested
+for a fatal offense, and therefore be 0% accurate on the population of interest.
+To provide a measure of classiﬁcation model performance on imbalanced problems, we assess the accuracy
+of a model on the positive and negative classes separately. In our experiments, we report the class-based
+accuracy of each model using the true positive rate (TPR), which reﬂects the accuracy on the positive class,
+and the false positive rate (FPR), which reﬂects the error rate on negative class. For a given classiﬁcation
+model, we compute these quantities as
+1 [ˆyi = +1]
+1 [ˆyi = +1] ,
+where ˆyi denotes the predicted outcome for example i, N+ denotes the number of examples in the positive
+class I+ = {i : yi = +1}, and N−denotes the number of examples from the negative class I−= {i : yi =
+−1}. Ideally, a classiﬁcation model should have high TPR and low FPR (i.e., TPR close to 1 and FPR = 0).
+Most classiﬁcation methods can be adapted to yield a model that is more accurate on the positive class,
+but only if we are willing to sacriﬁce some accuracy on examples from the negative class, and vice-versa.
+To illustrate the trade-off of classiﬁcation accuracy between positive and negative classes, we plot all models
+produced by a given method as points on a receiver operating characteristic (ROC) curve, which plots the TPR
+on the vertical axis and the FPR on the horizontal axis. Having constructed an ROC curve, we then assess
+the overall performance of each method by calculating the area under the ROC curve (AUC).2 A detailed
+discussion of ROC analysis in recidivism prediction can be found in the work of Maloof .
+Fitting Models over the Full ROC Curve using a Cost-Sensitive Approach
+Different applications require predictive models at different points of the ROC curve. Models for sentencing,
+for example, need low FPR in order to avoid predicting that a low-risk individual will reoffend. Models
+for screening, however, need high TPR in order to capture as many high-risk individuals as possible. In
+our experiments, we use a cost-sensitive approach to produce classiﬁcation models at different points of the
+ROC curve . This approach involves controlling the accuracy on the positive and
+negative classes by tuning the misclassiﬁcation costs for examples in each class. In what follows, we denote
+the misclassiﬁcation cost on examples from the positive and negative classes as W + and W −, respectively.
+As we increase W +, the cost of making a mistake on a positive example increases, and we expect to obtain a
+model that classiﬁes the positive examples more accurately (i.e. with higher TPR). We choose W + and W −
+so that W + + W −= 2. Thus, when W + = 2, we obtain a trivial model that predicts ˆyi = +1 and attains
+TPR = 1. When W + = 0, we obtain a trivial model that predicts ˆyi = −1 that attains FPR = 0.
+Choice of Classiﬁcation Methods
+We compared SLIM scoring systems to models produced by eight popular classiﬁcation methods, including
+those previously used for recidivism prediction (see Section 1.2) or those that ranked among the “top 10
+algorithms in data mining” . In choosing these methods, we restricted our attention to
+methods that have publicly-available software packages, and allow users to specify misclassiﬁcation costs for
+positive and negative classes. Our ﬁnal choice of methods includes:
+• C5.0 Trees and C5.0 Rules: C5.0 is an updated version of the popular C4.5 algorithm that can create decision trees and rule sets.
+2We note that AUC is a summary statistic that is frequently misused in the context of classiﬁcation problems. It is true
+that a method that with AUC = 1 always produces models that are more accurate than a method with AUC = 0. Other
+than this simple case, however, it is not possible to state that a method with high AUC always produces models that are
+more accurate than a method with low AUC.
+Zeng, Ustun, and Rudin
+• Classiﬁcation and Regression Trees (CART): CART is a popular method to create decision trees
+through recursive partitioning of the input variables .
+• L1 and L2-Penalized Logistic Regression: Variants of logistic regression that penalize the coefﬁcients
+to prevent overﬁtting . L1-penalized methods are typically used to create linear
+models that are sparse . The L2 regularized methods are called
+“ridge” and are not generally sparse.
+• Random Forests: A popular black-box method that makes predictions using a large ensemble of weak
+classiﬁcation trees. The method was originally developed by Breiman but is widely used for
+recidivism prediction .
+• Support Vector Machines: A popular black-box method for non-parametric linear classiﬁcation. The
+Radial Basis Function (RBF) kernel lets the method to handle classiﬁcation problems where the decisionboundary may be non-linear .
+• Stochastic Gradient Boosting: A popular black-box method that create prediction models in the form
+of an ensemble of weaker prediction models .
+Details on Experimental Design, Parameter Tuning, and Computation
+We summarize the methods, software, and settings that we used in our experiments in Table 4.
+For each of the 6 recidivism prediction problems and each of the 9 methods, we constructed ROC curves by
+running the algorithm with 19 values of W +. The values of W + were chosen to produce models across the full
+ROC curves. By default, we chose values of W + ∈{0.1, 0.2, . . . , 1.9} and set W −= 2 −W +. These values
+of W + were inappropriate for problems with a signiﬁcant class imbalance as all methods produced trivial models. Thus, for signiﬁcantly imbalanced problems, such as domestic violence and sexual violence, we
+used values of W + ∈{1.815, 1.820, . . . , 1.995}. For fatal violence, which was extremely imbalanced,
+we used W + ∈{1.975, 1.976, . . . , 1.995}.
+This setup requires us to produce a total of 1,026 recidivism prediction models (6 recidivism problems × 9
+methods × 19 imbalance ratios). Each of the 1,026 models were built on a training set and their performance
+was assessed out-of-sample. In particular, 1/3 of the data was reserved as the test set. The remaining 2/3 of
+the data was the training set. During training, we used 5-fold nested cross-validation (5-CV) for parameter
+tuning. Explicitly, the training data were split into 5 folds, and one of those 5 was reserved as the validation
+fold. The validation fold was rotated in order to select free parameter values, and a ﬁnal model was trained on
+the full training set (2/3) with the selected parameter values and its performance was assessed on the test set
+(1/3). The folds were generated once to allow for comparisons across methods and prediction problems. The
+parameters were chosen during nested cross validation to minimize the mean weighted 5-CV validation error
+on the training set. Having obtained a set of 19 different models for each method and each problem, we then
+constructed an ROC curve for that method on that problem by plotting the test TPR and test FPR of the 19
+ﬁnal models.
+We trained all baseline methods using publicly available packages in R 3.2.2 without
+imposing any time constraints. In comparison, we trained SLIM by solving integer programming problems
+(IP) with the CPLEX 12.6 API in MATLAB 2013a. We solved each IP through the following procedure: (i)
+we trained the solver on the formulation in Section 3.3 for a total of 4 hours on a local computing cluster
+with 2.7GHz CPUs. Each time we solved a IP we kept 500 feasible solutions, and polished them using the
+formulation in Section 3.4. We then used the same nested cross-validation procedure as the other methods
+to tune the number of terms in the ﬁnal model. Polishing all 500 solutions took less than one minute of
+computing time. Thus, the total number of optimization problems we solved were 500 polishing IP’s × (5
+folds + 1 ﬁnal model) × 6 problems × 19 values of W + = 342,000 integer programming problems.
+Observations on Predictive Accuracy
+We show ROC curves for all methods and prediction problems in Figure 1 and summarize the test AUC of
+each method in Table 5. Tables with the training and 5-CV validation AUC’s for all methods are included in
+Appendix A.
+Interpretable Classiﬁcation Models for Recidivism Prediction
+Table 4. Methods, software and free parameters used to train models for all 6 recidivism prediction problems.
+We ran each method for 19 values of W + and all combinations of free parameters listed in the table. For each
+value of W +, we selected the model that minimized the mean weighted 5-CV validation error. The values of
+W + are problem-speciﬁc (see Section 4.1.4 for details)
+Free Parameters and Settings
+CART Decision Trees
+ 
+minSplit ∈(3, 5, 10, 15, 20) ×
+CP ∈(0.0001, 0.001, 0.01)
+C5.0 Decision Trees
+ 
+default settings
+C5.0 Decision Rules
+ 
+default settings
+Logistic Regression
+(L1-Penalty)
+ 
+100 values of L1-penalty chosen by glmnet
+Logistic Regression
+(L2-Penalty)
+ 
+100 values of L2-penalty chosen by glmnet
+Random Forests
+randomForest
+ 
+sampsize ∈(0.632N, 0.4N, 0.2N) ×
+nodesize ∈(1, 5, 10, 20)
+with unbounded tree depth
+Support Vector Machines
+(Radial Basis Kernel)
+ 
+C ∈(0.01, 0.1, 1, 10) ×
+Stochastic Gradient Boosting
+(Adaboost)
+ 
+shrinkage ∈(0.001, 0.01, 0.1) ×
+interaction.depth ∈(1, 2, 3, 4) ×
+ntrees ∈(100, 500, 1500, 3000)
+SLIM Scoring Systems
+CPLEX 12.6
+ 
+C0 and ϵ set to ﬁnd most accurate model with ≤8 coefﬁcients
+where λ0 ∈{−100, . . . , 100} and λj ∈{−10, . . . , 10}
+We make the following important observations, which we believe carry over to a large class of problems
+beyond recidivism prediction:
+• All methods did well on the general recidivism prediction problem arrest. In this case, we observe
+only small differences in predictive accuracy of different methods: all methods other than CART attain a test AUC above 0.72; the highest test AUC of 0.73 was achieved by SGB, Ridge, and RF. This
+multiplicity of good models reﬂects the Rashomon effect of Breiman .
+• Major differences between methods appeared in their performance on imbalanced prediction problems.
+We expected different methods to respond differently to changes in the misclassiﬁcation costs, and
+therefore trained each method over a large range of possible misclassiﬁcation costs. Even so, it was
+difﬁcult (if not impossible) to tune certain methods to produce models at certain points of the ROC
+curve (see e.g., problems with signiﬁcant imbalance, such as fatal violence).
+• SVM RBF, SGB, Lasso and Ridge were able to produce accurate models at different points on the ROC
+curve for most problems. SGB usually achieved the highest AUC on most problems (e.g., arrest,
+drug, general violence, domestic violence, fatal violence). Lasso, Ridge, and SVM RBF
+often produce comparable AUCs. We ﬁnd that these methods respond well to cost-sensitive tuning, but it
+is difﬁcult to tune the misclassiﬁcation costs for highly imbalanced problems, such as fatal violence,
+to get models at speciﬁc points on the ROC curve.
+• C5.0T, C5.0R and CART were unable to produce accurate models at different points on the ROC curve
+on any imbalanced problems. We found that these methods do not respond well to cost-sensitive tuning.
+The issue becomes markedly more severe as problems become more imbalanced.
+and general violence, for instance, these methods could not produce models with high TPR. For
+fatal violence, sexual violence, and domestic violence, these methods almost always produced trivial models that predict y = −1 (resulting in AUCs of 0.5). This result may be attributed to
+the greedy nature of the algorithms used to ﬁt the trees, as opposed to the use of tree models in general.
+The issue is unlikely to be software-related as it affects both C5.0 and CART, and has been observed by
+others . This problem might not occur if trees were better optimized.
+Zeng, Ustun, and Rudin
+• In general, SLIM produced models that are close to or on the efﬁcient frontier of the ROC curve, despite
+being restricted to a relatively small class of simple linear models (at most 8 non-zero coefﬁcients from -
+10 to 10). Even on highly imbalanced problems such as domestic violence and sexual violence,
+it responds well to changes in misclassiﬁcation costs (as expected, by nature of its formulation).
+In addition to predictive accuracy, we also examine the risk calibration of the models. Figure 2 show the
+risk calibration for arrest, constructed using the binning method from Zadrozny and Elkan . We
+include calibration plots for all other problems in Appendix B. We see that SLIM is well-calibrated, even
+though there is no reason it should be; it is a decision-making tool, not a risk assessment tool. For arrest,
+Lasso and Ridge are well-calibrated; however, they lose this quality once we consider only sparse models (see
+Appendix D). This property would also be lost if the Lasso and Ridge coefﬁcients were rounded.
+Table 5. Test AUC for all methods on all prediction problems. Each cell contains the test AUC.
+Prediction Problem
+general violence
+domestic violence
+sexual violence
+fatal violence
+Interpretable Classiﬁcation Models for Recidivism Prediction
+general violence
+domestic violence
+sexual violence
+fatal violence
+Fig. 1. ROC curves for general recidivism-related prediction problems with test data. We plot SLIM models
+using large blue dots. All models perform similarly except for C5.0R, C5.0T, and CART.
+Zeng, Ustun, and Rudin
+Mean Score
+Fraction of True Positives
+Fig. 2. Risk calibration plot for arrest based on test data. We compare 3 models chosen at a similar decision
+point, with test FPR≤50%. Although it is not a risk assessment tool, we see that SLIM is well calibrated.
+Interpretable Classiﬁcation Models for Recidivism Prediction
+Trade-offs Between Accuracy and Interpretability
+In Appendix C, we show that the baseline methods are unable to maintain the same level of accuracy as they
+have in Section 4.2 when their model size was constrained. For Lasso, Ridge and SLIM, model size is deﬁned
+as the number of features in the model. For CART and C5.0, model size is the number of leaves or rules. In
+fact, we ﬁnd the only methods that can consistently produce accurate models along the full ROC curve and
+also have the potential for interpretability are SLIM and (non-sparse) Lasso.
+Tree and rule-based methods such as CART, C5.0T and C5.0R were generally unable to produce models that attain high degrees of accuracy. Worse, even for balanced problems such as arrest, where these
+methods did produce accurate models, the models are complicated and use a very large number of rules or
+leaves . As we show in
+Appendix C, it was not reasonably possible to obtain a C5.0R/C5.0T/CART model with at most 8 rules or 8
+leaves for almost every prediction problem.
+On the Interpretability of Equally Accurate Transparent Models
+To assess the interpretability of different models, we provide a comparison of predictive models produced
+by SLIM, Lasso and CART for the arrest problem in Figures 3–5. This setup provides a nice basis for
+comparison as all three methods produce models at roughly the same decision point, and with the same degree
+of sparsity. For this comparison, we considered any transparent model with at most 8 coefﬁcients (Lasso), 8
+rules (C5.0R) or 8 leaves (C5.0T, CART) and had a test FPR of below 50%. We report the models with the
+minimum weighted test error. Here, neither C5.0R nor C5.0T could produce an acceptable model with at most
+8 rules or 8 leaves, so only models from SLIM, CART and Lasso could be displayed. As described before, it
+is rare for Lasso and CART to produce models with a similar degree of accuracy to SLIM when model size is
+constrained. We make the following observations:
+• All three models attain similar levels of predictive accuracy. Test TPR values ranged between 70-79%
+and test FPR values ranged between 43-48%. There may not exist a classiﬁcation model that can attain
+substantially higher accuracy.
+• The SLIM model uses 5 input variables and small integer coefﬁcients (see e.g., Figure 3). There is a natural
+rule-based interpretation. In this case, the model implies that if the prisoner is young (age at release of 18 to 24)
+or has a history of arrests (prior arrests≥5), he is highly likely to be rearrested. On the other hand, if he is
+relatively older (age at release≥40) or has no history of arrests (no prior arrests), he is unlikely to commit
+another crime.
+• The CART model also allows users to make predictions without a calculator. In comparison to the SLIM
+model, however, the hierarchical structure of the CART model makes it difﬁcult to gauge the relationship of
+each input variable on the predicted outcome. Consider, for instance, the relationship between age at release
+and the outcome. In this case, users are immediately aware that there is an effect, as the model branches
+on the variables age at release≥40 and age at release 18 to 24. However, the effect is difﬁcult to comprehend since it depends on prior arrests for misdemeanor: if prior arrests≥5 = 1 and age at release 18 to 24
+= 1 then the model predicts ˆy = +1; if prior arrests≥5 = 0 and age at release≥40 = 0 then ˆy = +1; however, if prior arrests≥5 = 0 and age at release≥40 = 1 then ˆy = +1 only if prior arrest for misdemeanor
+= 1. Such issues do not affect linear models such as SLIM and Lasso, where users can immediately gauge
+the direction and strength of the relationship between a input variable and the predicted outcome by the size
+and sign of a coefﬁcient. The literature on interpretability in machine learning indicates that interpretability
+is domain-speciﬁc; there are some domains where logical models are preferred over linear models, and vice
+versa .
+Zeng, Ustun, and Rudin
+PREDICT ARREST FOR ANY OFFENSE IF SCORE > 1
+age at release 18 to 24
+· · · · · ·
+prior arrests≥5
+· · · · · ·
+prior arrest for misdemeanor
+· · · · · ·
+no prior arrests
+· · · · · ·
+age at release≥40
+· · · · · ·
+ADD POINTS FROM ROWS 1–5
+· · · · · ·
+Fig. 3. SLIM scoring system for arrest. This model has a test TPR/FPR of 76.6%/44.5%, and a mean 5-CV
+validation TPR/FPR of 78.3%/46.5%.
+PREDICT ARREST FOR ANY OFFENSE IF SCORE > 0.31
+prior arrests≥5
+0.63 points
+· · · · · ·
+age 1st conﬁnement 18 to 24
+0.15 points
+· · · · · ·
+prior arrest for property
+0.09 points
+· · · · · ·
+prior arrest for misdemeanor
+0.05 points
+· · · · · ·
+age at release≥40
+-0.20 points
+· · · · · ·
+ADD POINTS FROM ROWS 1–5
+· · · · · ·
+Fig. 4. Lasso model for arrest, with coefﬁcients rounded to two signiﬁcant digits. This model has a test
+TPR/FPR of 70.9%/43.8%, and a mean 5-CV validation TPR/FPR of 72.2%/44.0%.
+prior arrests≥5
+age at release 18 to 24
+not rearrested
+rearrested
+age at release ≥40
+rearrested
+prior arrest for misdemeanor
+rearrested
+not rearrested
+Fig. 5. CART model for arrest. This model has a test TPR/FPR of 79.1%/47.9%, and a mean 5-CV validation
+TPR/FPR of 79.9%/48.5%.
+Interpretable Classiﬁcation Models for Recidivism Prediction
+Scoring Systems for Recidivism Prediction
+We show a SLIM scoring system for each of the prediction problems that we consider in Figures 6–10.
+The models are chosen at speciﬁc decision points, with the constraint that 5-CV FPR≤50% except for
+sexual violence, which is chosen at 5-CV FPR≤20%. The models presented here may be suitable for
+screening tasks. To obtain a model suitable for sentencing, a point on the ROC curve with a much higher TPR
+would be needed. We note that these models generalize well from the dataset, evident by the close match
+between test TPR/FPR (Table 5) and training TPR/FPR (Table 6).
+Many of these models exhibit the same “rule-like” tendencies discussed in Section 4.4. For example, the
+model for drug in Figure 6 predicts that a person will be arrested for a drug-related offense if he/she has
+ever had any prior drug offenses. Similarly, model for sexual violence in Figure 9 effectively states that
+a person will be rearrested for a sexual offense if and only if he/she has prior history of sexual crimes. For
+completeness, we include comparisons with other models in Appendix B. Additional risk calibration plots for
+models with constrained model size are included in Appendix D.
+PREDICT ARREST FOR DRUG OFFENSE IF SCORE > 7
+prior arrest for drugs
+· · · · · ·
+age at release 18 to 24
+· · · · · ·
+age at release 25 to 29
+· · · · · ·
+prior arrest for multiple types of crime
+· · · · · ·
+prior arrest for property
+· · · · · ·
+age at release 30 to 39
+· · · · · ·
+no prior arrests
+· · · · · ·
+ADD POINTS FROM ROWS 1-7
+· · · · · ·
+Fig. 6. SLIM scoring system for drug. This model has a test TPR/FPR of 85.7%/51.1%, and a mean 5-CV
+validation TPR/FPR of 82.3%/49.7%.
+PREDICT ARREST FOR GENERAL VIOLENCE OFFENSE IF SCORE > 7
+prior arrest for general violence
+· · · · · ·
+prior arrest for misdemeanor
+· · · · · ·
+infraction in prison
+· · · · · ·
+prior arrest for local ord
+· · · · · ·
+prior arrest for property
+· · · · · ·
+prior arrest for fatal violence
+· · · · · ·
+prior arrest with ﬁrearms involved
+· · · · · ·
+age at release≥40
+· · · · · ·
+ADD POINTS FROM ROWS 1-8
+· · · · · ·
+Fig. 7. SLIM scoring system for general violence. This model has a test TPR/FPR of 76.7%/45.4%, and
+a mean 5-CV validation TPR/FPR of 76.8%/47.6%.
+Zeng, Ustun, and Rudin
+PREDICT ARREST FOR DOMESTIC VIOLENCE OFFENSE IF SCORE > 3
+prior arrest for misdemeanor
+· · · · · ·
+prior arrest for felony
+· · · · · ·
+prior arrest for domestic violence
+· · · · · ·
+age 1st conﬁnement 18 to 24
+· · · · · ·
+infraction in prison
+· · · · · ·
+ADD POINTS FROM ROWS 1-5
+· · · · · ·
+Fig. 8. SLIM scoring system for domestic violence. This model has a test TPR/FPR of 85.5%/46.0%, and
+a mean 5-CV validation TPR/FPR of 81.4%/48.0%.
+PREDICT ARREST FOR SEXUAL VIOLENCE OFFENSE IF SCORE > 2
+prior arrest for sexual
+· · · · · ·
+prior arrests≥5
+· · · · · ·
+multiple prior jail time
+· · · · · ·
+prior arrest for multiple types of crime
+· · · · · ·
+no prior arrests
+· · · · · ·
+ADD POINTS FROM ROWS 1-5
+· · · · · ·
+Fig. 9. SLIM scoring system for sexual violence. This model has a test TPR/FPR of 44.3%/17.7%, and a
+mean 5-CV validation TPR/FPR of 43.7%/19.9%.
+PREDICT ARREST FOR FATAL VIOLENCE OFFENSE IF SCORE > 4
+age 1st conﬁnement≤17
+· · · · · ·
+prior arrest with ﬁrearms involved
+· · · · · ·
+age 1st conﬁnement 18 to 24
+· · · · · ·
+prior arrest for felony
+· · · · · ·
+age at release 18 to 24
+· · · · · ·
+prior arrest for drugs
+· · · · · ·
+ADD POINTS FROM ROWS 1-6
+· · · · · ·
+Fig. 10. SLIM scoring system for fatal violence. This model has a test TPR/FPR of 55.4%/35.5%, and a
+mean 5-CV validation TPR/FPR of 64.2%/42.4%.
+Interpretable Classiﬁcation Models for Recidivism Prediction
+Discussion
+Our paper merges two perspectives on recidivism modeling: the ﬁrst is to obtain accurate predictive models
+using the most powerful machine learning tools available, and the second is to create models that are easy to
+use and understand.
+We used a set of features that are commonly accessible to police ofﬁcers and judges, and compared the
+ability of different machine learning methods to produce models at different decision points across the ROC
+curve. Our results suggest that it is possible for traditional methods, such as Ridge Regression, to perform just
+as well as more modern methods, such as Stochastic Gradient Boosting – a ﬁnding that is in line with the work
+of Tollenaar and van der Heijden and Yang et al. . Further, we found that even simple models
+may perform surprisingly well, even when they are ﬁtting from a heavily constrained space – a ﬁnding that is
+in line with work on the surprising performance of simple models .
+Our study shows that there may be major advantages of using SLIM for recidivism prediction, as it can
+dependably produce a simple scoring system that is accurate and interpretable on any decision point along the
+ROC curve. Interpretability is crucial for many of the high-stakes applications where recidivism prediction
+models are being used. In such applications, it is not enough for the decision-maker to know what input
+variables are being used to train the model, or how individual input variables are related to the outcome;
+decision-makers should know how the model combines all the input variables to generate its predictions,
+and whether this mechanism aligns with their ethical values. SLIM not only shows this mechanism, but
+also accommodates constraints that are designed to align the prediction model with the ethical values of the
+decision-maker.
+In comparison to current machine learning methods, the main drawback of running SLIM is increased computation involved in solving an integer programming problem. To this end, we proposed two new techniques
+to reduce computation involved in training high quality SLIM scoring systems: (i) a polishing procedure that
+improves the quality of feasible solutions found by an IP solver; and (ii) an IP formulation that makes it easier
+for an IP solver to provide a certiﬁcate of optimality. In our experiments, the time required to train SLIM was
+ultimately comparable to the time required to train random forests or stochastic gradient boosting. However,
+it was still signiﬁcant compared to the time required for other methods such as CART, C5.0 and penalized
+logistic regression. In theory, the computation required to ﬁnd an optimal solution to the SLIM integer program is NP-hard, meaning that the runtime increases exponentially with the number of features. In practice,
+the runtime depends on several factors: such as the number of samples, the number of dimensions, the underlying ease of the classiﬁcation, and how the data are encoded. Since most criminological problems cannot
+by nature involve massive datasets (since each observation is a person), and since computer speed of solving
+MIPs is also increasing exponentially, it is possible that mathematical programming techniques like SLIM are
+well-suited for criminological problems that are substantially larger and more complex than the one discussed
+in this work.

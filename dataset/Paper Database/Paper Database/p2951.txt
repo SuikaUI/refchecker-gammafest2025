@@ -1,0 +1,557 @@
+A Logical Product Approach to Zonotope Intersection
+Khalil Ghorbal, Eric Goubault, and Sylvie Putot
+Laboratory for the Modelling and Analysis of Interacting Systems
+CEA, LIST, Boˆıte 94, Gif-sur-Yvette, F-91191 France
+ 
+Abstract. We deﬁne and study a new abstract domain which is a ﬁne-grained
+combination of zonotopes with (sub-)polyhedric domains such as the interval, octagon, linear template or polyhedron domains. While abstract transfer functions
+are still rather inexpensive and accurate even for interpreting non-linear computations, we are able to also interpret tests (i.e. intersections) efﬁciently. This ﬁxes
+a known drawback of zonotopic methods, as used for reachability analysis for
+hybrid systems as well as for invariant generation in abstract interpretation: intersection of zonotopes are not always zonotopes, and there is not even a best
+zonotopic over-approximation of the intersection. We describe some examples
+and an implementation of our method in the APRON library, and discuss some
+further interesting combinations of zonotopes with non-linear or non-convex domains such as quadratic templates and maxplus polyhedra.
+Introduction
+Zonotopic abstractions are known to give fast and accurate over-approximations in invariant synthesis for static analysis of programs, as introduced by the authors ,
+as well as in reachability analysis of hybrid systems . The main reason for this is that
+the interpretation of linear assignments is exact and done in linear time in terms of the
+“complexity” of the zonotopes, and non-linear expressions are dynamically linearized
+in a rather inexpensive way, unlike for most of other sub-polyhedric domains (zones
+ , linear templates , even polyhedra ). But unions, at the exception of recent
+work , and more particularly intersections are not canonical operations, and are
+generally computed using approximate and costly methods, contrarily to the other domains we mentioned. We present in this article a way to combine the best of the two
+worlds: by constructing a form of logical product of zonotopes with any of these
+sub-polyhedric domains, we still get accurate and inexpensive methods to deal with
+the interpretation of linear and non-linear assignments, while intersections in particular,
+come clean thanks to the sub-polyhedric component of the domain.
+Consider for instance the following program (loosely based on non-linear interpolation methods in e.g. embedded systems), which will be our running example:
+x = [ 0 , 1 0 ] ;
+y = x∗x −x ;
+( y >= 0) y = x / 1 0 ;
+( x=0 or x >= 1)
+y = x∗x +2;
+( x>0 and x<1) and y
+T. Touili, B. Cook, and P. Jackson (Eds.): CAV 2010, LNCS 6174, pp. 212–226, 2010.
+c⃝Springer-Verlag Berlin Heidelberg 2010
+A Logical Product Approach to Zonotope Intersection
+As indicated in the comments of the program, the if branch is taken when we have
+x = 0 or x ≥1, so that y at the end of the program, is always in . Although this
+program looks quite simple, it is difﬁcult to analyze, and the invariants found for y at the
+end of the program by classical domains1 are disappointing: intervals, octagons, polyhedra, or zonotopes without constraint all ﬁnd a range of values for y larger or equal than
+ : even those which interpret quite accurately non-linear operations are not able
+to derive a constraint on x from the constraint on y. Whereas by the method proposed
+here, a logical product of zonotopes with intervals, in its APRON implementation, we
+ﬁnd the much better range [0, 9.72] (comparable to the exact result ).
+Contents of the paper. We ﬁrst introduce in Section 2 afﬁne sets, a zonotopic abstract
+domain for abstract interpretation, that abstracts input/output relations in a program.
+We then introduce the problem of computing intersections in Section 3: starting with
+the running example, we deﬁne constrained afﬁne sets as the combination of zonotopes
+with polyhedric domains and show they are well suited for the interpretation of tests. We
+then generalize the order on afﬁne sets to constrained afﬁne sets and deﬁne monotonic
+abstract transfer functions for arithmetic operators, that over-approximate the concrete
+semantics. Section 4 completes the deﬁnition of this new abstract domain: starting with
+the easier “one-variable” problem, we then give an algorithm for computing a join operator. We demonstrate the interest of the domain by describing in Section 5 the results on
+some examples, based on an implementation of our method in the library APRON. We
+conclude by a discussion of future work, including some further interesting combinations of zonotopes with non-linear or non-convex domains such as quadratic templates
+and maxplus polyhedra.
+Related work. In , the authors propose an approach based on a reduced product ,
+to get more tractable and efﬁcient methods for deriving sub-polyhedric invariants. But,
+still, the reduction algorithm of is fairly expensive, and this domain also suffers
+from the drawbacks of polyhedra, in the sense that it is not well suited for efﬁciently
+and precisely deriving invariants for non-linear computations. Logical products in abstract interpretation are deﬁned in . The authors use the Nelson-Oppen combination
+method for logical theories, in the convex case, to get polynomial time abstractions on
+a much ﬁner (than classical reduced products) combination of two abstract domains. As
+explained in Section 3.2, this approach does not directly carry over our case, because the
+theories we want to combine do not satisfy all the hypotheses of . We thus choose
+in this paper a direct approach to the logical product of zonotopes with other classical
+abstract domains.
+Afﬁne Sets: Main Deﬁnitions and Properties
+Afﬁne Arithmetic and Zonotopes
+Afﬁne arithmetic is an extension of interval arithmetic on afﬁne forms, ﬁrst introduced
+in , that takes into account afﬁne correlations between variables. An afﬁne form is a
+1 The experiments were carried out using the domains interfaced within APRON .
+K. Ghorbal, E. Goubault, and S. Putot
+formal sum over a set of noise symbols εi
+i ∈R for all i. Each noise symbol εi stands for an independent component
+of the total uncertainty on the quantity ˆx, its value is unknown but bounded in [-1,1];
+the corresponding coefﬁcient αx
+i is a known real value, which gives the magnitude of
+that component. The same noise symbol can be shared by several quantities, indicating
+correlations among them. These noise symbols can not only model uncertainty in data
+or parameters, but also uncertainty coming from computation. The semantics of afﬁne
+operations is straightforward, non afﬁne operations are linearized and introduce a new
+noise symbol: we refer the reader to for more details.
+In what follows, we introduce matrix notations to handle tuples of afﬁne forms. We
+note M(n, p) the space of matrices with n lines and p columns of real coefﬁcients.
+A tuple of afﬁne forms expressing the set of values taken by p variables over n noise
+symbols εi, 1 ≤i ≤n, can be represented by a matrix A ∈M(n + 1, p). We formally
+deﬁne the zonotopic concretization of such tuples by :
+Deﬁnition 1. Let a tuple of afﬁne forms with p variables over n noise symbols, deﬁned
+by a matrix A ∈M(n + 1, p). Its concretization is the zonotope
+tAte | e ∈Rn+1, e0 = 1, ∥e∥∞= 1
+For example, for n = 4 and p = 2,
+the gray zonotope is the concretisation of the afﬁne set X = (ˆx, ˆy),
+with ˆx = 20 −4ε1 + 2ε3 + 3ε4,
+ˆy = 10 −2ε1 + ε2 −ε4, and
+20 −4 0 2 3
+10 −2 1 0 −1
+An Ordered Structure: Afﬁne Sets
+In order to construct an ordered structure preserving abstract input/output relations ,
+we now deﬁne afﬁne sets X as Minkowski sums of a central zonotope, γ(CX) and of
+a perturbation zonotope centered on 0, γ(P X). Central zonotopes depend on central
+noise symbols εi, whose interpretation is ﬁxed once and for all in the whole program:
+they represent the uncertainty on input values to the program, with which we want
+to keep as many relations as possible. Perturbation zonotopes depend on perturbation
+symbols ηj which are created along the interpretation of the program and represent the
+uncertainty of values due to the control-ﬂow abstraction, for instance while computing
+the join of two abstract values.
+Deﬁnition 2. We deﬁne an afﬁne set X by the pair of matrices
+(CX, P X) ∈M(n + 1, p) × M(m, p). The afﬁne form πk(X) = cX
+jkηj, where the εi are the central noise symbols and the ηj the perturbation or
+union noise symbols, describes the kth variable of X.
+A Logical Product Approach to Zonotope Intersection
+We deﬁne an order on afﬁne sets which is slightly more strict than concretization
+inclusion: it formalizes the fact that the central symbols have a speciﬁc interpretation as
+parametrizing the initial values of input arguments to the analyzed program:
+Deﬁnition 3. Let X = (CX, P X), Y = (CY , P Y ) be two afﬁne sets in M(n+1, p)×
+M(m, p). We say that X ≤Y iff
+∀u ∈Rp, ∥(CY −CX)u∥1 ≤∥P Y u∥1 −∥P Xu∥1 .
+It expresses that the norm of the difference (CY −CX)u for all u ∈Rp is less than
+what the perturbation terms P X and P Y allow, that is the difference of the norms of
+P Y u with P Xu.
+Classically, input/output functional abstractions are handled by adding slack variables corresponding to the initial values of the inputs. Here, we want relations between
+the variables of the program and the uncertain inputs, that is the inputs that create noise
+symbols. It can be proved that the relation of Deﬁnition 3 is equivalent to the geometric
+order on the larger zonotopes obtained by adding these slack variables to the zonotopes
+represented by our afﬁne sets.
+The binary relation ≤of Deﬁnition 3 is a preorder, that we identify in the sequel
+with the partial order, quotient of this preorder by the equivalence relation2 X ∼Y iff
+by deﬁnition X ≤Y and Y ≤X. Note also that this partial order is decidable, with a
+complexity bounded by a polynomial in p and an exponential in n + m. In practice, see
+ , we do not need to use this costly general decision procedure.
+Constrained Afﬁne Sets for Intersection
+We now introduce the logical product of the domain A1 of Section 2 with any lattice,
+(A2, ≤2, ∪2, ∩2), used to abstract the values of the noise symbols εi and ηj. Formally,
+supposing that we have n + 1 noise symbols εi and m noise symbols ηj as in Section
+2.2, we are given a concretization function: γ2 : A2 →P({1}×Rn×Rm) and pseudoinverse α2. We now deﬁne constrained afﬁne sets:
+Deﬁnition 4. A constrained afﬁne set U is a pair U = (X, ΦX) where X = (CX, P X)
+is an afﬁne set, and ΦX is an element of A2. Equivalently, we write U = (CX, P X, ΦX).
+Classical abstractions of “constraints” on the εi we will be using throughout this text
+are A consisting of products of 1 + n + m intervals (with the ﬁrst one always being
+equal to 1), zones, octagons, and polyhedra (in the hyperplane ε0 = 1).
+Interpretation of Tests
+Equality tests on variables. We ﬁrst consider the case of the interpretation of equality
+test of two variables within an abstract state. Let us begin by a motivating example,
+which will make clear what the general interpretation of Deﬁnition 5 should be.
+2 It can be characterized by CX = CY and same concretizations for P X and P Y .
+K. Ghorbal, E. Goubault, and S. Putot
+Example 1. Consider, with an interval domain for the noise symbols, Z = [[x1 ==
+x2]]X where
+ΦX = 1 × [−1, 1] × [−1, 1] × [−1, 1]
+1 = 4 + ε1 + ε2 + η1,
+γ(ˆx1) = 
+2 = −ε1 + 3ε2,
+γ(ˆx2) = [−4, 4]
+We look for ˆz = ˆx1 = ˆx2, with ˆz = z0 + z1ε1 + z2ε2 + z3η1. Using ˆx1 −ˆx2 = 0, i.e.
+4 + 2ε1 −2ε2 + η1 = 0,
+and substituting η1 in ˆz −ˆx1 = 0, we deduce z0 = 4z3, z1 = 2z3 −1, z2 = −2z3 + 3.
+The abstraction in intervals of constraint (1) yields tighter bounds on the noise symbols:
+ΦZ = 1 × [−1, −0.5] × [0.5, 1] × [−1, 0]. We now look for z3 that minimizes the width
+of the concretization of z, that is 0.5|2z3 −1| + 0.5|3 −2z3| + |z3|. A straightforward
+O((m+n)2) method to solve the problem evaluates this expression for z3 successively
+equal to 0, 0.5 and 1.5: the minimum is reached for z3 = 0.5. We then have
+ΦZ = 1 × [−1, −0.5] × [0.5, 1] × [−1, 0]
+2 (= ˆz) = 2 + 2ε2 + 0.5η1,
+1 ) = γ(ˆxZ
+2 ) = [2.5, 4]
+Note that the concretization γ(ˆxZ
+1 ) = γ(ˆxZ
+2 ) is not only better than the intersection of
+the concretizations γ(ˆxX
+1 ) and γ(ˆxX
+2 ) which is , but also better than the intersection
+of the concretization of afﬁne forms (ˆxX
+1 ) and (ˆxX
+2 ) for noise symbols in ΦZ. Note that
+there is not always a unique solution minimizing the width of the concretization.
+In the following, we use bold letters to denote intervals, and for an interval u = [u, u],
+we note dev(u) = u −u.
+Deﬁnition 5. Let X = (CX, P X, ΦX) a constrained afﬁne set with (CX, P X) ∈
+M(n + 1, p) × M(m, p). We deﬁne Z = [[xj == xi]]X by:
+(ε1, . . . , εn, η1, . . . , ηm) | (cX
+rl, ∀r ∈{0, . . . , n}, and ∀l ∈{1, . . . , p}, l ̸= i, j,
+rl, ∀r ∈{1, . . . , m} and ∀l ∈{1, . . . , p}, l ̸= i, j.
+Let k such that cX
+ki ̸= 0, we deﬁne
+kj) ∀l ∈{0, . . . , n}, l ̸= k,
+kj) ∀l ∈{1, . . . , m},
+ki that minimizes n
+li| dev(εZ
+li| dev(ηZ
+If for all k, cX
+ki, then we look for r such that pX
+ri ̸= 0; if for all r, pX
+then xi = xj and Z = X.
+This expresses that the abstraction of the constraint on the noise symbols induced by
+the test is added to the domain of constraints, and the exact constraint is used to deﬁne
+A Logical Product Approach to Zonotope Intersection
+an afﬁne form z satisfying z = xZ
+i , and such that γ(z) is minimal. Indeed, let k
+such that cX
+ki ̸= 0, then xj == xi allows to express εk as
+1≤l≤n,l̸=k
+We now look for πi(Z) = πj(Z) equal to πi(X) and πj(X) under condition (4) on the
+noise symbols (where πk(X) describes the kth variable of X, as introduced in Deﬁnition
+2). Substituting εk in for example πi(Z) = πi(X), we can express, for all l, cZ
+as functions of cZ
+ki and get possibly an inﬁnite number of solutions deﬁned by (2) and (3)
+that are all equivalent when (4) holds. When condition (4) will be abstracted in a noise
+symbols abstract domain such as intervals, these abstract solutions will no longer be
+equivalent, we choose the one that minimizes the width of γ(πi(Z)) which is given by
+li| dev(εZ
+li| dev(ηZ
+l ). This sum is of the form m+n
+l=1 |al +blcZ
+with known constants al and bl. The minimization problem can be efﬁciently solved in
+O((m + n)log(m + n)) time, m + n being the number of noise symbols appearing in
+the expressions of xi and xj, by noting that the minimum is reached for cZ
+for a l0 ∈{1, . . . , m + n}. When it is reached for two indexes lp and lq, it is reached
+for all cZ
+, but we choose one of the bounds of this intervals because it
+corresponds to the substitution in xZ
+i of one of the noise symbols, and is in the interest
+for the interpretation of tests on expressions.
+Equality tests on expressions. Now, in the case of an equality test between arithmetic
+expressions, new constraints on the noise symbols can be added, corresponding to the
+equality of the two expressions interpreted as afﬁne forms. We also choose new afﬁne
+forms for variables appearing in the equality test: let X = (CX, P X, ΦX) a constrained
+afﬁne set with (CX, P X) ∈M(n + 1, p) × M(m, p). We deﬁne Z = [[exp1 ==
+exp2]]X by: Y1 = [[xp+1 = exp1]][[xp+2 = exp2]]X using the semantics for arithmetic
+operations, as deﬁned in section 3.3, then Y2 = [[xp+1 == xp+2]]Y1. Noting that one of
+the noise symbols appearing in the constraint introduced by the equality test, does not
+appear in xY2
+p+2 as computed by Deﬁnition 5, using this constraint we substitute
+this noise symbol in the other variables in Y2. We then eliminate the added variables
+xp+1 and xp+2 to obtain Z, in which exp1 == exp2 is thus algebraically satisﬁed.
+Example 2. Consider Z = [[x1 + x2 == x3]]X where
+ΦX = 1 × [−1, 1] × [−1, 1] × [−1, 1]
+1 = 2 + ε1,
+γ(ˆx1) = 
+2 = 2 + ε2 + η1,
+γ(ˆx2) = 
+3 = −ε1 + 3ε2,
+γ(ˆx3) = [−4, 4]
+We ﬁrst compute x4 := x1 + x2 in afﬁne arithmetic: here, problem x4 == x3 is then
+the test we solved in example 1. The abstraction in intervals of constraint (1) yields
+ΦZ = 1 × [−1, −0.5] × [0.5, 1] × [−1, 0], and an afﬁne form xZ
+3 optimal in the sense of
+the width of its concretization, xZ
+3 = 2 + 2ε2 + 0.5η1. Now, ˆxX
+3 is satisﬁed
+when constraint (1) holds exactly, but not in its interval abstraction ΦZ. But substituting
+K. Ghorbal, E. Goubault, and S. Putot
+ε1 which does not appear in xZ
+3 by −2 + ε2 −0.5η1 in ˆxX
+2 , we obtain forms
+2 that satisfy x1 + x2 == x3 in the abstract domain:
+ΦZ = 1 × [−1, −0.5] × [0.5, 1] × [−1, 0]
+1 = ε2 −0.5η1,
+γ(ˆx1) = [0.5, 1.5]
+2 = 2 + ε2 + η1,
+γ(ˆx2) = [1.5, 3]
+3 = 2 + 2ε2 + 0.5η1,
+1 ) = γ(ˆxZ
+2 ) = [2.5, 4]
+Inequality tests. In the case of inequality tests, we only add constraints on noise symbols, for example for strict inequality:
+Deﬁnition 6. Let X = (CX, P X, ΦX) a constrained afﬁne set with (CX, P X) ∈
+M(n + 1, p) × M(m, p). We deﬁne Z = [[exp1 < exp2]]X by Z = (CX, P X, ΦZ):
+(ε1, . . . , εn, η1, . . . , ηm) | (cY
+kp+1)εk + m
+kp+1)ηk < 0
+where Y = [[xp+1 = exp1]][[xp+2 = exp2]]X.
+Order Relation
+In a standard reduced product of A1 with A2, the order relation would naturally
+be based on the component-wise ordering. But in such products, we cannot possibly
+reduce the abstract values so that to gain as much collaboration as needed between A1
+and A2 for giving formal grounds to the reasoning of Example 1 for instance. What
+we really need is to combine the logical theories of afﬁne sets, T h(A1)3 with the one
+of quantiﬁer-free linear arithmetic over the reals, , T h(A2)4, including all the domains we have in mind in this paper (intervals, zones, octagons, linear and non-linear
+templates, polyhedra). Look back at Example 1: we found a solution to the constraint
+x1 == x2 via a ﬁne-grained interaction between the two theories T h(A1) and T h(A2).
+Unfortunately, the methods of are not directly applicable; in particular A1 is not
+naturally expressible as a logical lattice - it is not even a lattice in general. Also, the
+signatures ΣA1 and ΣA2 share common symbols, which is not allowed in the approach
+In order to compute the abstract transfer functions in the logical product T h(A1) ∪
+T h(A2), we ﬁrst deﬁne an order relation on the product domain A1 × A2, that allows a ﬁne interaction between the two domains. First, X = (CX, P X, ΦX) ≤Y =
+(CY , P Y , ΦY ) should imply that ΦX ≤2 ΦY , i.e. the range of values that noise symbols can take in form X is smaller than for Y . Then, we mean to adapt Deﬁnition 3 for
+noise symbols no longer deﬁned in [−1, 1] as in the unconstrained case, but in the range
+of values ΦX common to X and Y . Noting that:
+|⟨ϵ, CXu⟩|,
+where ⟨., .⟩is the standard scalar product of vectors in Rn+1, we set:
+3 Signature ΣA1 comprises equality, addition, multiplication by real numbers and real numbers.
+4 Signature ΣA2 comprises ΣA1 plus inequality and negation.
+A Logical Product Approach to Zonotope Intersection
+Deﬁnition 7. Let X and Y be two constrained afﬁne sets. We say that X ≤Y iff
+ΦX ≤2 ΦY and, for all t ∈Rp,
+(ϵ,−)∈γ2(ΦX)
+|⟨(CY −CX)t, ϵ⟩| ≤
+(−,η)∈γ2(ΦY )
+|⟨P Y t, η⟩| −
+(−,η)∈γ2(ΦX)
+|⟨P Xt, η⟩| .
+The binary relation deﬁned in Deﬁnition 7 is a preorder on constrained afﬁne sets which
+coincides with Deﬁnition 3 in the “unconstrained” case when ΦX = ΦY = {1} ×
+[−1, 1]n+m. We use in the sequel its quotient by its equivalence relation, i.e. the partial
+order generated by it.
+Deﬁnition 8. Let X be a constrained afﬁne set. Its concretization in P(Rp) is
+tCXϵ + tP Xη | ϵ, η ∈γ2(ΦX)
+For ΦX such that γ2(ΦX) = {1} × [−1, 1]n+m, this is equivalent to the concretization
+of the afﬁne set (CX, P X) as deﬁned in Section 2.2. As for afﬁne sets , the order
+relation of Deﬁnition 7 is stronger than the geometric order: if X ≤Y then γ(X) ⊆
+γ(Y ). This allows for expressing functional dependencies between the input and current
+values of each variables as discussed in .
+Note that γ is in general computable when A is a subpolyhedric domain (intervals,
+zones, octagons, linear templates and general polyhedra), as a linear transformation
+applied to a polyhedron. In the same case, the interval concretisation of X can be computed using any (guaranteed) solver for linear programs such as LURUPA , since it
+involves 2p (for p variables) linear programs:
+tCXϵ + tP Xη, and
+tCXϵ + tP Xη .
+Of course, when A is the domain of intervals, this is done by a direct and easy calculation.
+Semantics of Arithmetic Operations
+Operations are not different than the ones generally deﬁned on zonotopes, or on afﬁne
+forms, see , the only difference is in the multiplication where we use the constraints on εi and ηj to derive bounds for the non-linear part.
+We note [[new εn+1]]A2ΦX the creation of a new noise symbol εn+1 with (concrete)
+values in [−1, 1]. We ﬁrst deﬁne the assignment of a new variable xp+1 with a range of
+value [a, b]:
+Deﬁnition 9. Let X = (CX, P X, ΦX) be a constrained afﬁne set with (CX, P X) ∈
+M(n + 1, p) × M(m, p) and a, b ∈R. We deﬁne Z = [[xp+1 = [a, b]]]X where
+(CZ, P Z) ∈M(n + 2, p + 1) × M(m, p + 1) with : ΦZ = [[new εn+1]]A2ΦX, CZ =
+K. Ghorbal, E. Goubault, and S. Putot
+We carry on by addition, or more precisely, the operation interpreting the assignment
+xp+1 := xi + xj and adding new variable xp+1 to the afﬁne set:
+Deﬁnition 10. Let X = (CX, P X, ΦX) be a constrained afﬁne set where (CX, P X)
+is in M(n + 1, p) × M(m, p). We deﬁne Z = [[xp+1 = xi + xj]]X = (CZ, P Z, ΦZ)
+where (CZ, P Z) ∈M(n + 1, p + 1) × M(m, p + 1) by ΦZ = ΦX and
+⎠and P Z =
+The following operation deﬁnes the multiplication of variables xi and xj, appending
+the result to the constrained afﬁne set X. All polynomial assignments can be deﬁned
+using this and the previous operations.
+Deﬁnition 11. Let X = (CX, P X, ΦX) be a constrained afﬁne set where (CX, P X)
+is in M(n + 1, p) × M(m, p). We deﬁne Z = (CZ, P Z, ΦZ) = [[xp+1 = xi × xj]]X
+where (CZ, P Z) ∈M(n + 2, p + 1) × M(m + 1, p + 1) by :
+– ΦZ = [[new εn+1]]A2 ◦[[new ηm+1]]A2ΦX
+l,k and cz
+n+1,k = 0 for all l = 0, . . . , n and k = 1, . . . , p
+– Let mr (resp. μr) be the (r + 1)th coordinate (i.e. corresponding to εr) of
+mid(γ(ΦX)) (resp. of dev(γ(ΦX))), where mid (resp. dev ) denotes the middle (resp. the radius) of an interval, ql (resp. χl) be the (l + n + 1)th coordinate (i.e. corresponding to ηl) of mid(γ(ΦX)) (resp. of dev(γ(ΦX))). Write
+0,p+1 = dx
+l,p+1 = dx
+j for all l = 1, . . . , n
+n+1,p+1 = 
+1≤r̸=l≤n |cx
+m+1,k = 0 and pz
+l,p+1 = 0, for all l = 1, . . . , m and k = 1, . . . , p
+m+1,p+1 = 
+1≤r̸=l≤m |px
+l,j|χrχl +1≤l≤m
+r,j|)μrχl.
+The correctness of this abstract semantics stems from the fact that these operations are
+increasing functions over the set of constrained afﬁne sets. For sub-polyhedric domains
+A2, mr, ql, μr and χl are easily computable, solving with a guaranteed linear solver
+the four linear programming problems supϵ,η∈γ(ΦX) εr (resp. inf) and supϵ,η∈γ(ΦX) ηl
+(resp. inf) - for an interval domain for A2, no such computation is needed of course.
+Getting back to the running example of Section 1, in the false branch of the
+if (y>=0) test, we have to compute y = x ∗x + 2 with x = 5 + 5ε1 and
+ε1 ∈[−1, −0.444]. Using Deﬁnition 11 which takes advantage of the bounds on ε1
+to get a better bound on the non-linear part (typically not possible if we had constructed
+a reduced product), we get y = 14.93 + 13.9ε1 + 0.96ε3 with ε3 ∈[−1, 1]. This gives
+γ(y) = [0.07, 9.72], which is very precise since γ(x) = [0, 2.77], hence we should
+ideally ﬁnd γ(y) in γ(x)∗γ(x)+2 = [2, 9.72]. Note that the multiplication given in Definition 11 and used here, is not the direct adaptation of the multiplication in the unconstrained case, that would give the much less accurate form y = 41.97+50ε1+10.03ε3:
+A Logical Product Approach to Zonotope Intersection
+the better formulation is obtained by choosing an afﬁne form that is a linearization of
+xi × xj no longer at 0, but at the center of the range of the constrained noise symbols.
+Join Operator on Constrained Afﬁne Sets
+We ﬁrst examine the easier case of ﬁnding a join operator for afﬁne sets with just one
+variable, and A2 being the lattice of intervals. We then use the characterisations we
+ﬁnd in this case to give efﬁcient formulas for a precise (although over-approximated)
+join operator in the general case. We do not study here maximal lower bounds of afﬁne
+sets, although they are naturally linked to the interpretation of tests, Section 3.1, this is
+outside the scope of this paper.
+The One-Dimensional Case
+In dimension one, constrained afﬁne sets are simply constrained afﬁne forms:
+ˆa(ϵ) = αa
+i εi, βa, Φa
+where ϵ = (ε1, . . . , εn)t belongs to Φa, and βa is non negative. We use the bold face
+notation, εa
+i , to denote the interval concretization of εi. Let ˆa and ˆb be two constrained
+afﬁne forms. Then ˆa ≤ˆb in the sense of Deﬁnition 7 if and only if
+supϵ∈Φa |ˆa(ϵ) −ˆb(ϵ)| ≤βb −βa
+In general, there is no least upper bound for two constrained afﬁne forms, but rather, as
+already noted in the unconstrained case , minimal upper bounds. A sufﬁcient
+condition for ˆc to be a minimal upper bound is to enforce a minimal concretization,
+that is, γ(ˆc) = γ(ˆa) ∪γ(ˆb), and then minimize βc among upper bounds with this
+concretization.
+Algorithm 1 computes this particular mub in some cases (when the ﬁrst return
+branch is taken), and else an upper bound with minimal interval concretisation. Let us
+introduce the following notion used in the algorithm: let i and j be two intervals; i and
+j are said to be in generic position if (i ⊆j or j ⊆i) imply (sup(i) = sup(j) or
+inf(i) = inf(j)). We say by extension that two afﬁne forms are in generic position if
+their interval concretizations are in generic position. The join algorithm is similar to the
+formula in the unconstrained case described in except we have to be cautious about
+the relative position of the ranges of noise symbols.
+Example 3. To complete the analysis of the running example of Section 1, the join of
+the abstract values for y on the two branches must be computed:
+Φa = 1 × [−1, 1] × [−1, 1] × [−1, 1]
+ˆa = 0.5 + 0.5ε1
+γ(ˆa) = 
+Φb = 1 × [−1, −0.444] × [−1, 1] × [−1, 1]
+ˆb = 14.93395 + 13.9ε1 + 0.96605ε3
+γ(ˆb) = [0.0679, 9.7284]
+K. Ghorbal, E. Goubault, and S. Putot
+Algorithm 1. Join of two constrained afﬁne forms
+if ˆa and ˆb are in generic position then
+if mid(γ(ˆb)) ≤mid(γ(ˆa)) then swap ˆa and ˆb.
+for i ≥1 do
+i are in generic position then
+i ≥0 and αb
+i ) ≤mid(εa
+i ) and mid(εb
+i ) ≥mid(εa
+i ←−min(αa
+i ≤0 and αb
+i ) ≥mid(εa
+i ) and mid(εb
+i ) ≤mid(εa
+i ←−max(αa
+i ) −mid(εa
+i )) ≤mid(γ(ˆa) ∪γ(ˆb)) −mid(γ(ˆa)) and
+mid(γ(ˆa) ∪γ(ˆb)) −mid(γ(ˆb)) ≤n
+i ) −mid(εb
+i )) ≤0 then
+βc ←−dev(γ(ˆa) ∪γ(ˆb)) −n
+0 ←−mid(γ(ˆa) ∪γ(ˆb)) −n
+return (αc
+1, . . . , αc
+βc ←−dev(γ(ˆa) ∪γ(ˆb)), αc
+0 ←−mid(γ(ˆa) ∪γ(ˆb)), return (αc
+ˆa and ˆb are in generic positions, and so are εa
+1, but condition mid(εb
+1) is not satisﬁed, so that the join gives the following minimal upper bound:
+Φc = 1 × [−1, 1] × [−1, 1] × [−1, 1] × [−1, 1]
+ˆc = 4.8642 + 4.8642η1, γ(ˆc) = [0, 9.7284]
+Example 4. Let us now consider a second example:
+Φa = 1 × [−1, 0] × [−1, 1]
+ˆa = 1 + 2ε1 −ε2, γ(ˆa) = [−2, 2]
+Φb = 1 × [−1, 1] × [0, 0.5]
+ˆb = 4 + 3ε1 −ε2, γ(ˆb) = [−2, 7]
+ˆa and ˆb are in generic positions, as well as εa
+1, while εa
+2 are not; the join
+gives the following minimal upper bound:
+Φc = 1 × [−1, 1] × [−1, 1] × [−1, 1]
+2 + 2ε1 + 5
+2η1, γ(ˆc) = [−2, 7]
+Join Operator in the General Case
+As in the unconstrained case , mubs for the global order on constrained afﬁne sets
+are difﬁcult to characterize. Instead of doing so, we choose in this paper to describe a
+simple yet efﬁcient way of computing a good over-approximation of such mubs, relying
+on Algorithm 1 for mubs with minimal concretisation for constrained afﬁne forms.
+A Logical Product Approach to Zonotope Intersection
+We ﬁrst project the constrained afﬁne forms deﬁning each variable of the environment (the πk(X), for all k) by considering all noise symbols as if they were central
+noise symbols. We then use Algorithm 1 to independently compute a minimal upper
+bound for the constrained afﬁne form deﬁning each variable of the environment (on
+πk(X), for all k), and introduce a new noise symbol for each variable to handle the
+perturbation term computed in this Algorithm. We thus obtain an upper bound of the
+constrained afﬁne set.
+Example 5. Consider, for all noise symbols in [−1, 1], constrained afﬁne sets X and Y
+deﬁned by x1 = 1 + ε1, x2 = 1 + ε2, and y1 = 1 + η1, y2 = 1 + η1. Considering
+ﬁrst the 1D cases, we have x1 ≤y1 and x2 ≤y2. However we do not have X ≤Y for
+the global order of Deﬁnition 7. Applying the join operator deﬁned here on X and Y ,
+we construct Z, deﬁned by z1 = 1 + η2 and z2 = 1 + η3. We now have X ≤Z and
+Experiments
+In this section, we compare results5 we obtain with our new domain, called constrained
+T1+, in its APRON implementation, with the octagon and polyhedron APRON domains
+and the unconstrained T1+ . Our constrained T1+ implementation allows to choose
+as a parameter of the analysis, the APRON domain we want to use to abstract the constraints on noise symbols. However, at this stage, conditionals are interpreted only for
+the interval domain, we thus present results for this domain only.
+Table 1 shows the numerical range of a variable of interest of each test case and for
+each domain, after giving the exact range we would hope to ﬁnd. It can be noted that
+on these examples, constrained T1+ is always more accurate than octagons, and is also
+more accurate than polyhedra on non afﬁne problems.
+Table 1. Comparison of Constrained T1+ with APRON’s abstract domains
+InterQ1 [−3750, 6093] [−2578, 4687]
+[−1.50, 1.0]
+[−1.50, 1.0]
+[−1.073, 1]
+[0.84, 1.15]
+[0.91, 1.07]
+[0.86, 1.15] [0.99, 1.00]
+[0.1, 0.4]
+InterQ2 {0.36}
+In Table 1, InterQ1 combines linear tests with quadratic expressions, only constrained T1+ ﬁnds the right upper bound of the invariant. Cosine is a piecewise 3rd
+order polynomial interpolation of the cosine function: once again, only constrained T1+
+ﬁnds the exact invariant. The program SinCos computes the sum of the squares of the
+sine and cosine functions (real result is 1). InterL2 (resp. InterQ2) computes a
+piecewise afﬁne (resp. quadratic) function of the input, then focuses on the inverse image of 1 by this function.
+5 Sources of the examples are available online
+ 
+K. Ghorbal, E. Goubault, and S. Putot
+g ( x ) = s q r t ( x∗x−x + 0 . 5 ) / s q r t ( x∗x + 0 . 5 ) ;
+x = [ −2 ,2];
+s u b d i v i s i o n s
+h = 4/ n ;
+i f (−x<=h−2)
+y = g ( x ) ;
+z = g ( y ) ;
+i f (−x<=i ∗h−2) /∗i
+{ 2 , . . . , n−1}∗/
+y = g ( x ) ;
+z = g ( y ) ;
+y = g ( x ) ;
+z = g ( y ) ;
+Fig. 1. Implementation of g(g(x)) for x in [-2,2] (left) and plot of g(g(x)) (right)
+# subdivisions (constraints)
+CPU time (s)
+• [Cons.T1+]
+∗[Octagons]
+◦[Polyhedra]
+# subdivisions (constraints)
+width of g(g(x))
+• [Cons.T1+]
+∗[Octagons]
+◦[Polyhedra]
+Fig. 2. Comparing analysis time and results of the different APRON domains
+We now consider the computation of g(g(x)) on the range x = [−2, 2], where
+x2 −x + 0.5
+We parametrize the program that computes g(g(x)) by a number of tests that subdivide
+the domain of the input variable (see Figure 1 left for a parametrization by n subdivisions), in order to compare the relative costs and precisions of the different domains
+when the size of the program grows.
+It can be noted (Figure 2 left) that our domain scales up well while giving here more
+accurate results (Figure 2 right) than the other domains. As a matter of fact, with an
+interval domain for the noise symbols, all abstract transfer functions are linear or at
+worst quadratic in the number of noise symbols appearing in the afﬁne forms. Notice
+A Logical Product Approach to Zonotope Intersection
+also that our implementations detects the squares of variables, which allows constrained
+T1+ to give [0, 4.72] without subdivisions while all other domains end with [−∞, +∞]
+(noted by the dotted lines on Figure 2 right). The fact that the results observed for 3 and
+5 subdivisions (Figure 2 right) are less accurate respectively than those observed for 2
+and 4 subdivisions, is related to the behaviour of g(g(x)) on [−2, 2] (see Figure 1 right):
+for example when a change of monotony appears near the center of a subdivision, the
+approximations will be less accurate than when it appears at the border.
+Conclusion, and Future Work
+In this paper, we studied the logical product of the domain of afﬁne sets with subpolyhedric domains on noise symbols, although the framework as described here is
+much more general. We concentrated on such abstract domains for A for practical reasons, in order to have actual algorithms to compute the abstract transfer functions.
+However, in some embedded control systems, quadratic constraints appear already
+on the set of initial values to be treated by the control program, or as a necessary condition for behaving well, numerically speaking. For example in , as in a large class
+of navigation systems, the control program manipulates normalized quaternions, that
+describe the current position in 3D, of an aircraft, missile, rocket etc. We think that a
+combination of zonotopes with quadratic templates in the lines of this article would
+be of interest to analyze these programs.
+Also, as noticed in , maxplus polyhedra encompass a large subclass of disjunctions of zones; hence, by combining it with afﬁne sets, we get another rather inexpensive
+way to derive a partially disjunctive analysis from afﬁne forms (another with respect to
+the ideas presented in ).
+Another future line of work is to combine the ideas of this paper with the ones of
+ to get better under-approximation methods in static analysis.
+Acknowledgments. This work was partially funded by the French national research
+agency (ANR) projects ASOPT (Analyse Statique et OPTimisation) and Eva-Flo (Evaluation et Validation Automatique pour le Calcul Flottant) as well as by DIGITEO
+project PASO.

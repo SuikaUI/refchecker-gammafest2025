@@ -1,0 +1,818 @@
+Fast Matrix Factorization for Online Recommendation
+with Implicit Feedback∗
+Xiangnan He
+Hanwang Zhang
+Min-Yen Kan
+Tat-Seng Chua
+School of Computing, National University of Singapore
+{xiangnan, hanwang, kanmy, chuats}@comp.nus.edu.sg
+This paper contributes improvements on both the eﬀectiveness and eﬃciency of Matrix Factorization (MF) methods
+for implicit feedback. We highlight two critical issues of existing works.
+First, due to the large space of unobserved
+feedback, most existing works resort to assign a uniform
+weight to the missing data to reduce computational complexity. However, such a uniform assumption is invalid in
+real-world settings. Second, most methods are also designed
+in an oﬄine setting and fail to keep up with the dynamic
+nature of online data.
+We address the above two issues in learning MF models
+from implicit feedback. We ﬁrst propose to weight the missing data based on item popularity, which is more eﬀective
+and ﬂexible than the uniform-weight assumption. However,
+such a non-uniform weighting poses eﬃciency challenge in
+learning the model.
+To address this, we speciﬁcally design a new learning algorithm based on the element-wise
+Alternating Least Squares (eALS) technique, for eﬃciently
+optimizing a MF model with variably-weighted missing data.
+We exploit this eﬃciency to then seamlessly devise an incremental update strategy that instantly refreshes a MF model
+given new feedback.
+Through comprehensive experiments
+on two public datasets in both oﬄine and online protocols,
+we show that our eALS method consistently outperforms
+state-of-the-art implicit MF methods. Our implementation
+is available at 
+Matrix Factorization, Implicit Feedback, Item Recommendation, Online Learning, ALS, Coordinate Descent
+INTRODUCTION
+User personalization has become prevalent in modern recommender system. It helps to capture users’ individualized
+∗NExT research is supported by the National Research
+Foundation, Prime Minister’s Oﬃce, Singapore under its
+IRC@SG Funding Initiative.
+Permission to make digital or hard copies of all or part of this work for personal or
+classroom use is granted without fee provided that copies are not made or distributed
+for proﬁt or commercial advantage and that copies bear this notice and the full citation on the ﬁrst page. Copyrights for components of this work owned by others than
+ACM must be honored. Abstracting with credit is permitted. To copy otherwise, or republish, to post on servers or to redistribute to lists, requires prior speciﬁc permission
+and/or a fee. Request permissions from .
+SIGIR ’16, July 17-21, 2016, Pisa, Italy
+c⃝2016 ACM. ISBN 978-1-4503-4069-4/16/07...$15.00
+DOI: 
+preferences and has been shown to increase both satisfaction for users and revenue for content providers.
+its various methods, matrix factorization (MF) is the most
+popular and eﬀective technique that characterizes users and
+items by vectors of latent factors . Early work on
+MF algorithms for recommendation have largely focused on explicit feedback, where users’ ratings that directly
+reﬂect their preference on items are provided. These works
+formulated recommendation as a rating prediction problem
+for which the large volume of unobserved ratings (i.e., missing data) are assumed to be extraneous for modeling user
+preference . This greatly reduces the modeling workload,
+and many sophisticated methods have been devised, such as
+SVD++ and timeSVD .
+However, explicit ratings are not always available in many
+applications; more often, users interact with items through
+implicit feedback, e.g., users’ video viewing and product purchase history. Compared to explicit ratings, implicit
+feedback is easier to collect for content providers, but more
+challenging to utilize due to the natural scarcity of negative
+It has been shown that modeling only the observed, positive feedback results in biased representations in
+user proﬁles ; e.g., Marlin et al. ﬁnds that users
+listen to music they expect to like and avoid the genres they
+dislike, leading to a severe bias in the observed data.
+To solve the problem of lacking negative feedback (also
+known as the one-class problem ), a popular solution
+is to model all the missing data as negative feedback .
+However, this adversely degrades the learning eﬃciency due
+to the full consideration of both observed and missing data.
+More importantly, the low eﬃciency makes it even more dif-
+ﬁcult to deploy implicit MF method online . In practical
+recommender systems where new users, items and interactions are continuously streaming in, it is crucial to refresh
+the underlying model in real-time to best serve users. In this
+work, we concern the above two challenging problems of the
+MF method — implicit feedback and online learning. We
+note that we are not the ﬁrst to consider both aspects for
+MF, as a recent work by Devooght et al. has proposed an
+eﬃcient implicit MF method for learning with dynamic data.
+However, we argue that Devooght’s method models missing data in an unrealistic, suboptimal way. Speciﬁcally, it
+assigns a uniform weight to the missing data, assuming that
+the missing entries are equally likely to be negative feedback.
+However, such an assumption limits model’s ﬁdelity and ﬂexibility for real applications. For example, content providers
+usually know which items have been frequently featured to
+users but seldom clicked; such items are more likely to be
+ 
+true negative assessments and should be weighted higher
+than others. In addition, Devooght’s method learns parameters through gradient descent, requiring an expensive line
+search to determine the best learning rate at each step.
+We propose a new MF method aimed at learning from implicit feedback eﬀectively while satisfying the requirement of
+online learning. We develop a new learning algorithm that
+eﬃciently optimizes the implicit MF model without imposing a uniform-weight restriction on missing data.
+In particular, we assign the weight of missing data based on the
+popularity of items, which is arguably more eﬀective than
+the previous methods that are limited by
+the uniformity assumption. Our eALS algorithm is fast in
+accounting for missing data — analytically K times faster
+than ALS where K denotes number of latent factors
+— the same time complexity with the recent dynamic MF
+solution .
+This level of eﬃciency makes eALS suitable
+for learning online, for which we develop an incremental
+update strategy that instantly refreshes model parameters
+given new incoming data. Another key advantage of eALS
+is that it works without learning rate, bypassing the wellknown diﬃculty for tuning gradient descent methods such
+as and Stochastic Gradient Descent (SGD) .
+We summarize our key contributions as follows.
+1. We propose an item popularity-aware weighting scheme
+on the full missing data that eﬀectively tailors the MF
+model for learning from implicit feedback.
+2. We develop a new algorithm for learning model parameters eﬃciently and devise an incremental update
+strategy to support real-time online learning.
+3. We conduct extensive experiments with both oﬄine
+and online protocols on two real-world datasets, showing that our method consistently outperforms state-ofthe-art implicit MF methods.
+RELATED WORK
+Handling missing data is obligatory for learning from implicit data due to the lack of negative feedback. To this end,
+two strategies have been proposed — sample based learning that samples negative instances from missing
+data, or whole-data based learning that treats
+all missing data as negative. Both methods have pros and
+cons: sample-based methods are more eﬃcient by reducing negative examples in training, but risk decreasing the
+model’s predictiveness; whole-based methods model the full
+data with a potentially higher coverage, but ineﬃciency can
+be an issue.
+To retain model’s ﬁdelity, we persist in the
+whole-data based learning, developing a fast ALS-based algorithm to resolve the ineﬃciency issue.
+For existing whole-data based methods ,
+one major limitation is in the uniform weighting on missing
+entries, which favors algorithm’s eﬃciency but limits model’s
+ﬂexibility and extensibility. The only works that have considered non-uniform weighting are from Pan et al. ;
+however their cubic time complexity w.r.t. K makes it unsuitable to run on large-scale data , where a large number
+of factors needs to be considered to gain improved performance .
+To optimize MF, various learners have been investigated,
+including SGD , Coordinate Descent (CD) ,
+and Markov Chain Monto Carlo (MCMC) . SGD is the
+most popular one owing to the ease of derivation, however,
+it is unsuitable for whole-data based MF due to the
+large amount of training instances (the full user–item interaction matrix is considered).
+ALS can be seen as an instantiation of CD and has been widely used to solve the
+whole-based MF ; however, its ineﬃciency is
+the main obstacle for practical use . To resolve this,
+ describes an approximate solution to ALS. Recently, 
+employs the Randomized block Coordinate Descent (RCD)
+learner , reducing the complexity and applying it to a dynamic scenario. Similarly, enriches the implicit feedback
+matrix with neighbor-based similarly, followed by applying
+unweighted SVD. Distinct from previous works, we propose
+an eﬃcient element-wise ALS solution for the whole-data
+based MF with non-uniform missing data, which has never
+been studied before.
+Another important aspect for practical recommender system lies in handling the dynamic nature of incoming data,
+for which timeliness is a key consideration.
+As it is prohibitive to retrain the full model online, various works have
+developed incremental learning strategies for neighbor-based
+ , graph-based , probabilistic and MF 
+methods. For MF, diﬀerent learners have been studied for
+online updating, including SGD , RCD and dualaveraging . To our knowledge, this work is the ﬁrst attempt to exploit the ALS technique for online learning.
+PRELIMINARIES
+We ﬁrst introduce the whole-data based MF method for
+learning from implicit data, highlighting the ineﬃciency issue of the conventional ALS solution .
+describe eALS, an element-wise ALS learner that can
+reduce the time complexity to linearity w.r.t.
+factors. Although the learner is generic in optimizing MF
+with all kinds of weighting strategies, the form introduced
+is costly in accounting for all missing data and is thus unrealistic for practical use. This defect motivates us to further
+develop eALS to make it suitable for learning from implicit
+feedback (details in Section 4.2).
+MF Method for Implicit Feedback
+We start by introducing some basic notation. For a user–
+item interaction matrix R ∈RM×N, M and N denote the
+number of users and items, respectively; R denotes the set
+of user–item pairs whose values are non-zero. We reserve the
+index u to denote a user and i to denote an item. Vector pu
+denotes the latent feature vector for u, and set Ru denotes
+the set of items that are interacted by u; similar notations
+for qi and Ri. Matrices P ∈RM×K and Q ∈RN×K denote
+the latent factor matrix for users and items.
+Matrix factorization maps both users and items into a
+joint latent feature space of K dimension such that interactions are modeled as inner products in that space. Mathematically, each entry rui of R is estimated as:
+ˆrui =< pu, qi >= pT
+The item recommendation problem is formulated as estimating the scoring function ˆrui, which is used to rank items.
+Note that this basic model subsumes the biased MF ,
+commonly used in modeling explicit ratings:
+ˆrui = bu + bi+ < pB
+where bu (bi) captures the bias of user u (item i) in giving
+(receiving) ratings. To recover it, set pu ←[pB
+u , bu, 1] and
+i , 1, bi].
+As such, we adopt the basic MF model
+to make notations simple and also to enable a fair comparison with baselines that also complied with the basic
+To learn model parameters, Hu et al. introduced a
+weighted regression function, which associates a conﬁdence
+to each prediction in the implicit feedback matrix R:
+wui(rui −ˆrui)2 +λ(
+||qi||2), (2)
+where wui denotes the weight of entry rui and we use W =
+[wui]M×N to represent the weight matrix.
+λ controls the
+strength of regularization, which is usually an L2 norm to
+prevent overﬁtting. Note that in implicit feedback learning,
+missing entries are usually assigned to a zero rui value but
+non-zero wui weight, both crucial to performance.
+Optimization by ALS
+Alternating Least Square (ALS) is a popular approach
+to optimize regression models such as MF and graph regularization . It works by iteratively optimizing one parameter, while leaving the others ﬁxed. The prerequisite of
+ALS is that the optimization sub-problem can be analytically solved. Here, we describe how Hu’s work solves
+this problem.
+First, minimizing J with respect to user latent vector pu
+is equivalent to minimizing:
+Ju = ||Wu(ru −Qpu)||2 + λ||pu||2,
+where Wu is a N ×N diagonal matrix with W u
+ii = wui. The
+minimum is where the ﬁrst-order derivative is 0:
+= 2QT WuQpu −2QT Wuru + 2λpu = 0
+pu = (QT WuQ + λI)−1QT Wuru,
+where I denotes the identity matrix. This analytical solution
+is also known as the ridge regression . Following the same
+process, we can get the solution for qi.
+Efﬁciency Issue with ALS
+As we can see, in order to update a latent vector, inverting a K × K matrix is inevitable.
+Matrix inversion
+is an expensive operation, usually assumed O(K3) in time
+complexity . As such, updating one user latent vector
+takes time O(K3 + NK2). Thus, the overall time complexity of one iteration that updates all model parameters once
+is O((M + N)K3 + MNK2). Clearly, this high complexity
+makes the algorithm impractical to run on large-scale data,
+where there can be millions of users and items and billions
+of interactions.
+Speed-up with Uniform Weighting. To reduce the
+high time complexity, Hu et al. applied a uniform weight
+to missing entries; i.e., assuming that all zero entries in R
+have a same weight w0. Through this simpliﬁcation, they
+can speed up the computation with memoization:
+QT WuQ = w0QT Q + QT (Wu −W0)Q,
+where W0 is a diagonal matrix that each diagonal element is
+w0. As QT Q is independent of u, it can be pre-computed for
+updating all user latent vectors. Considering the fact that
+Wu −W0 only has |Ru| non-zero entries, we can compute
+Eq. (4) in O(|Ru|K2) time. Thus, the time complexity of
+ALS is reduced to O((M + N)K3 + |R|K2).
+Even so, we argue that the O((M + N)K3) term can be
+a major cost when (M + N)K ≥|R|.
+In addition, the
+O(|R|K2) part is still much higher than in SGD , which
+only requires O(|R|K) time. As a result, even with the acceleration, ALS is still prohibitive for running on large data,
+where large K is crucial as it can lead to better generalizability and thus better prediction performance. Moreover,
+the uniform weighting assumption is usually invalid in real
+applications and adversely degrades model’s predictiveness.
+This thus motivates us to design an eﬃcient implicit MF
+method not subject to uniform-weights.
+Generic Element-wise ALS Learner
+The bottleneck of the previous ALS solution lies in the matrix inversion operation, which is due to the design that updates the latent vector for a user (item) as a whole. As such,
+it is natural to optimize parameters at the element level —
+optimizing each coordinate of the latent vector, while leaving the others ﬁxed . To achieve this, we ﬁrst get the
+derivative of objective function Eq. (2) with respect to puf:
+ui)wuiqif + 2puf
+if + 2λpuf,
+ui = ˆrui −pufqif, i.e., the prediction without the
+component of latent factor f. By setting this derivative to
+0, we obtain the solution of puf:
+i=1(rui −ˆrf
+Similarly, we can get the solver for an item latent factor:
+u=1(rui −ˆrf
+Given the closed-form solution that optimizes one parameter with other ﬁxed, the algorithm iteratively executes it
+for all model parameters until a joint optimum is reached.
+Due to the non-convexity of the objective function, critical
+points where gradients vanish can be local minima.
+Time Complexity. As can be seen, by performing optimization at the element level, the expensive matrix inversion
+can be avoided.
+A raw implementation takes O(MNK2)
+time for one iteration, directly speeding up ALS by eliminating the O(K3) term. Moreover, by pre-computing ˆrui ,
+we can calculate ˆrf
+ui in O(1) time rather than O(K).
+such, the complexity can be further reduced to O(MNK),
+which is the same magnitude with evaluating all the user–
+item predictions.
+OUR IMPLICIT MF METHOD
+We ﬁrst propose an item-oriented weighting scheme on
+the missing data, and follow with a popularity-aware weighting strategy, which is arguably more eﬀective than the uniform weighting for the recommendation task. Then, we develop a fast eALS algorithm to optimize the objective function that signiﬁcantly reduces learning complexity comparing with the conventional ALS and generic element-wise
+ALS learner . Lastly, we discuss how to adjust the learning algorithm for real-time online learning.
+Item-Oriented Weighting on Missing Data
+Due to the large space of items, the missing entries for a
+user are a mixture of negative and unknown feedback. In
+specifying the weight wui of missing entries, it is desired to
+assign a higher weight to the negative feedback. However, it
+is a well-known diﬃculty to diﬀerentiate the two cases. In
+addition, as the interaction matrix R is usually large and
+sparse, it will be too consuming to store each zero entry an
+individualized weight.
+To this end, existing works have applied a simple uniform weight on missing
+entries, which are, however, suboptimal and non-extendable
+for real applications.
+Considering the ease of content providers in accessing negative information of the item side (e.g., which items have
+been promoted to users but receive little interaction), we
+believe it is more realistic to weight missing data based on
+some item property. To capture this, we devise a more ﬁnegrained objective function as follows:
+wui(rui −ˆrui)2 +
+where ci denotes the conﬁdence that item i missed by users
+is a true negative assessment, which can serve as a means to
+encode domain knowledge from practitioners. It is clear that
+the ﬁrst term denotes the prediction error of the observed
+entries, which has been widely adopted in modeling explicit
+ratings .
+The second term accounts for the missing data, which acts as the role of negative instances and is
+crucial for recommendation from implicit feedback .
+Next, we present a domain-independent strategy to determine ci by leveraging a ubiquitous feature of modern Web
+2.0 systems.
+Popularity-aware Weighting Strategy
+Existing visual interfaces of many Web 2.0 systems showcase popular items in their recommendations. All other factors being equal, popular items are more likely to be known
+by users in general , and thus it is reasonable to think
+that a miss on a popular item is more probable to be truly
+irrelevant (as opposed to unknown) to the user. To account
+for this eﬀect, we parametrize ci based on item’s popularity:
+where fi denotes the popularity of item i, given by its frequency in the implicit feedback data: |Ri|/ PN
+j=1 |Rj|, and
+c0 determines the overall weight of missing data. Exponent
+α controls the signiﬁcance level of popular items over unpopular ones — when α > 1 the weights of popular items
+are promoted to strengthen the diﬀerence against unpopular ones; while setting α within the lower range of (0, 1)
+suppresses the weight of popular items and has a smoothing
+eﬀect. We empirically ﬁnd α = 0.5 usually leads to good
+results. Note that the uniform weighting is a special case by
+setting α to 0 with w0 = c0/N.
+Relationship to Negative Sampling. Our proposed
+popularity-aware weighting strategy has the same intuition
+with Rendle’s popularity-based oversampling for learning BPR, which basically samples popular items as negative feedback with a higher probability. However, empirically shows the oversampling method underperforms the
+basic uniform sampler. We suspect the reason comes from
+the SGD learner, which will result in more gradient steps
+on popular items, due to oversampling. As a result, popular
+items may be over-trained locally at the expense of less popular items which would then be under-trained. To resolve
+this, tricks like subsampling frequent items and adaptive
+learning rates like Adagrad have been adopted in other
+domains. As the focus of this paper is on whole-data based
+implicit MF, we do not further explore the details of SGD. It
+is worth pointing out that our proposed eALS learner avoids
+these learning issues by an exact optimization on each model
+parameter.
+Fast eALS Learning Algorithm
+We can speed up learning by avoiding the massive repeated computations introduced by the weighted missing
+data. We detail the derivation process for puf; where the
+counterpart for qif is achieved likewise.
+First, we rewrite the puf update rule Eq. (5) by separating
+the observed data part:
+i∈Ru(rui −ˆrf
+ui)wuiqif −P
+i∈Ru wuiq2
+i/∈Ru ciq2
+Clearly, the computational bottleneck lies in the summation over missing data portion, which requires a traversal of
+the whole negative space. We ﬁrst focus on the numerator:
+ciqifqik −
+By this reformulation, we can see that the major computation — the PN
+i=1 ciqifqik term that iterates over all items
+— is independent of u. However, a na¨ıve implementation
+repeatedly computes it unnecessarily, when updating the latent factors for diﬀerent users.
+Clearly, we can achieve a
+signiﬁcant speed-up by memoizing it.
+We deﬁne the Sq cache as Sq = PN
+i=1 ciqiqT
+i , which can
+be pre-computed and used in updating the latent factors for
+all users. Then, Eq. (9) can be evaluated as:
+which can be done in O(K + |Ru|) time.
+Similarly, we can apply the cache to speed up the calculation of denominator:
+To summarize the above memoization strategy, we give
+the update rule for puf with the use of Sq cache:
+i∈Ru[wuirui −(wui −ci)ˆrf
+k̸=f puksq
+i∈Ru(wui −ci)q2
+Algorithm 1: Fast eALS Learning algorithm.
+Input: R, K, λ, W and item conﬁdence vector c;
+Output: Latent feature matrix P and Q;
+1 Randomly initialize P and Q ;
+2 for (u, i)∈R do
+ˆrui ←Eq. (1) ;
+3 while Stopping criteria is not met do
+// Update user factors
+i=1 ciqiqT
+for u ←1 to M do
+▷O(MK2 + |R|K)
+for f ←1 to K do
+for i ∈Ru do ˆrf
+ui ←ˆrui −pufqif;
+puf ←Eq. (12) ;
+▷O(K + |Ru|)
+for i ∈Ru do ˆrui ←ˆrf
+ui + pufqif;
+// Update item factors
+Sp ←PT P ;
+for i ←1 to N do
+▷O(NK2 + |R|K)
+for f ←1 to K do
+for u ∈Ri do ˆrf
+ui ←ˆrui −pufqif;
+qif ←Eq. (13) ;
+▷O(K + |Ri|)
+for u ∈Ri do ˆrui ←ˆrf
+ui + pufqif;
+21 return P and Q
+Table 1: Time complexity of implicit MF methods.
+Time Complexity
+ALS (Hu et al. )
+O((M + N)K3 + |R|K2)
+BPR (Rendle et al. )
+IALS1 (Pil´aszy et al. )
+O(K3 + (M + N)K2 + |R|K)
+ii-SVD (Volkovs et al. )
+O((M + N)K2 + MN log K)
+RCD (Devooght et al. )
+O((M + N)K2 + |R|K)
+eALS (Algorithm 1)
+O((M + N)K2 + |R|K)
+|R| denotes the number of non-zeros in user–item matrix R.
+Similarly, we can derive the update rule for qif:
+u∈Ri[wuirui −(wui −ci)ˆrf
+ui]puf −ci
+k̸=f qiksp
+u∈Ri(wui −ci)p2
+kf denotes the (k, f)th element of the Sp cache, de-
+ﬁned as Sp = PT P.
+Algorithm 1 summarizes the accelerated algorithm for our
+element-wise ALS learner, or eALS. For convergence, one
+can either monitor the value of objective function on training set or check the prediction performance on a hold-out
+validation data.
+Discussion
+Time Complexity.
+In Algorithm 1, updating a user
+latent factor takes O(K + |Ru|) time. Thus, one eALS iteration takes O((M +N)K2+|R|K) time. Table 1 summarizes
+the time complexity (of one iteration or epoch) of other MF
+algorithms that are designed for implicit feedback.
+Comparing with the vector-wise ALS , our elementwise ALS learner is K times faster. In addition, our proposed eALS has the same time complexity with RCD ,
+being faster than ii-SVD , another recent solution. RCD
+is a state-of-the-art learner for whole-data based MF, which
+performs a gradient descent step on a randomly chosen latent vector. Since it requires a good learning rate, the work
+ adaptively determines it by a line search in each gradient
+step, which essentially chooses the learning rate that leads to
+the steepest descent among pre-deﬁned candidates. A major
+advantage of eALS has over RCD is that it avoids the need
+for a learning rate by an exact optimization in each parameter update, arguably more eﬀective and easier to use than
+RCD. The most eﬃcient algorithm is BPR, which applies
+the SGD learner on sampled, partial missing data only.
+Computing the Objective Function. Evaluating the
+objective function is important to check the convergence of
+iterations and also to verify the correctness of implementation. A direct calculation takes O(MNK) time, requiring a
+full estimation on the R matrix. Fortunately, with the itemoriented weighting, we can similarly exploit the sparseness
+of R for acceleration. To achieve this, we reformulate the
+loss of the missing data part that causes the major cost:
+By reusing Sq and the prediction cache ˆrui, we can calculate
+the objective function in O(|R| + MK2) time, much faster
+than with direct calculation.
+Parallel Learning. The iterations of eALS can be easily
+parallelized. First, computing the S caches (line 4 and 12)
+is the standard matrix multiplication operation, for which
+modern matrix toolkits provide very eﬃcient and parallelized
+implementation. Second, in updating the latent vectors for
+diﬀerent users (line 5-11), the shared parameters are either
+independent with each other (i.e., ˆrui) or remaining unchanged (i.e., Sq). This nice property means that an exact
+parallel solution can be obtained by separating the updates
+by users; that is, letting diﬀerent workers update the model
+parameters for disjoint sets of users. The same parallelism
+can also be achieved in updating item latent vectors.
+This is an advantage over the commonly-used SGD learner,
+which is a stochastic method that updates model parameters given a training instance. In SGD, diﬀerent gradient
+steps can inﬂuence with each other and there is no exact
+way to separate the updates for workers.
+Thus, sophisticated strategies are required to control the possible losses
+introduced by parallelization . Our proposed eALS solution optimizes by coordinate descent where in each step a
+dedicated parameter is updated, making the algorithm embarrassingly parallel without any approximate loss.
+Online Update
+In practice, after a recommender model is trained oﬄine
+on historical data, it will be used online and will need to
+adapt to best serve users.
+Here, we consider the online
+learning scenario that refreshes model parameters given a
+new user–item interaction.
+Incremental Updating. Let ˆP and ˆQ denote the model
+parameters learnt from oﬄine training, and (u, i) denotes
+the new interaction streamed in. To approximate the model
+parameters in accounting for the new interaction, we perform optimization steps for pu and qi only. The underlying
+assumption is that the new interaction should not change ˆP
+and ˆQ too much from a global perspective, while it should
+Algorithm 2: Online Incremental Updates for eALS.
+Input: ˆP, ˆQ, new interaction (u, i) and its weight wnew
+Output: Refreshed parameters P and Q;
+2 If u is a new user do
+Randomly initialize pu ;
+3 If i is a new item do
+Randomly initialize qi ;
+ˆrui ←Eq. (1);
+wui ←wnew;
+5 while Stopping criteria is not met do
+// Line 6-10 of Algorithm 1
+update user(u); ;
+▷O(K2 + |Ru|K)
+update cache(u, Sp); ;
+// Line 14-18 of Algorithm 1
+update item(i); ;
+▷O(K2 + |Ri|K)
+update cache(i, Sq); ;
+11 return P and Q
+change the local features for u and i signiﬁcantly. Particularly, when u is a new user, executing the local updates will
+force pu close to qi, which meets the expectation of latent
+factor model. The new item case is similar.
+Algorithm 2 summarizes the incremental learning strategy for eALS. For the stopping criteria, our empirical study
+shows that one iteration is usually suﬃcient to get good results. Moreover, it is important to note that after updating
+a latent vector, we need to update the S cache accordingly.
+Weight of New Interactions. In an online system, new
+interactions are more reﬂective of a user’s short-term interest. Comparing to the historical interactions used in oﬄine
+training, fresh data should be assigned a higher weight for
+predicting user’s future action. We assign a weight wnew to
+each new interaction (line 4 of Algorithm 2) as a tunable parameter. Later in Section 5.3, we investigate how the setting
+of this parameter impacts online learning performance.
+Time Complexity. The incremental update for a new
+interaction (u, i) can be done in O(K2+(|Ru|+|Ri|)K) time.
+It is worth noting that the cost depends on the number of
+observed interactions for u and i, while being independent
+with number of total interactions, users and items. This localized complexity make the online learning algorithm suitable to deployment in industrial use, as the complex software
+stack that deals with data dependencies can be avoided.
+EXPERIMENTS
+We begin by introducing the experimental settings. Then
+we perform an empirical study with the traditional oﬄine
+protocol, followed by a more realistic online protocol.
+Experimental Settings
+Datasets. We evaluate on two publicly accessible datasets:
+Yelp1 and Amazon Movies2. We transform the review dataset
+into implicit data, where each entry is marked as 0/1 indicating whether the user reviewed the item. Since the high
+sparsity of the original datasets makes it diﬃcult to evaluate
+recommendation algorithms (e.g., over half users have only
+one review), we follow the common practice to ﬁlter out
+1We used the Yelp Challenge dataset downloaded on October 2015 that contained 1.6 million reviews: 
+com/dataset challenge
+2 
+Table 2: Statistics of the evaluation datasets.
+users and items with less than 10 interactions. Table 2 summarizes the statistics of the ﬁltered datasets.
+Methodology. We evaluate using two protocols:
+- Oﬄine Protocol. We adopt the leave-one-out evaluation, where the latest interaction of each user is held out
+for prediction and the models are trained on the remaining data. Although it is a widely used evaluation protocol
+in the literature , we point out that it is an artiﬁcial split that does not correspond to the real recommendation scenario. In addition, the new users problem is averted
+in this evaluation, as each test user has a training history.
+Thus this protocol only evaluates an algorithm’s capability
+in providing one-shot recommendation for existing users by
+leveraging the static history data.
+- Online Protocol.
+To create a more realistic recommendation scenario, we simulate the dynamic data stream.
+We ﬁrst sort all interactions in chronological order, training
+models on the ﬁrst 90% of the interactions and holding out
+the last 10% for testing. In the testing phase, given a test interaction (i.e., a user–item pair) from the hold-out data, the
+model ﬁrst recommends a ranked list of items to the user;
+the performance is judged based on the ranked list. Then
+the test interaction is fed into the model for an incremental
+update. Note that with the global split by time, 14% and
+57% test interactions are from new users for the Yelp and
+Amazon dataset, respectively. Overall this protocol evaluates an online learning algorithm’s eﬀectiveness in digesting
+the dynamic new data.
+To assess the ranked list with the ground-truth (GT) item
+that user actually consumed, we adopt Hit Ratio (HR) and
+Normalized Discounted Cumulative Gain (NDCG). We truncate the ranked list at 100 for both metrics. HR measures
+whether the ground truth item is present on the ranked list,
+while NDCG accounts for the position of hit . We report
+the score averaged by all test interactions.
+Baselines. We compare with the following methods:
+- ALS . This is the conventional ALS method that
+optimizes the whole-data based MF. Due to the high time
+complexity, this method is infeasible in a real-time dynamic
+updating scenario, so we only evaluate it with the oﬄine
+- RCD . This is the state-of-the-art implicit MF method
+that has the same time complexity with eALS and is suitable for online learning. For the line search parameters, we
+use the suggested values in the authors’ implementation3.
+- BPR . This is a sample-based method that optimizes the pair-wise ranking between the positive and negative samples. It learns by SGD, which can be adjusted to
+online incremental learning by . We use a ﬁxed learning
+rate, varying it and reporting the best performance.
+Parameter Settings.
+For the weight of observed interactions, we set it uniformly as 1, a default setting by
+previous works . For regularization, we set λ as 0.01
+for all methods for a fair comparison. All methods are implemented in Java and running on the same machine (Intel
+3 
+(a) eALS vs. c0 (α = 0)
+(b) eALS vs. α (c0 = 512)
+(c) eALS vs. c0 (α = 0)
+(d) eALS vs. α (c0 = 64)
+Figure 1: Impact of weighting parameters c0 and α on eALS’s performance evaluated by oﬄine protocol.
+(a) Iterations vs. HR
+(b) Iterations vs. NDCG
+(c) Iterations vs. HR
+(d) Iterations vs. NDCG
+Figure 2: Prediction accuracy of three whole-data based MF methods in each iteration (K = 128).
+Xeon 2.67GHz CPU and 24GB RAM) in a single-thread for
+a fair comparison on eﬃciency. As the ﬁndings are consistent across the number of factors K, without any particular
+outlier, we only show the results of K = 128, a relatively
+large number that maintains good accuracy.
+Ofﬂine Protocol
+We ﬁrst study how does the weighting scheme on missing
+data impact eALS’s performance. Then we compare with
+the whole-data based implicit MF methods ALS and RCD,
+as well as the sample-based ranking method BPR.
+Weight of Missing Data
+In Section 4.1, we propose an item popularity-aware weighting strategy, which has two parameters: c0 determines the
+overall weight of missing data and α controls the weight distribution. First, we set a uniform weight distribution (i.e.,
+α = 0), varying c0 to study how does the weight of missing data impact the performance.
+For Yelp (Figure 1a),
+the peak performance is achieved when c0 is around 512,
+corresponding to that the weight of each zero entry is 0.02
+(w0 = c0/N); similarly for Amazon (Figure 1c), the optimal
+c0 is around 64, corresponding to w0 = 0.0001. When c0
+becomes smaller (where w0 is close to 0), the performance
+degrades signiﬁcantly. This highlights the necessity of accounting for the missing data when modeling implicit feedback for item recommendation.
+Moreover, when c0 is set
+too large, the performance also suﬀers. Based on this observation, we believe the traditional SVD technique that
+treats all entries equally weighted will be suboptimal here.
+Then, we set c0 to the best value (in the case of α =
+0), varying α to check the performance change. As can be
+seen from Figure 1b and 1d, the performance of eALS is
+gradually improved with the increase of α, and the best
+result is reached around 0.4. We further conducted the onesample paired t-test, verifying that the improvements are
+statistically signiﬁcant (p-value < 0.01) for both metrics on
+the two datasets.
+This indicates the eﬀectiveness of our
+popularity-biased weighting strategy. Moreover, when α is
+Figure 3: NDCG of whole-data based MF across K.
+larger than 0.5, the performance starts to drop signiﬁcantly.
+This reveals the drawback of over-weighting popular items
+as negative instances, thus the importance of accounting for
+less popular items with a proper weight.
+In the following experiments, we ﬁx c0 and α according to
+the best performance evaluated by HR, i.e., c0 = 512, α =
+0.4 for Yelp and c0 = 64, α = 0.5 for Amazon.
+Compare Whole-data based MF Methods
+We performed the same grid search of w0 for RCD and
+ALS and reported the best performance.
+Convergence. Figure 2 shows the prediction accuracy
+with respect to number of iterations.
+First, we see that
+eALS achieves the best performance after converge.
+improvements are statistically signiﬁcant evidenced by the
+one-sample paired t-test (p < 0.01). We believe the beneﬁts
+mainly come from the popularity-aware objective function,
+as both ALS and RCD apply a uniform weighting on the unknowns. Second, eALS and ALS converge faster than RCD.
+We think the reason is that (e)ALS updates a parameter to
+minimize the objective function of the current status, while
+RCD updates towards the direction of the negative gradient,
+which can be suboptimal. On Amazon, RCD shows high but
+turbulent NDCG in early iterations, while the low hit ratio
+and later iterations indicate the high NDCG is unstable.
+Finally, we point out that in optimizing the same objective
+function, ALS outperforms RCD in most cases, demonstrating the advantage of ALS over the gradient descent learner.
+(a) Iterations vs. HR
+(b) Iterations vs. NDCG
+(c) Iterations vs. HR
+(d) Iterations vs. NDCG
+Figure 4: Accuracy and convergence comparison of eALS with BPR of diﬀerent learning rate.
+Accuracy vs.
+Number of Factors. Figure 3 shows
+the prediction accuracy with varying number of factors K.
+We only show the evaluation by NDCG as HR admits the
+same trend. First, eALS consistently outperforms ALS and
+RCD across K, demonstrating the eﬀectiveness of our eALS
+method (n.b. although the three methods seem to perform
+on par for Amazon at K = 128, their diﬀerence can be
+clearly seen in Figure 2d). Second, all methods can be improved signiﬁcantly with a larger K. Although a large K
+might have the risk of overﬁtting, it can increase model’s
+representation ability thus better prediction. Especially for
+large datasets that can have millions of users and billions
+of interactions, a large K is particularly important for the
+accuracy of MF methods.
+Eﬃciency. Analytically, ALS’s time complexity is O((M+
+N)K3 + |R|K2), while eALS and RCD are K times faster.
+To compare their eﬃciency empirically, we show the actual
+training time per iteration in Table 3.
+Training time per iteration of diﬀerent
+whole-based MF methods with varying K.
+s, m, and h denote seconds, minutes and hours, respectively.
+As can be seen, with the increase of K, ALS takes much
+longer time than eALS and RCD. Speciﬁcally, when K is
+512, ALS requires 11.6 hours for one iteration on Amazon,
+while eALS only takes 12 minutes.
+Although eALS does
+not empirically show K times faster than ALS due to the
+more eﬃcient matrix inversion implementation (we used the
+fastest known algorithm with time complexity around
+O(K2.376)), the speed-up is already very signiﬁcant. Moreover, as RCD and eALS have the same analytical time complexity, their actual running time are in the same magnitude;
+the minor diﬀerence can be caused by some implementation
+details, such as the data structures and caches used.
+eALS vs. BPR (sample-based)
+Figure 4 plots the performance of BPR with diﬀerent
+learning rates4 in each iteration.
+Note that we only run
+eALS for 100 iterations, which are enough for eALS to converge. First, it is clear that BPR’s performance is subjected
+4We have also tried other intermediate values of learning
+rates, and the ﬁndings are consistent. Thus, to make the
+ﬁgure more clear, we only show three selected values.
+to the choice of learning rate — Figure 4a and 4b show that
+a higher learning rate leads to a faster convergence, while the
+ﬁnal accuracy may be suﬀered. Second, we see that eALS
+signiﬁcantly outperforms BPR on the Yelp dataset evaluated
+by both measures (p < 0.001). For Amazon, eALS obtains
+a much higher hit ratio but a lower NDCG score, indicating that most hits occur at a relatively low ranks for eALS.
+Comparing with the performance of other whole-based MF
+methods ALS and RCD (Figure 2), we draw the conclusion
+that BPR is a weak performer in terms of the prediction
+recall, while being a strong performer in terms of the precision at top ranks. We think BPR’s strength in ranking top
+items is due to its optimization objective, which is a pairwise ranking function tailored for ranking correct item high.
+In contrast, the regression-based objective is not directly optimized for ranking; instead, by account for all missing data
+in regression, it better predicts user’s preference on unconsumed items, leading to a better recall. This is consistent
+with ’s ﬁnding in evaluating top-K recommendation.
+We notice that BPR shows unusual NDCG spike in early
+iterations on the Amazon dataset, however the performance
+is unstable and goes down with more iterations. The same
+phenomenon was also observed for another gradient descent
+method RCD on the same dataset (see Figure 2d). We hypothesize that it might be caused by some regularities in
+the data. For example, we ﬁnd some Amazon users review
+on a movie multiple times5. In early iterations, BPR ranks
+these repeated items high, leading to a high but unstable
+NDCG score. There might be other reasons responsible for
+this, and we do not further explore here.
+Online Protocol
+In the evaluation of online protocol, we hold out the latest
+10% interactions as the test set, training all methods on the
+remaining 90% data with the best parameter settings evidenced by the oﬄine evaluation. We ﬁrst study the number
+of online iterations required for eALS to converge. Then we
+show how does the weight of new interactions impact the
+performance. Lastly, we compare with dynamic MF methods RCD and BPR in the online learning scenario.
+Number of Online Iterations
+Figure 6 shows how does eALS’s accuracy change with
+number of online iterations. Results at the 0-th iteration
+benchmark the performance of the oﬄine trained model, as
+no incremental update is performed. First, we can see that
+the oﬄine trained model performs very poorly, highlight-
+5Due to user’s repeat consumption behaviours, we do not
+exclude training items when generating recommend list.
+(a) Test # vs. HR
+(b) Test # vs. NDCG
+(c) Test # vs. HR
+(d) Test # vs. NDCG
+Figure 5: Performance evolution of eALS and other dynamic MF methods in online learning.
+ing the importance of refreshing recommender model for an
+online system with dynamic data.
+Second, we ﬁnd most
+performance gain comes from the ﬁrst iteration, and more
+iterations do not further improve. This is due to the fact
+that only the local features regarding to the new interaction
+are updated, and one eALS step on a latent factor can ﬁnd
+the optimal solution with others ﬁxed. Thus, one iteration
+is enough for eALS to learn from a new interaction incrementally, making eALS very eﬃcient for learning online.
+Figure 6: Impact of online iterations on eALS.
+We have also investigated number of online iterations required for baselines RCD and BPR. RCD shows the same
+trend that good prediction is obtained in the ﬁrst iteration.
+While BPR requires more iterations, usually 5-10 iterations
+to get a peak performance and more iterations will adversely
+hurt the performance due to the local over-training.
+Weight of New Interactions
+To evaluate how does the weight of new interactions effect the online learning algorithms, we also apply the same
+weight wnew on RCD. Note that the original RCD paper 
+does not consider the weight of interactions; we encode wnew
+the same way with eALS, revising the RCD learner to optimize the weighted regression function.
+Figure 7: Impact of wnew on eALS and RCD in online
+learning evaluated by NDCG.
+Figure 7 shows the performance evaluated by NDCG (results of HR show the same trend thus omitted for space).
+Setting wnew to 1 signiﬁes that new interaction is assigned a
+same weight with the old training interaction. As expected,
+with a modest increasing on wnew, the prediction of both
+models is gradually improved, demonstrating the usefulness
+of strengthening user’s short-term interest. The peak performance is obtained around 4, where eALS shows better
+prediction than RCD. Overly increasing wnew will adversely
+hurt the performance, admitting the utility of user’s historical data used in oﬄine training. Overall, this experiment
+indicates the importance of balancing user’s short-term and
+long-term interest for quality recommendation.
+Performance Comparison
+With the simulated data stream, we show the performance
+evolution with respect to number of test instances in Figure
+5. First, eALS consistently outperforms RCD and BPR evidenced by both measures, and one-sample paired t-test veriﬁes that all improvements are statistically signiﬁcant with
+p < 0.001.
+BPR betters RCD for Yelp, while underperforms for Amazon. Second, we observe the trend that the
+performance of dynamic learning ﬁrst decreases, and then
+increases before becoming stable. This is caused by the new
+users problem — when there are few feedback for a user, the
+model can not personalize the user’s preference eﬀectively;
+with more feedbacks streaming in, the model can adapt itself
+to improve the preference modeling accordingly. To show
+this, we further breakdown the results of eALS by number
+of past interactions of test user in Figure 8.
+Figure 8: Results breakdown of eALS by # of past
+interactions of test user. Note: Interaction # > 0
+denotes the performance for non-cold-start users.
+It is clear that when there are no historical feedback for
+a test user (i.e., user cold-start cases), the performance is
+very poor — no better than random. After the ﬁrst interaction streams in, the prediction is signiﬁcantly improved; and
+with more interactions, the performance is further improved.
+This highlights the importance of incorporating instantaneous user feedback into the model, especially for cold-start
+or sparse users that have few history in training.
+CONCLUSION AND FUTURE WORK
+We study the problem of learning MF models from implicit feedback. In contrast to previous work that applied
+a uniform weight on missing data, we propose to weight
+missing data based on the popularity of items. To address
+the key eﬃciency challenge in optimization, we develop a
+new learning algorithm — eALS — which eﬀectively learns
+parameters by performing coordinate descent with memoization. For online learning, we devise an incremental update strategy for eALS to adapt dynamic data in real-time.
+Experiments with both oﬄine and online protocols demonstrate promising results. Importantly, our work makes MF
+more practical to use for modeling implicit data, along two
+dimensions. First, we investigate a new paradigm to deal
+with missing data which can easily incorporate prior domain knowledge. Second, eALS is embarrassingly parallel,
+making it attractive for large-scale industrial deployment.
+We plan to study the optimal weighting strategy for online
+data as a way to explore user’s short-term interest. Along
+the technical line, we explored the element-wise ALS learner
+in its basic MF form and solved the eﬃciency challenge in
+handling missing data. To make our method more applicable to real-world settings, we plan to encode side information
+such as user social contexts and reviews by extending
+eALS to more generic models, such as collective factorization and Factorization machines . In addition, we
+will study binary coding for MF on implicit data, since a
+recent advance has shown that discrete latent factors
+are beneﬁcial to collaborative ﬁltering for explicit ratings.
+The strength of eALS can be applied to other domains,
+owing to the universality of factorizing sparse data matrices.
+For example, recent advances in natural language processing have shown the connection between neural word embeddings and MF on the word–context matrix. This bridge
+nicely motivates several proposals to use MF to learn word
+embeddings; however, when it comes to handling missing
+data, they have either ignored or equally weighted the
+missing entries, similar to traditional SVD . It will be interesting to see whether eALS will also improve these tasks.
+Acknowledgement
+The authors would like to thank the additional discussion
+and help from Steﬀen Rendle, Bhargav Kanagal, Immanuel
+Bayer, Tao Chen, Ming Gao and Jovian Lin.

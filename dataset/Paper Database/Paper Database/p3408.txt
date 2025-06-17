@@ -1,0 +1,641 @@
+Reluplex: An Eﬃcient SMT Solver for Verifying
+Deep Neural Networks⋆
+Guy Katz, Clark Barrett, David Dill, Kyle Julian and Mykel Kochenderfer
+Stanford University, USA
+{guyk, clarkbarrett, dill, kjulian3, mykel}@stanford.edu
+Abstract. Deep neural networks have emerged as a widely used and
+eﬀective means for tackling complex, real-world problems. However, a
+major obstacle in applying them to safety-critical systems is the great dif-
+ﬁculty in providing formal guarantees about their behavior. We present
+a novel, scalable, and eﬃcient technique for verifying properties of deep
+neural networks (or providing counter-examples). The technique is based
+on the simplex method, extended to handle the non-convex Rectiﬁed Linear Unit (ReLU ) activation function, which is a crucial ingredient in
+many modern neural networks. The veriﬁcation procedure tackles neural networks as a whole, without making any simplifying assumptions.
+We evaluated our technique on a prototype deep neural network implementation of the next-generation airborne collision avoidance system for
+unmanned aircraft (ACAS Xu). Results show that our technique can
+successfully prove properties of networks that are an order of magnitude
+larger than the largest networks veriﬁed using existing methods.
+Introduction
+Artiﬁcial neural networks have emerged as a promising approach for creating scalable and robust systems. Applications include speech recognition ,
+image classiﬁcation , game playing , and many others. It is now clear that
+software that may be extremely diﬃcult for humans to implement can instead
+be created by training deep neural networks (DNN s), and that the performance
+of these DNNs is often comparable to, or even surpasses, the performance of
+manually crafted software. DNNs are becoming widespread, and this trend is
+likely to continue and intensify.
+Great eﬀort is now being put into using DNNs as controllers for safety-critical
+systems such as autonomous vehicles and airborne collision avoidance systems
+for unmanned aircraft (ACAS Xu) . DNNs are trained over a ﬁnite set of inputs and outputs and are expected to generalize, i.e. to behave correctly for
+previously-unseen inputs. However, it has been observed that DNNs can react in
+unexpected and incorrect ways to even slight perturbations of their inputs .
+This unexpected behavior of DNNs is likely to result in unsafe systems, or restrict the usage of DNNs in safety-critical applications. Hence, there is an urgent
+⋆This is the extended version of a paper with the same title that appeared at CAV
+ 
+need for methods that can provide formal guarantees about DNN behavior. Unfortunately, manual reasoning about large DNNs is impossible, as their structure
+renders them incomprehensible to humans. Automatic veriﬁcation techniques are
+thus sorely needed, but here, the state of the art is a severely limiting factor.
+Verifying DNNs is a diﬃcult problem. DNNs are large, non-linear, and nonconvex, and verifying even simple properties about them is an NP-complete
+problem (see Section I of the appendix). DNN veriﬁcation is experimentally
+beyond the reach of general-purpose tools such as linear programming (LP)
+solvers or existing satisﬁability modulo theories (SMT) solvers , and
+thus far, dedicated tools have only been able to handle very small networks (e.g.
+a single hidden layer with only 10 to 20 hidden nodes ).
+The diﬃculty in proving properties about DNNs is caused by the presence
+of activation functions. A DNN is comprised of a set of layers of nodes, and the
+value of each node is determined by computing a linear combination of values
+from nodes in the preceding layer and then applying an activation function to
+the result. These activation functions are non-linear and render the problem
+non-convex. We focus here on DNNs with a speciﬁc kind of activation function, called a Rectiﬁed Linear Unit (ReLU ) . When the ReLU function is
+applied to a node with a positive value, it returns the value unchanged (the
+active case), but when the value is negative, the ReLU function returns 0 (the
+inactive case). ReLUs are very widely used , and it has been suggested
+that their piecewise linearity allows DNNs to generalize well to previously unseen inputs . Past eﬀorts at verifying properties of DNNs with ReLUs
+have had to make signiﬁcant simplifying assumptions — for instance, by
+considering only small input regions in which all ReLUs are ﬁxed at either the
+active or inactive state , hence making the problem convex but at the cost of
+being able to verify only an approximation of the desired property.
+We propose a novel, scalable, and eﬃcient algorithm for verifying properties
+of DNNs with ReLUs. We address the issue of the activation functions headon, by extending the simplex algorithm — a standard algorithm for solving
+LP instances — to support ReLU constraints. This is achieved by leveraging
+the piecewise linear nature of ReLUs and attempting to gradually satisfy the
+constraints that they impose as the algorithm searches for a feasible solution.
+We call the algorithm Reluplex, for “ReLU with Simplex”.
+The problem’s NP-completeness means that we must expect the worst-case
+performance of the algorithm to be poor. However, as is often the case with
+SAT and SMT solvers, the performance in practice can be quite reasonable; in
+particular, our experiments show that during the search for a solution, many
+of the ReLUs can be ignored or even discarded altogether, reducing the search
+space by an order of magnitude or more. Occasionally, Reluplex will still need
+to split on a speciﬁc ReLU constraint — i.e., guess that it is either active or
+inactive, and possibly backtrack later if the choice leads to a contradiction.
+We evaluated Reluplex on a family of 45 real-world DNNs, developed as an
+early prototype for the next-generation airborne collision avoidance system for
+unmanned aircraft ACAS Xu . These fully connected DNNs have 8 layers
+and 300 ReLU nodes each, and are intended to be run onboard aircraft. They
+take in sensor data indicating the speed and present course of the aircraft (the
+ownship) and that of any nearby intruder aircraft, and issue appropriate navigation advisories. These advisories indicate whether the aircraft is clear-of-conﬂict,
+in which case the present course can be maintained, or whether it should turn
+to avoid collision. We successfully proved several properties of these networks,
+e.g. that a clear-of-conﬂict advisory will always be issued if the intruder is suﬃciently far away or that it will never be issued if the intruder is suﬃciently close
+and on a collision course with the ownship. Additionally, we were able to prove
+certain robustness properties of the networks, meaning that small adversarial
+perturbations do not change the advisories produced for certain inputs.
+Our contributions can be summarized as follows. We (i) present Reluplex, an
+SMT solver for a theory of linear real arithmetic with ReLU constraints; (ii) show
+how DNNs and properties of interest can be encoded as inputs to Reluplex;
+(iii) discuss several implementation details that are crucial to performance and
+scalability, such as the use of ﬂoating-point arithmetic, bound derivation for
+ReLU variables, and conﬂict analysis; and (iv) conduct a thorough evaluation
+on the DNN implementation of the prototype ACAS Xu system, demonstrating
+the ability of Reluplex to scale to DNNs that are an order of magnitude larger
+than those that can be analyzed using existing techniques.
+The rest of the paper is organized as follows. We begin with some background
+on DNNs, SMT, and simplex in Section 2. The abstract Reluplex algorithm is
+described in Section 3, with key implementation details highlighted in Section 4.
+We then describe the ACAS Xu system and its prototype DNN implementation
+that we used as a case-study in Section 5, followed by experimental results in
+Section 6. Related work is discussed in Section 7, and we conclude in Section 8.
+Background
+Neural Networks. Deep neural networks (DNNs) are comprised of an input
+layer, an output layer, and multiple hidden layers in between. A layer is comprised of multiple nodes, each connected to nodes from the preceding layer using
+a predetermined set of weights (see Fig. 1). Weight selection is crucial, and is
+performed during a training phase (see, e.g., for an overview). By assigning
+values to inputs and then feeding them forward through the network, values
+for each layer can be computed from the values of the previous layer, ﬁnally
+resulting in values for the outputs.
+The value of each hidden node in the network is determined by calculating
+a linear combination of node values from the previous layer, and then applying
+a non-linear activation function . Here, we focus on the Rectiﬁed Linear Unit
+(ReLU) activation function . When a ReLU activation function is applied to
+a node, that node’s value is calculated as the maximum of the linear combination
+of nodes from the previous layer and 0. We can thus regard ReLUs as the function
+ReLU(x) = max (0, x).
+Fig. 1: A fully connected DNN with 5 input nodes (in green), 5 output nodes (in
+red), and 4 hidden layers containing a total of 36 hidden nodes (in blue).
+Formally, for a DNN N, we use n to denote the number of layers and si to
+denote the size of layer i (i.e., the number of its nodes). Layer 1 is the input
+layer, layer n is the output layer, and layers 2, . . . , n −1 are the hidden layers.
+The value of the j-th node of layer i is denoted vi,j and the column vector
+[vi,1, . . . , vi,si]T is denoted Vi. Evaluating N entails calculating Vn for a given
+assignment V1 of the input layer. This is performed by propagating the input
+values through the network using predeﬁned weights and biases, and applying
+the activation functions — ReLUs, in our case. Each layer 2 ≤i ≤n has a
+weight matrix Wi of size si × si−1 and a bias vector Bi of size si, and its values
+are given by Vi = ReLU(WiVi−1 + Bi), with the ReLU function being applied
+element-wise. This rule is applied repeatedly for each layer until Vn is calculated.
+When the weight matrices W1, . . . Wn do not have any zero entries, the network
+is said to be fully connected (see Fig. 1 for an illustration).
+Fig. 2 depicts a small network that we will use as a running example. The
+network has one input node, one output node and a single hidden layer with two
+nodes. The bias vectors are set to 0 and are ignored, and the weights are shown
+for each edge. The ReLU function is applied to each of the hidden nodes. It is
+possible to show that, due to the eﬀect of the ReLUs, the network’s output is
+always identical to its input: v31 ≡v11.
+Fig. 2: A small neural network.
+Satisﬁability Modulo Theories. We present our algorithm as a theory solver
+in the context of satisﬁability modulo theories (SMT).1 A theory is a pair T =
+(Σ, I) where Σ is a signature and I is a class of Σ-interpretations, the models
+of T, that is closed under variable reassignment. A Σ-formula ϕ is T-satisﬁable
+(resp., T-unsatisﬁable) if it is satisﬁed by some (resp., no) interpretation in I. In
+this paper, we consider only quantiﬁer-free formulas. The SMT problem is the
+problem of determining the T-satisﬁability of a formula for a given theory T.
+Given a theory T with signature Σ, the DPLL(T) architecture provides a
+generic approach for determining the T-satisﬁability of Σ-formulas. In DPLL(T),
+a Boolean satisﬁability (SAT) engine operates on a Boolean abstraction of the
+formula, performing Boolean propagation, case-splitting, and Boolean conﬂict
+resolution. The SAT engine is coupled with a dedicated theory solver, which
+checks the T-satisﬁability of the decisions made by the SAT engine. Splittingon-demand extends DPLL(T) by allowing theory solvers to delegate casesplitting to the SAT engine in a generic and modular way. In Section 3, we
+present our algorithm as a deductive calculus (with splitting rules) operating on
+conjunctions of literals. The DPLL(T) and splitting-on-demand mechanisms can
+then be used to obtain a full decision procedure for arbitrary formulas.
+Linear Real Arithmetic and Simplex. In the context of DNNs, a particularly relevant theory is that of real arithmetic, which we denote as TR. TR consists of the signature containing all rational number constants and the symbols
+{+, −, ·, ≤, ≥}, paired with the standard model of the real numbers. We focus on
+linear formulas: formulas over TR with the additional restriction that the multiplication symbol · can only appear if at least one of its operands is a rational
+constant. Linear atoms can always be rewritten into the form P
+xi∈X cixi ▷◁d,
+for ▷◁∈{=, ≤, ≥}, where X is a set of variables and ci, d are rational constants.
+The simplex method is a standard and highly eﬃcient decision procedure
+for determining the TR-satisﬁability of conjunctions of linear atoms.2 Our algorithm extends simplex, and so we begin with an abstract calculus for the original
+algorithm (for a more thorough description see, e.g., ). The rules of the calculus operate over data structures we call conﬁgurations. For a given set of variables X = {x1, . . . , xn}, a simplex conﬁguration is either one of the distinguished
+symbols {SAT, UNSAT} or a tuple ⟨B, T, l, u, α⟩, where: B ⊆X is a set of basic
+variables; T, the tableau, contains for each xi ∈B an equation xi = P
+xj /∈B cjxj;
+l, u are mappings that assign each variable x ∈X a lower and an upper bound,
+respectively; and α, the assignment, maps each variable x ∈X to a real value.
+The initial conﬁguration (and in particular the initial tableau T0) is derived
+from a conjunction of input atoms as follows: for each atom P
+xi∈X cixi ▷◁d, a
+new basic variable b is introduced, the equation b = P
+xi∈X cixi is added to the
+1 Consistent with most treatments of SMT, we assume many-sorted ﬁrst-order logic
+with equality as our underlying formalism (see, e.g., for details).
+2 There exist SMT-friendly extensions of simplex (see e.g. ) which can handle TRsatisﬁability of arbitrary literals, including strict inequalities and disequalities, but
+we omit these extensions here for simplicity (and without loss of generality).
+α(xi) < l(xi),
+xj ∈slack+(xi)
+T := pivot(T, i, j),
+B := B ∪{xj} \ {xi}
+α(xi) > u(xi),
+xj ∈slack−(xi)
+T := pivot(T, i, j),
+B := B ∪{xj} \ {xi}
+α(xj) < l(xj) ∨α(xj) > u(xj),
+l(xj) ≤α(xj) + δ ≤u(xj)
+α := update(α, xj, δ)
+(α(xi) < l(xi) ∧slack+(xi) = ∅) ∨(α(xi) > u(xi) ∧slack−(xi) = ∅)
+∀xi ∈X. l(xi) ≤α(xi) ≤u(xi)
+Fig. 3: Derivation rules for the abstract simplex algorithm.
+tableau, and d is added as a bound for b (either upper, lower, or both, depending on ▷◁). The initial assignment is set to 0 for all variables, ensuring that all
+tableau equations hold (though variable bounds may be violated).
+The tableau T can be regarded as a matrix expressing each of the basic
+variables (variables in B) as a linear combination of non-basic variables (variables
+in X \ B). The rows of T correspond to the variables in B and its columns to
+those of X \ B. For xi ∈B and xj /∈B we denote by Ti,j the coeﬃcient cj of
+xj in the equation xi = P
+xj /∈B cjxj. The tableau is changed via pivoting: the
+switching of a basic variable xi (the leaving variable) with a non-basic variable
+xj (the entering variable) for which Ti,j ̸= 0. A pivot(T, i, j) operation returns
+a new tableau in which the equation xi = P
+xk /∈B ckxk has been replaced by
+the equation xj = xi
+xk /∈B,k̸=j
+cj xk, and in which every occurrence of xj in
+each of the other equations has been replaced by the right-hand side of the new
+equation (the resulting expressions are also normalized to retain the tableau
+form). The variable assignment α is changed via update operations that are
+applied to non-basic variables: for xj /∈B, an update(α, xj, δ) operation returns
+an updated assignment α′ identical to α, except that α′(xj) = α(xj) + δ and for
+every xi ∈B, we have α′(xi) = α(xi) + δ · Ti,j. To simplify later presentation we
+also denote:
+slack+(xi) = {xj /∈B | (Ti,j > 0 ∧α(xj) < u(xj)) ∨(Ti,j < 0 ∧α(xj) > l(xj))
+slack−(xi) = {xj /∈B | (Ti,j < 0 ∧α(xj) < u(xj)) ∨(Ti,j > 0 ∧α(xj) > l(xj))
+The rules of the simplex calculus are provided in Fig. 3 in guarded assignment
+form. A rule applies to a conﬁguration S if all of the rule’s premises hold for S. A
+rule’s conclusion describes how each component of S is changed, if at all. When
+S′ is the result of applying a rule to S, we say that S derives S′. A sequence of
+conﬁgurations Si where each Si derives Si+1 is called a derivation.
+The Update rule (with appropriate values of δ) is used to enforce that nonbasic variables satisfy their bounds. Basic variables cannot be directly updated.
+Instead, if a basic variable xi is too small or too great, either the Pivot1 or the
+Pivot2 rule is applied, respectively, to pivot it with a non-basic variable xj. This
+makes xi non-basic so that its assignment can be adjusted using the Update
+rule. Pivoting is only allowed when xj aﬀords slack, that is, the assignment for
+xj can be adjusted to bring xi closer to its bound without violating its own
+bound. Of course, once pivoting occurs and the Update rule is used to bring xi
+within its bounds, other variables (such as the now basic xj) may be sent outside
+their bounds, in which case they must be corrected in a later iteration. If a basic
+variable is out of bounds, but none of the non-basic variables aﬀords it any slack,
+then the Failure rule applies and the problem is unsatisﬁable. Because the tableau
+is only changed by scaling and adding rows, the set of variable assignments that
+satisfy its equations is always kept identical to that of T0. Also, the update
+operation guarantees that α continues to satisfy the equations of T. Thus, if all
+variables are within bounds then the Success rule can be applied, indicating that
+α constitutes a satisfying assignment for the original problem.
+It is well-known that the simplex calculus is sound (i.e. if a derivation
+ends in SAT or UNSAT, then the original problem is satisﬁable or unsatisﬁable,
+respectively) and complete (there always exists a derivation ending in either SAT
+or UNSAT from any starting conﬁguration). Termination can be guaranteed if certain strategies are used in applying the transition rules — in particular in picking
+the leaving and entering variables when multiple options exist . Variable selection strategies are also known to have a dramatic eﬀect on performance .
+We note that the version of simplex described above is usually referred to as
+phase one simplex, and is usually followed by a phase two in which the solution
+is optimized according to a cost function. However, as we are only considering
+satisﬁability, phase two is not required.
+From Simplex to Reluplex
+The simplex algorithm described in Section 2 is an eﬃcient means for solving
+problems that can be encoded as a conjunction of atoms. Unfortunately, while
+the weights, biases, and certain properties of DNNs can be encoded this way,
+the non-linear ReLU functions cannot.
+When a theory solver operates within an SMT solver, input atoms can be
+embedded in arbitrary Boolean structure. A na¨ıve approach is then to encode
+ReLUs using disjunctions, which is possible because ReLUs are piecewise linear.
+However, this encoding requires the SAT engine within the SMT solver to enumerate the diﬀerent cases. In the worst case, for a DNN with n ReLU nodes,
+the solver ends up splitting the problem into 2n sub-problems, each of which
+is a conjunction of atoms. As observed by us and others , this theoretical
+worst-case behavior is also seen in practice, and hence this approach is practical only for very small networks. A similar phenomenon occurs when encoding
+DNNs as mixed integer problems (see Section 6).
+We take a diﬀerent route and extend the theory TR to a theory TRR of reals
+and ReLUs. TRR is almost identical to TR, except that its signature additionally
+includes the binary predicate ReLU with the interpretation: ReLU(x, y) iﬀy =
+max (0, x). Formulas are then assumed to contain atoms that are either linear
+inequalities or applications of the ReLU predicate to linear terms.
+DNNs and their (linear) properties can be directly encoded as conjunctions
+of TRR-atoms. The main idea is to encode a single ReLU node v as a pair of
+variables, vb and vf, and then assert ReLU(vb, vf). vb, the backward-facing variable, is used to express the connection of v to nodes from the preceding layer;
+whereas vf, the forward-facing variable, is used for the connections of x to the
+following layer (see Fig. 4). The rest of this section is devoted to presenting an
+eﬃcient algorithm, Reluplex, for deciding the satisﬁability of a conjunction of
+such atoms.
+Fig. 4: The network from Fig. 2, with ReLU nodes split into backward- and
+forward-facing variables.
+The Reluplex Procedure. As with simplex, Reluplex allows variables to temporarily violate their bounds as it iteratively looks for a feasible variable assignment. However, Reluplex also allows variables that are members of ReLU pairs
+to temporarily violate the ReLU semantics. Then, as it iterates, Reluplex repeatedly picks variables that are either out of bounds or that violate a ReLU,
+and corrects them using Pivot and Update operations.
+For a given set of variables X = {x1, . . . , xn}, a Reluplex conﬁguration is
+either one of the distinguished symbols {SAT, UNSAT} or a tuple ⟨B, T, l, u, α, R⟩,
+where B, T, l, u and α are as before, and R ⊂X × X is the set of ReLU connections. The initial conﬁguration for a conjunction of atoms is also obtained
+as before except that ⟨x, y⟩∈R iﬀReLU(x, y) is an atom. The simplex transition rules Pivot1, Pivot2 and Update are included also in Reluplex, as they are
+designed to handle out-of-bounds violations. We replace the Success rule with
+the ReluSuccess rule and add rules for handling ReLU violations, as depicted in
+Fig. 5. The Updateb and Updatef rules allow a broken ReLU connection to be
+corrected by updating the backward- or forward-facing variables, respectively,
+provided that these variables are non-basic. The PivotForRelu rule allows a basic
+variable appearing in a ReLU to be pivoted so that either Updateb or Updatef can
+be applied (this is needed to make progress when both variables in a ReLU are
+basic and their assignments do not satisfy the ReLU semantics). The ReluSplit
+⟨xi, xj⟩∈R,
+α(xj) ̸= max (0, α(xi)),
+α := update(α, xi, α(xj) −α(xi))
+⟨xi, xj⟩∈R,
+α(xj) ̸= max (0, α(xi))
+α := update(α, xj, max (0, α(xi)) −α(xj))
+PivotForRelu
+∃xl. ⟨xi, xl⟩∈R ∨⟨xl, xi⟩∈R,
+T := pivot(T, i, j),
+B := B ∪{xj} \ {xi}
+⟨xi, xj⟩∈R,
+l(xi) < 0,
+u(xi) := 0
+l(xi) := 0
+ReluSuccess
+∀x ∈X. l(x) ≤α(x) ≤u(x),
+∀⟨xb, xf ⟩∈R. α(xf ) = max (0, α(xb))
+Fig. 5: Additional derivation rules for the abstract Reluplex algorithm.
+rule is used for splitting on certain ReLU connections, guessing whether they
+are active (by setting l(xi) := 0) or inactive (by setting u(xi) := 0).
+Introducing splitting means that derivations are no longer linear. Using the
+notion of derivation trees, we can show that Reluplex is sound and complete
+(see Section II of the appendix). In practice, splitting can be managed by a SAT
+engine with splitting-on-demand . The na¨ıve approach mentioned at the beginning of this section can be simulated by applying the ReluSplit rule eagerly until
+it no longer applies and then solving each derived sub-problem separately (this
+reduction trivially guarantees termination just as do branch-and-cut techniques
+in mixed integer solvers ). However, a more scalable strategy is to try to
+ﬁx broken ReLU pairs using the Updateb and Updatef rules ﬁrst, and split only
+when the number of updates to a speciﬁc ReLU pair exceeds some threshold.
+Intuitively, this is likely to limit splits to “problematic” ReLU pairs, while still
+guaranteeing termination (see Section III of the appendix). Additional details
+appear in Section 6.
+Example. To illustrate the use of the derivation rules, we use Reluplex to solve
+a simple example. Consider the network in Fig. 4, and suppose we wish to check
+whether it is possible to satisfy v11 ∈ and v31 ∈[0.5, 1]. As we know that
+the network outputs its input unchanged (v31 ≡v11), we expect Reluplex to be
+able to derive SAT. The initial Reluplex conﬁguration is obtained by introducing
+new basic variables a1, a2, a3, and encoding the network with the equations:
+a1 = −v11 + vb
+a2 = v11 + vb
+The equations above form the initial tableau T0, and the initial set of basic variables is B
+{a1, a2, a3}. The set of ReLU connections is R
+22⟩}. The initial assignment of all variables is set to 0. The
+lower and upper bounds of the basic variables are set to 0, in order to enforce the
+equalities that they represent. The bounds for the input and output variables are
+set according to the problem at hand; and the hidden variables are unbounded,
+except that forward-facing variables are, by deﬁnition, non-negative:
+22 v31 a1 a2 a3
+lower bound
+0 −∞0 −∞0 0.5 0 0 0
+assignment
+upper bound 1
+Starting from this initial conﬁguration, our search strategy is to ﬁrst ﬁx any
+out-of-bounds variables. Variable v31 is non-basic and is out of bounds, so we
+perform an Update step and set it to 0.5. As a result, a3, which depends on v31,
+is also set to 0.5. a3 is now basic and out of bounds, so we pivot it with vf
+then update a3 back to 0. The tableau now consists of the equations:
+a1 = −v11 + vb
+a2 = v11 + vb
+22 + v31 −a3
+And the assignment is α(vf
+21) = 0.5, α(v31) = 0.5, and α(v) = 0 for all other variables v. At this point, all variables are within their bounds, but the ReluSuccess
+rule does not apply because α(vf
+21) = 0.5 ̸= 0 = max (0, α(vb
+The next step is to ﬁx the broken ReLU pair ⟨vb
+21⟩. Since vb
+21 is nonbasic, we use Updateb to increase its value by 0.5. The assignment becomes
+21) = 0.5, α(vf
+21) = 0.5, α(v31) = 0.5, α(a1) = 0.5, and α(v) = 0 for all other
+variables v. All ReLU constraints hold, but a1 is now out of bounds. This is ﬁxed
+by pivoting a1 with v11 and then updating it. The resulting tableau is:
+22 + v31 −a3
+Observe that because v11 is now basic, it was eliminated from the equation for
+a2 and replaced with vb
+21 −a1. The non-zero assignments are now α(v11) = 0.5,
+21) = 0.5, α(vf
+21) = 0.5, α(v31) = 0.5, α(a2) = 0.5. Variable a2 is now too
+large, and so we have a ﬁnal round of pivot-and-update: a2 is pivoted with vb
+and then updated back to 0. The ﬁnal tableau and assignments are:
+21 + a1 + a2
+22 + v31 −a3
+22 v31 a1 a2 a3
+lower bound
+0 0.5 0 0 0
+assignment
+0.5 0.5 0.5 −0.5 0 0.5 0 0 0
+upper bound 1
+and the algorithm halts with the feasible solution it has found. A key observation
+is that we did not ever split on any of the ReLU connections. Instead, it was
+suﬃcient to simply use updates to adjust the ReLU variables as needed.
+Eﬃciently Implementing Reluplex
+We next discuss three techniques that signiﬁcantly boost the performance of
+Reluplex: use of tighter bound derivation, conﬂict analysis and ﬂoating point
+arithmetic. A fourth technique, under-approximation, is discussed in Section IV
+of the appendix.
+Tighter Bound Derivation. The simplex and Reluplex procedures naturally
+lend themselves to deriving tighter variable bounds as the search progresses .
+Consider a basic variable xi ∈B and let pos(xi) = {xj /∈B | Ti,j > 0} and
+neg(xi) = {xj /∈B | Ti,j < 0}. Throughout the execution, the following rules can
+be used to derive tighter bounds for xi, regardless of the current assignment:
+deriveLowerBound
+xj∈pos(xi) Ti,j · l(xj) + P
+xj∈neg(xi) Ti,j · u(xj)
+l(xi) := P
+xj∈pos(xi) Ti,j · l(xj) + P
+xj∈neg(xi) Ti,j · u(xj)
+deriveUpperBound
+xj∈pos(xi) Ti,j · u(xj) + P
+xj∈neg(xi) Ti,j · l(xj)
+u(xi) := P
+xj∈pos(xi) Ti,j · u(xj) + P
+xj∈neg(xi) Ti,j · l(xj)
+The derived bounds can later be used to derive additional, tighter bounds.
+When tighter bounds are derived for ReLU variables, these variables can
+sometimes be eliminated, i.e., ﬁxed to the active or inactive state, without splitting. For a ReLU pair xf = ReLU(xb), discovering that either l(xb) or l(xf) is
+strictly positive means that in any feasible solution this ReLU connection will
+be active. Similarly, discovering that u(xb) < 0 implies inactivity.
+Bound tightening operations incur overhead, and simplex implementations
+often use them sparsely . In Reluplex, however, the beneﬁts of eliminating
+ReLUs justify the cost. The actual amount of bound tightening to perform can
+be determined heuristically; we describe the heuristic that we used in Section 6.
+Derived Bounds and Conﬂict Analysis. Bound derivation can lead to situations where we learn that l(x) > u(x) for some variable x. Such contradictions
+allow Reluplex to immediately undo a previous split (or answer UNSAT if no previous splits exist). However, in many cases more than just the previous split can
+be undone. For example, if we have performed 8 nested splits so far, it may be
+that the conﬂicting bounds for x are the direct result of split number 5 but have
+only just been discovered. In this case we can immediately undo splits number
+8, 7, and 6. This is a particular case of conﬂict analysis, which is a standard
+technique in SAT and SMT solvers .
+Floating Point Arithmetic. SMT solvers typically use precise (as opposed
+to ﬂoating point) arithmetic to avoid roundoﬀerrors and guarantee soundness.
+Unfortunately, precise computation is usually at least an order of magnitude
+slower than its ﬂoating point equivalent. Invoking Reluplex on a large DNN can
+require millions of pivot operations, each of which involves the multiplication and
+division of rational numbers, potentially with large numerators or denominators
+— making the use of ﬂoating point arithmetic important for scalability.
+There are standard techniques for keeping the roundoﬀerror small when
+implementing simplex using ﬂoating point, which we incorporated into our implementation. For example, one important practice is trying to avoid Pivot operations involving the inversion of extremely small numbers .
+To provide increased conﬁdence that any roundoﬀerror remained within an
+acceptable range, we also added the following safeguards: (i) After a certain
+number of Pivot steps we would measure the accumulated roundoﬀerror; and
+(ii) If the error exceeded a threshold M, we would restore the coeﬃcients of the
+current tableau T using the initial tableau T0.
+Cumulative roundoﬀerror can be measured by plugging the current assignment values for the non-basic variables into the equations of the initial tableau
+T0, using them to calculate the values for every basic variable xi, and then measuring by how much these values diﬀer from the current assignment α(xi). We
+deﬁne the cumulative roundoﬀerror as:
+T0i,j · α(xj)|
+T is restored by starting from T0 and performing a short series of Pivot steps
+that result in the same set of basic variables as in T. In general, the shortest
+sequence of pivot steps to transform T0 to T is much shorter than the series of
+steps that was followed by Reluplex — and hence, although it is also performed
+using ﬂoating point arithmetic, it incurs a smaller roundoﬀerror.
+The tableau restoration technique serves to increase our conﬁdence in the
+algorithm’s results when using ﬂoating point arithmetic, but it does not guarantee soundness. Providing true soundness when using ﬂoating point arithmetic
+remains a future goal (see Section 8).
+Case Study: The ACAS Xu System
+Airborne collision avoidance systems are critical for ensuring the safe operation of aircraft. The Traﬃc Alert and Collision Avoidance System (TCAS) was
+developed in response to midair collisions between commercial aircraft, and is
+currently mandated on all large commercial aircraft worldwide . Recent work
+has focused on creating a new system, known as Airborne Collision Avoidance
+System X (ACAS X ) . This system adopts an approach that involves
+solving a partially observable Markov decision process to optimize the alerting
+logic and further reduce the probability of midair collisions, while minimizing
+unnecessary alerts .
+The unmanned variant of ACAS X, known as ACAS Xu, produces horizontal
+maneuver advisories. So far, development of ACAS Xu has focused on using a
+large lookup table that maps sensor measurements to advisories . However,
+this table requires over 2GB of memory. There is concern about the memory
+requirements for certiﬁed avionics hardware. To overcome this challenge, a DNN
+representation was explored as a potential replacement for the table . Initial
+results show a dramatic reduction in memory requirements without compromising safety. In fact, due to its continuous nature, the DNN approach can sometimes outperform the discrete lookup table . Recently, in order to reduce
+lookup time, the DNN approach was improved further, and the single DNN was
+replaced by an array of 45 DNNs. As a result, the original 2GB table can now
+be substituted with eﬃcient DNNs that require less than 3MB of memory.
+A DNN implementation of ACAS Xu presents new certiﬁcation challenges.
+Proving that a set of inputs cannot produce an erroneous alert is paramount
+for certifying the system for use in safety-critical settings. Previous certiﬁcation
+methodologies included exhaustively testing the system in 1.5 million simulated
+encounters , but this is insuﬃcient for proving that faulty behaviors do not
+exist within the continuous DNNs. This highlights the need for verifying DNNs
+and makes the ACAS Xu DNNs prime candidates on which to apply Reluplex.
+Network Functionality. The ACAS Xu system maps input variables to action
+advisories. Each advisory is assigned a score, with the lowest score corresponding
+to the best action. The input state is composed of seven dimensions (shown in
+Fig. 6) which represent information determined from sensor measurements :
+(i) ρ: Distance from ownship to intruder; (ii) θ: Angle to intruder relative to
+ownship heading direction; (iii) ψ: Heading angle of intruder relative to ownship
+heading direction; (iv) vown: Speed of ownship; (v) vint: Speed of intruder; (vi) τ:
+Time until loss of vertical separation; and (vii) aprev: Previous advisory. There
+are ﬁve outputs which represent the diﬀerent horizontal advisories that can be
+given to the ownship: Clear-of-Conﬂict (COC), weak right, strong right, weak
+left, or strong left. Weak and strong mean heading rates of 1.5 ◦/s and 3.0 ◦/s,
+respectively.
+Fig. 6: Geometry for ACAS Xu Horizontal Logic Table
+The array of 45 DNNs was produced by discretizing τ and aprev, and producing a network for each discretized combination. Each of these networks thus has
+ﬁve inputs (one for each of the other dimensions) and ﬁve outputs. The DNNs
+are fully connected, use ReLU activation functions, and have 6 hidden layers
+with a total of 300 ReLU nodes each.
+Network Properties. It is desirable to verify that the ACAS Xu networks
+assign correct scores to the output advisories in various input domains. Fig. 7
+illustrates this kind of property by showing a top-down view of a head-on encounter scenario, in which each pixel is colored to represent the best action if
+the intruder were at that location. We expect the DNN’s advisories to be consistent in each of these regions; however, Fig. 7 was generated from a ﬁnite set
+of input samples, and there may exist other inputs for which a wrong advisory
+is produced, possibly leading to collision. Therefore, we used Reluplex to prove
+properties from the following categories on the DNNs: (i) The system does not
+give unnecessary turning advisories; (ii) Alerting regions are uniform and do
+not contain inconsistent alerts; and (iii) Strong alerts do not appear for high τ
+Downrange (kft)
+Crossrange (kft)
+Fig. 7: Advisories for a head-on encounter with aprev = COC, τ = 0 s.
+Evaluation
+We used a proof-of-concept implementation of Reluplex to check realistic properties on the 45 ACAS Xu DNNs. Our implementation consists of three main
+logical components: (i) A simplex engine for providing core functionality such as
+tableau representation and pivot and update operations; (ii) A Reluplex engine
+for driving the search and performing bound derivation, ReLU pivots and ReLU
+updates; and (iii) A simple SMT core for providing splitting-on-demand services.
+For the simplex engine we used the GLPK open-source LP solver3 with some
+modiﬁcations, for instance in order to allow the Reluplex core to perform bound
+tightening on tableau equations calculated by GLPK. Our implementation, together with the experiments described in this section, is available online .
+Our search strategy was to repeatedly ﬁx any out-of-bounds violations ﬁrst,
+and only then correct any violated ReLU constraints (possibly introducing new
+out-of-bounds violations). We performed bound tightening on the entering variable after every pivot operation, and performed a more thorough bound tightening on all the equations in the tableau once every few thousand pivot steps.
+Tighter bound derivation proved extremely useful, and we often observed that
+after splitting on about 10% of the ReLU variables it led to the elimination of all
+remaining ReLUs. We counted the number of times a ReLU pair was ﬁxed via
+Updateb or Updatef or pivoted via PivotForRelu, and split only when this number
+reached 5 (a number empirically determined to work well). We also implemented
+conﬂict analysis and back-jumping. Finally, we checked the accumulated roundoﬀerror (due to the use of double-precision ﬂoating point arithmetic) after every
+3 www.gnu.org/software/glpk/
+5000 Pivot steps, and restored the tableau if the error exceeded 10−6. Most experiments described below required two tableau restorations or fewer.
+We began by comparing our implementation of Reluplex to state-of-the-art
+solvers: the CVC4, Z3, Yices and MathSat SMT solvers and the Gurobi LP solver
+(see Table 1). We ran all solvers with a 4 hour timeout on 2 of the ACAS Xu
+networks (selected arbitrarily), trying to solve for 8 simple satisﬁable properties
+ϕ1, . . . , ϕ8, each of the form x ≥c for a ﬁxed output variable x and a constant
+c. The SMT solvers generally performed poorly, with only Yices and MathSat
+successfully solving two instances each. We attribute the results to these solvers’
+lack of direct support for encoding ReLUs, and to their use of precise arithmetic.
+Gurobi solved 3 instances quickly, but timed out on all the rest. Its logs indicated
+that whenever Gurobi could solve the problem without case-splitting, it did so
+quickly; but whenever the problem required case-splitting, Gurobi would time
+out. Reluplex was able to solve all 8 instances. See Section V of the appendix
+for the SMT and LP encodings that we used.
+Table 1: Comparison to SMT and LP solvers. Entries indicate solution time (in
+ϕ3 ϕ4 ϕ5 ϕ6 ϕ7 ϕ8
+Next, we used Reluplex to test a set of 10 quantitative properties φ1, . . . , φ10.
+The properties, described below, are formally deﬁned in Section VI of the appendix. Table 2 depicts for each property the number of tested networks (speciﬁed as part of the property), the test results and the total duration (in seconds). The Stack and Splits columns list the maximal depth of nested case-splits
+reached (averaged over the tested networks) and the total number of case-splits
+performed, respectively. For each property, we looked for an input that would
+violate it; thus, an UNSAT result indicates that a property holds, and a SAT result
+indicates that it does not hold. In the SAT case, the satisfying assignment is an
+example of an input that violates the property.
+Property φ1 states that if the intruder is distant and is signiﬁcantly slower
+than the ownship, the score of a COC advisory will always be below a certain
+ﬁxed threshold (recall that the best action has the lowest score). Property φ2
+states that under similar conditions, the score for COC can never be maximal,
+meaning that it can never be the worst action to take. This property was discovered not to hold for 35 networks, but this was later determined to be acceptable
+behavior: the DNNs have a strong bias for producing the same advisory they
+Table 2: Verifying properties of the ACAS Xu networks.
+47 1522384
+had previously produced, and this can result in advisories other than COC even
+for far-away intruders if the previous advisory was also something other than
+COC. Properties φ3 and φ4 deal with situations where the intruder is directly
+ahead of the ownship, and state that the DNNs will never issue a COC advisory.
+Properties φ5 through φ10 each involve a single network, and check for consistent behavior in a speciﬁc input region. For example, φ5 states that if the intruder is near and approaching from the left, the network advises “strong right”.
+Property φ7, on which we timed out, states that when the vertical separation is
+large the network will never advise a strong turn. The large input domain and
+the particular network proved diﬃcult to verify. Property φ8 states that for a
+large vertical separation and a previous “weak left” advisory, the network will
+either output COC or continue advising “weak left”. Here, we were able to ﬁnd
+a counter-example, exposing an input on which the DNN was inconsistent with
+the lookup table. This conﬁrmed the existence of a discrepancy that had also
+been seen in simulations, and which will be addressed by retraining the DNN.
+We observe that for all properties, the maximal depth of nested splits was always well below the total number of ReLU nodes, 300, illustrating the fact that
+Reluplex did not split on many of them. Also, the total number of case-splits
+indicates that large portions of the search space were pruned.
+Another class of properties that we tested is adversarial robustness properties. DNNs have been shown to be susceptible to adversarial inputs : correctly
+classiﬁed inputs that an adversary slightly perturbs, leading to their misclassi-
+ﬁcation by the network. Adversarial robustness is thus a safety consideration,
+and adversarial inputs can be used to train the network further, making it more
+robust . There exist approaches for ﬁnding adversarial inputs , but the
+ability to verify their absence is limited.
+We say that a network is δ-locally-robust at input point x if for every x′ such
+that ∥x −x′∥∞≤δ, the network assigns the same label to x and x′. In the case
+of the ACAS Xu DNNs, this means that the same output has the lowest score
+Table 3: Local adversarial robustness tests. All times are in seconds.
+Result Time Result Time Result Time Result Time Result Time
+5880 UNSAT
+1167 UNSAT
+1168 UNSAT
+UNSAT 14560 UNSAT
+4344 UNSAT
+1331 UNSAT
+for both x and x′. Reluplex can be used to prove local robustness for a given
+x and δ, as depicted in Table 3. We used one of the ACAS Xu networks, and
+tested combinations of 5 arbitrary points and 5 values of δ. SAT results show
+that Reluplex found an adversarial input within the prescribed neighborhood,
+and UNSAT results indicate that no such inputs exist. Using binary search on
+values of δ, Reluplex can thus be used for approximating the optimal δ value
+up to a desired precision: for example, for point 4 the optimal δ is between
+0.025 and 0.05. It is expected that diﬀerent input points will have diﬀerent local
+robustness, and the acceptable thresholds will thus need to be set individually.
+Finally, we mention an additional variant of adversarial robustness which
+we term global adversarial robustness, and which can also be solved by Reluplex. Whereas local adversarial robustness is measured for a speciﬁc x, global
+adversarial robustness applies to all inputs simultaneously. This is expressed by
+encoding two side-by-side copies of the DNN in question, N1 and N2, operating
+on separate input variables x1 and x2, respectively, such that x2 represents an
+adversarial perturbation of x1. We can then check whether ∥x1 −x2∥∞≤δ
+implies that the two copies of the DNN produce similar outputs. Formally, we
+require that if N1 and N2 assign output a values p1 and p2 respectively, then
+|p1 −p2| ≤ϵ. If this holds for every output, we say that the network is ϵ-globallyrobust. Global adversarial robustness is harder to prove than the local variant,
+because encoding two copies of the network results in twice as many ReLU nodes
+and because the problem is not restricted to a small input domain. We were able
+to prove global adversarial robustness only on small networks; improving the
+scalability of this technique is left for future work.
+Related Work
+In , the authors propose an approach for verifying properties of neural networks with sigmoid activation functions. They replace the activation functions
+with piecewise linear approximations thereof, and then invoke black-box SMT
+solvers. When spurious counter-examples are found, the approximation is re-
+ﬁned. The authors highlight the diﬃculty in scaling-up this technique, and are
+able to tackle only small networks with at most 20 hidden nodes .
+The authors of propose a technique for ﬁnding local adversarial examples
+in DNNs with ReLUs. Given an input point x, they encode the problem as a
+linear program and invoke a black-box LP solver. The activation function issue
+is circumvented by considering a suﬃciently small neighborhood of x, in which
+all ReLUs are ﬁxed at the active or inactive state, making the problem convex.
+Thus, it is unclear how to address an x for which one or more ReLUs are on the
+boundary between active and inactive states. In contrast, Reluplex can be used
+on input domains for which ReLUs can have more than one possible state.
+In a recent paper , the authors propose a method for proving the local
+adversarial robustness of DNNs. For a speciﬁc input point x, the authors attempt
+to prove consistent labeling in a neighborhood of x by means of discretization:
+they reduce the inﬁnite neighborhood into a ﬁnite set of points, and check that
+the labeling of these points is consistent. This process is then propagated through
+the network, layer by layer. While the technique is general in the sense that
+it is not tailored for a speciﬁc activation function, the discretization process
+means that any UNSAT result only holds modulo the assumption that the ﬁnite
+sets correctly represent their inﬁnite domains. In contrast, our technique can
+guarantee that there are no irregularities hiding between the discrete points.
+Finally, in , the authors employ hybrid techniques to analyze an ACAS
+X controller given in lookup-table form, seeking to identify safe input regions
+in which collisions cannot occur. It will be interesting to combine our technique
+with that of , in order to verify that following the advisories provided by the
+DNNs indeed leads to collision avoidance.
+Conclusion and Next Steps
+We presented a novel decision algorithm for solving queries on deep neural networks with ReLU activation functions. The technique is based on extending the
+simplex algorithm to support the non-convex ReLUs in a way that allows their
+inputs and outputs to be temporarily inconsistent and then ﬁxed as the algorithm progresses. To guarantee termination, some ReLU connections may need
+to be split upon — but in many cases this is not required, resulting in an eﬃcient
+solution. Our success in verifying properties of the ACAS Xu networks indicates
+that the technique holds much potential for verifying real-world DNNs.
+In the future, we plan to increase the technique’s scalability. Apart from making engineering improvements to our implementation, we plan to explore better
+strategies for the application of the Reluplex rules, and to employ advanced con-
+ﬂict analysis techniques for reducing the amount of case-splitting required. Another direction is to provide better soundness guarantees without harming performance, for example by replaying ﬂoating-point solutions using precise arithmetic , or by producing externally-checkable correctness proofs . Finally,
+we plan to extend our approach to handle DNNs with additional kinds of layers.
+We speculate that the mechanism we applied to ReLUs can be applied to other
+piecewise linear layers, such as max-pooling layers.
+Acknowledgements. We thank Neal Suchy from the Federal Aviation Administration, Lindsey Kuper from Intel and Tim King from Google for their valuable
+comments and support. This work was partially supported by a grant from Intel.

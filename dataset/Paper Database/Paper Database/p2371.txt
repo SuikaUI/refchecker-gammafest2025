@@ -1,0 +1,270 @@
+Interactive, GPU-Based Level Sets for 3D Segmentation
+Aaron E. Lefohn, Joshua E. Cates, and Ross T. Whitaker
+Scientiﬁc Computing and Imaging Institute, University of Utah, Salt Lake City, UT 84112
+{lefohn,cates,whitaker}@sci.utah.edu
+Abstract. While level sets have demonstrated a great potential for 3D medical
+image segmentation, their usefulness has been limited by two problems. First,
+3D level sets are relatively slow to compute. Second, their formulation usually
+entails several free parameters which can be very difﬁcult to correctly tune for
+speciﬁc applications. This paper presents a tool for 3D segmentation that relies
+on level-set surface models computed at interactive rates on commodity graphics
+cards (GPUs). The interactive rates for solving the level-set PDE give the user immediate feedback on the parameter settings, and thus users can tune three separate
+parameters and control the shape of the model in real time. We have found that this
+interactivity enables users to produce good, reliable segmentation, as supported
+by qualitative and quantitative results.
+Introduction
+This paper describes a new, general-purpose segmentation tool that relies on interactive
+deformable models implemented as level sets. While level sets have demonstrated a
+great potential for 3D medical image segmentation, their usefulness has been limited
+by slow computation times combined with intensive parameter tuning. The proposed
+tool updates a level-set surface model at interactive rates on commodity graphics cards
+(GPUs), such as those that are commonly found on consumer-level personal computers.
+Wedemonstratetheeffectivenessofthistoolbyaquantitativecomparisontoaspecialized
+tool and the associated gold standard for a speciﬁc problem: brain tumor segmentation . This paper make the following contributions:
+– A 3D segmentation tool that uses a new level-set deformation solver to achieve
+interactive rates (approximately 15 times faster than previous solutions).
+– A mapping of the sparse, level-set computation to a GPU, a new numerical scheme
+for retaining a thin band structure in the solution, and a novel technique for dynamic
+memory management between the CPU and GPU.
+– Quantitative and qualitative evidence that interactive level-set models are effective
+for brain tumor segmentation.
+Background and Related Work
+Level Sets
+This paper relies on an implicit representation of deformable surface models called the
+method of level sets. The use of level sets has been widely documented in the medical
+R.E. Ellis and T.M. Peters (Eds.): MICCAI 2003, LNCS 2878, pp. 564–572, 2003.
+c⃝Springer-Verlag Berlin Heidelberg 2003
+Interactive, GPU-Based Level Sets for 3D Segmentation
+imaging literature, and several works give more comprehensive reviews of the method
+and the associated numerical techniques . Here we merely review the notation and
+describe the particular formulation that is relevant to this paper.
+An implicit model is a surface representation in which the surface consists of all
+points S = {¯x|φ(¯x) = 0}, where φ : ℜ3 →ℜ. Level-set methods relate the motion of
+that surface to a PDE on the volume, i.e. ∂φ/∂t = −∇φ · ¯v(t), where ¯v(t) describes
+the point-wise velocity of the surface. Within this framework one can implement a wide
+range of deformations by deﬁning an appropriate ¯v. For segmentation, the velocity often
+consists of a combination of two terms 
+αD(¯x) + (1 −α)∇· ∇φ
+where D is a data term that forces the model toward desirable features in the input data,
+the term ∇· (∇φ/|∇φ|) is the mean curvature of the surface, which forces the surface
+to have less area (and remain smooth), and α ∈ is a free parameter that controls
+the degree of smoothness in the solution.
+The behavior of the model is mostly characterized by the data term and how it relates
+to the image. Invariably, the data term introduces free parameters, and the proper tuning
+of those parameters, along with α, is critical to making the model behave in a desirable
+Fortheworkinthispaperwehavechosenaverysimplespeedfunctiontodemonstrate
+the effectiveness of interactivity in level-set solvers. The speed function at any one point
+is based solely on the input intensity I at that point:
+D(I) = ϵ −|I −T|,
+where T controls the brightness of the region to be segmented and ϵ controls the range
+of greyscale values around T that could be considered inside the object. Thus when
+the model lies on a voxel with a greyscale level between T −ϵ and T + ϵ, the model
+expands and otherwise it contracts. The speed term is gradual, and thus the effects of
+D diminish as the model approaches the boundaries of regions whose greyscale levels
+lie within the T ± ϵ range. Even with this simple scheme a user would have to specify
+three different parameters, T, ϵ, and α, as well as an initialization. This speed term is a
+simple approximation to a one-dimensional statistical classiﬁer, which assumes a single
+density (with noise) for the regions of interest.
+If a user were to initialize a model in a volume and use the speed term in eq (2)
+without the curvature term the results would be virtually the same as a simple ﬂood ﬁll
+over the region bounded by the upper and lower thresholds. However, the inclusion of
+the curvature term alleviates the critical leaking problem that arises when using ﬂood
+ﬁlling as a segmentation technique.
+The purpose of this paper is not to advocate for any one level-set formulation or
+speed function, but rather to address an issue that is relevant to virtually all level-set
+segmentation strategies; that is, a good segmentation depends on a proper speciﬁcation
+of free parameters and the initialization.
+Solving level-set PDEs on a volume requires proper numerical schemes and
+entails a signiﬁcant computational burden. Stability requires that the surface can progress
+at most a distance of one voxel at each iteration, and thus a large number of iterations
+A.E. Lefohn, J.E. Cates, and R.T. Whitaker
+Fig. 1. (a)A speed function based on image intensity causes the model to expand over regions with
+greyscale values within the speciﬁed range and contract otherwise. (b) Efﬁcient implementations
+of level sets entail computing the solution only near the moving wavefront.
+are required to compute signiﬁcant deformations. Efﬁcient algorithms for solving the
+general level-set equations rely on the observation that at any one time step the only parts
+of the solution that are important are those adjacent to the moving surface (near points
+where φ = 0). In light of this several authors have proposed numerical schemes
+that compute solutions for only those voxels that lie in a small number of layers adjacent
+to the surface as shown in Figure 1b. However, even with a narrow band of computation,
+updates rates with these algorithms using conventional processors on typical medical
+data sets (e.g. 2563 voxels) are not interactive.
+Graphics Processing Units
+GPUs have been developed primarily for the computer gaming industry, but over the last
+several years researchers have come to recognize them as low cost, high performance
+computing platforms.Two important trends in GPU development, increased programmability and higher precision arithmetic processing, have helped to foster new non-gaming
+applications.
+Graphics processors outperform central processing units (CPUs)—often by more
+than an order of magnitude—because of their streaming architecture and dedicated
+high-speed memory. In the streaming model of computation, arrays of input data are
+processed identically by the same computation kernel to produce output data streams.
+The GPU takes advantage of the data-level parallelism inherent in this model by having
+many identical processors execute the computation in parallel.
+This paper presents a GPU computational model that supports dynamic, sparse grid
+problems. These problems are difﬁcult to solve efﬁciently with GPUs for two reasons.
+The ﬁrst is that in order to take advantage of the GPU’s parallelism, the streams being
+processed must be large, contiguous blocks of data, and thus grid points near the level-set
+surface model must be packed into a small number of textures. The second difﬁculty is
+that the level set moves with each time step, and thus the packed representation must
+readily adapt to the changing position of the model. Section 3 describes how our design
+addresses these challenges.
+Interactive, GPU-Based Level Sets for 3D Segmentation
+Fig. 2. (a) The modern graphics processor computation pipeline. (b) The proposed method relies
+on packing active tiles into 2D texture—a compressed format.
+System Design and Implementation
+Interface and Usage
+Our system consists of a graphical user interface (GUI) that presents the user with two
+volume slices and a control panel. The ﬁrst slice window displays the current segmentation as a yellow line overlaid on top of the MRI data. The second slice viewing window
+displays a visualization of the speed function that clearly delineates the positive and
+negative regions. The GUI has controls for setting the three free speed parameters, a
+start/stop button to control the solver, and controls to save the 3D segmentation to ﬁle.
+The user can query greyscale values in the MRI slice viewer and create spherical surface
+models. A screen shot of our interface is shown in Fig. 3.
+GPU Level Set Solver Implementation
+This section gives a high-level description of our GPU level-set solver.A comprehensive
+description is available in Lefohn et al. .
+The efﬁcient solution of the level-set PDEs relies on updating only voxels that are
+on or near the isosurface. The narrow band and sparse ﬁeld methods achieve this by
+operating on sequences of heterogeneous operations. Like the narrow band and sparse
+ﬁeld CPU-based solvers, our sparse GPU level-set solver computes only those voxels
+near the isosurface. To run efﬁciently on GPUs, however, our solution must also have
+the following characteristics: efﬁciently updated texture-based data structures, no scatter
+Fig. 3. The user interface of our segmentation application. The center window shows a slice of the
+MRI volume overlaid with the current segmentation. The right window displays the sign of the
+speed function.
+A.E. Lefohn, J.E. Cates, and R.T. Whitaker
+write operations, and be highly data-parallel. We achieve these goals by decomposing
+the volume into a set of small 2D tiles (e.g. 16 × 16 pixels each). Only those tiles with
+non-zero derivatives are stored on the GPU (Fig. 2b). These active tiles are packed, in an
+arbitrary order, into a large 2D texture on the GPU. The 3D level-set PDE is computed
+directly on this compressed format.
+For each PDE time step update, the 3D neighborhoods of all pixels in the active tiles
+must be sampled from the compressed 2D compressed format. For each active tile, the
+CPU sends texture coordinates, i.e. memory addresses, to the GPU for each of the tiles
+that share a side or an edge in the 3D volume. Using these texture coordinates, the GPU
+performs neighborhood lookups to produce the complete set of partial derivatives (ﬁnite
+differences) used for the gradient and curvature calculations, which are in turn used to
+update values of φ.
+After the level-set embedding is updated, the GPU’s automatic mipmapping capabilities to create a bit vector image that summarizes the status of each tile. Each pixel
+in this coarse texture contains a bit code that identiﬁes if that tile, as well as any of its
+six cardinal neighbors, need to be active for the next time step. This small image (< 64
+kB) is read back by the CPU and used to update the data structures that track the active
+volume regions. The CPU then sends the texture coordinates and vertices for the new
+set of active tiles to the GPU, and the next PDE iteration is computed.
+This GPU-based level-set solver achieves a speedup of ten to ﬁfteen times over a
+highly-optimized, sparse-ﬁeld, CPU-based solver. All benchmarks were run on an Intel
+Xeon 1.7 GHz processor with 1 GB of RAM and an ATI Radeon 9700 Pro GPU. For the
+tumor segmentations performed in the user study, the GPU-based solver ran at 60-70
+time steps per second while the CPU version ran at 7-8 steps per second. The ﬁnal steps
+of the cerebral cortex segmentation shown in ﬁgure 5 ran at 4 steps per second on the
+GPU and 0.25 steps per second on the CPU.
+User Study
+The purpose of this study was to determine if our algorithm can produce volumetric
+delineations of brain tumor boundaries comparable to those done by experts (e.g. radiologists or neurosurgeons) using traditional hand-contouring. We applied our method to
+the problem of brain tumor segmentation using data from the Brain Tumor Segmentation
+Database, which is made available by the Harvard Medical School at the Brigham and
+Women’s Hospital (HBW) . The HBW database consists of ten 3D 1.5T MRI brain
+tumor patient datasets selected by a neurosurgeon as a representative sampling of a larger
+clinical database. For each of the ten cases, there are also four independent expert hand
+segmentations of one randomly selected 2D slice in the region of the tumor.
+We chose nine cases for our study: three meningioma (cases 1-3) and 6 low grade
+glioma (4-6, 8-10). One case, number 7, was omitted because a quick inspection showed
+it that its intensity structure was too complicated to be segmented by the proposed tool—
+such a problem remains as future work, as we will discuss in Section 5. We performed
+no preprocessing on the data, and there are no hidden parameters in this study—all
+parameters in our system were set by the users in real time, as they interacted with the
+data and the models.
+Interactive, GPU-Based Level Sets for 3D Segmentation
+Five users were selected from among the staff and students in our group and trained
+brieﬂy to use our software. We asked each user to delineate the full, 3D boundaries of the
+tumor in each of the nine selected cases. We set no time limit on the users and recorded
+their time to complete each tumor. None of our users were experts in reading radiological
+data. It was not our intention to test for tumor recognition (tissue classiﬁcation), but rather
+to test whether parameters could be selected for our algorithm to produce a segmentation
+which mimics those done by the experts. To control for tumor recognition, we allowed
+each user to refer to a single slice from an expert segmentation. Users were told to treat
+this hand segmentation slice as a guide for understanding the difference between tumor
+and non-tumor tissue. Our assumption is that an expert would not need such an example.
+We consider three factors in evaluating our segmentation method : validity of the
+results (accuracy), reproducibility of the results (precision), and efﬁciency of the method
+(time). To quantify accuracy we established a ground truth from the expert segmented
+slices using the STAPLE method . This method is essentially a sophisticated averaging scheme that accounts for systematic biases in the behavior of experts in order to
+generate a fuzzy ground truth (W) as well as sensitivity and speciﬁcity paramaters (p
+and q respectively) for each expert and each case. The ground truth segmentation values
+for each case are represented as an image of values between zero and one that indicates
+the probability of each pixel being in the tumor. Each subject generates a binary segmentation which, compared against the ground truth, gives values to obtain p and q for
+that subject. For our analysis we also considered a third metric, total correct fraction
+which is the total number of correctly classiﬁed pixels (weighted by W) as a percentage
+of the total size of the image.
+To assess interoperator precision in segmentations, we used the metric proposed
+by , which consists of pairwise comparisons of the cardinality of the intersection
+of the positive classiﬁcations divided by the cardinality of the union of positive classiﬁcations. To analyze efﬁciency, we calculated the average total time (user time plus
+processing time) taken for a segmentation.
+For a typical segmentation of a tumor using our tool a user scrolls through slices until
+they ﬁnd the location of the tumor. With a mouse, the user queries intensity values in
+the tumor and sets initial values for the parameters T and ϵ based on those intensity
+values. They initialize a sphere near or within the tumor and initiate deformation of
+that spherical model. As the model deforms the user scrolls through slices, observing
+its behavior and modifying parameters. Using the immediate feedback they get on the
+behavior of the model, they continue modifying parameters until the model boundaries
+appear to align with those of the tumor. In a typical 5 minute session, a user will modify
+the model parameters between 10 and 30 times.
+Figure 4 shows graphs of average p, q, and c values for the experts and the users in
+our study. Error bars represent the standard deviations of the associated values for the
+experts and the users in our study.
+A.E. Lefohn, J.E. Cates, and R.T. Whitaker
+Sensitivity
+Specificity
+Total Correct
+Case Number
+Fig. 4. Results from the user study in compare with expert hand contouring reveal an overall
+comparable performance with a tendency to underestimate the region of tumor.
+The performance of the experts and our users varies case by case, but in almost all
+cases the performance of our users was within the range of performances of the experts.
+The average correct fraction of our users was better than the experts in 4 out of 9 cases.A
+general trend is that our users tended to underestimate the tumor relative to the experts,
+as indicated by lower values of p. This is consistent with our experiences with hand
+segmentations and level set models— with hand contouring users tend to overestimate
+structures, and with level sets the curvature term tends to reduce the size of convex
+structures.
+The segmentations in our study show a substantially higher degree of precision
+than the expert hand segmentations. Mean precision across all users and cases was
+94.04% ± 0.04% while the mean precision across all experts and cases was 82.65% ±
+0.07%. Regarding efﬁciency, the average time to complete a segmentation (all users,
+all cases) was 6 ± 3minutes. Only 5% −10% of this time is spent processing the
+level-set surface. This compares favorably with the 3-5 hours required for a typical 3D
+segmentation done by hand.
+The accuracy and precision of subjects using our tool compares well with the automated brain tumor segmentation results of Kaus, et al. , who use a superset of the same
+datausedinourstudy.Theyreportanaveragecorrectvolumefractionof99.68%±0.29%,
+while the average correct volume fraction of our users was 99.78% ± 0.13%. Their
+method required similar average operator times (5-10 minutes), but unlike the proposed
+method their classiﬁcation approach required subsequent processing times of approxi-
+Fig. 5. (a) An expert hand segmentation of a tumor from the HBW database shows signiﬁcant
+inter-slice artifacts. (b) A 3D segmentation of the same tumor from one of the subjects in our
+study. (c) A segmentation of the cerebral cortex from a 256 x 256 x 175 MRI volume using the
+same tool took 6 minutes.
+Interactive, GPU-Based Level Sets for 3D Segmentation
+mately 75 minutes. That method, like many other segmentation methods discussed in the
+literature, includes a number of hidden parameters, which were not part of their analysis
+of timing or performance.
+The metrics requiring ground truth were computed on only a single 2D slice, which
+was extracted from the 3D segmentations, because of the scarcity of expert data. Our
+experience is that computer-aided segmentation tools perform relatively better for 3D
+segmentations because the hand contours typically show signs of inter-slice inconsistencies and fatigue. Figures 5a–b show a segmentation by an expert with hand contouring
+compared with a segmentation done by one of our subjects. Screen-captured movies of
+a user interacting with our system are available online at .
+Summary and Conclusions
+A careful implementation of a sparse level-set solver on a GPU provides a new tool for
+interactive 3D segmentation. Users can manipulate several paramaters simultaneously
+in order to ﬁnd a set of values that are appropriate for a particular segmentation task.
+The quantitative results of using this tool for brain tumor segmentation suggest that it is
+compares well with hand contouring and state-of-the-art automated methods. However,
+the tool as built and tested is quite general, and it has no hidden parameters. Thus, the
+same tool can be used to segment other anatomy (e.g. Figure 5c).
+The current limitations are mostly in the speed function and the interface. The speed
+function used in this paper is quite simple and easily extended, within the current framework, to include image edges, more complicated greyscale proﬁles, and vector-valued
+Acknowledgments. Thanks to the participants of our user study. We also thank Evan
+Hart, Mark Segal, Jeff Royal and Jason Mitchell at ATI for donating technical advice
+and hardware to this project. Simon Warﬁeld, Michael Kaus, Ron Kikinis, Peter Black
+and Ferenc Jolesz provided the tumor database. This work was supported by NSF grants
+ACI0089915 and CCR0092065 and NIH/NLM N01LM03503.

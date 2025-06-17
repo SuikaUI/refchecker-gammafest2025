@@ -1,0 +1,475 @@
+NHITS: Neural Hierarchical Interpolation for Time Series Forecasting
+Cristian Challu1*, Kin G. Olivares1*, Boris N. Oreshkin2, Federico Garza Ramirez3, Max
+Mergenthaler-Canseco3, Artur Dubrawski1
+1Auton Lab, School of Computer Science, Carnegie Mellon University, Pittsburgh, PA, USA
+2Unity Technologies, Labs, Montreal, QC, Canada
+3Nixtla, Pittsburgh, PA, USA
+{cchallu, kdgutier, awd}@cs.cmu.edu, , {federico, max}@nixtla.io
+Recent progress in neural forecasting accelerated improvements in the performance of large-scale forecasting systems.
+Yet, long-horizon forecasting remains a very difficult task. Two
+common challenges afflicting the task are the volatility of the
+predictions and their computational complexity. We introduce
+NHITS, a model which addresses both challenges by incorporating novel hierarchical interpolation and multi-rate data
+sampling techniques. These techniques enable the proposed
+method to assemble its predictions sequentially, emphasizing
+components with different frequencies and scales while decomposing the input signal and synthesizing the forecast. We
+prove that the hierarchical interpolation technique can efficiently approximate arbitrarily long horizons in the presence
+of smoothness. Additionally, we conduct extensive large-scale
+dataset experiments from the long-horizon forecasting literature, demonstrating the advantages of our method over the
+state-of-the-art methods, where NHITS provides an average
+accuracy improvement of almost 20% over the latest Transformer architectures while reducing the computation time by
+an order of magnitude (50 times). Our code is available at
+ 
+Introduction
+Long-horizon forecasting is critical in many important applications, including risk management and planning. Notable
+examples include power plant maintenance scheduling and planning for infrastructure construction , as well as early warning
+systems that help mitigate vulnerabilities due to extreme
+weather events . In healthcare,
+predictive monitoring of vital signs enables the detection of
+preventable adverse outcomes and application of life-saving
+interventions .
+Recently, neural time series forecasting has progressed in
+a few promising directions. First, the architectural evolution
+included adopting the attention mechanism and the rise of
+Transformer-inspired approaches , as
+well as the introduction of attention-free architectures composed of deep stacks of fully connected layers . All rights reserved.
+250 500 750 1000
+Horizon [H]
+Parameters [Millions]
+Time [Train Step / Seg]
+(a) Computational Cost
+250 500 750 1000
+Horizon [H]
+Performance [MAE]
+Log10 Scale
+(b) Prediction Errors
+100 150 200 250 300
+100 150 200 250 300
+Low freq latent
+100 150 200 250 300
+Prediction τ ∈ {t+1,..., t+H}
+High freq latent
+(c) Neural Hierarchical Interpolation
+Figure 1: (a) The computational costs in time and memory (b)
+and mean absolute errors (MAE) of the predictions of a high
+capacity fully connected model exhibit evident deterioration
+with growing forecast horizons. (c) Specializing a flexible
+model’s outputs in the different signal frequencies through
+hierarchical interpolation combined with multi-rate input
+processing offers a solution.
+2020; Olivares et al. 2021a). Both approaches are relatively
+easy to scale up in terms of capacity, compared to LSTMs,
+and have proven capable of capturing long-range dependencies. The attention-based approaches are generic as they can
+explicitly model direct interactions between every pair of
+input-output elements. Unsurprisingly, they happen to be the
+most computationally expensive. The architectures based on
+fully connected stacks implicitly capture input-output relationships and tend to be more compute-efficient. Second, both
+approaches have replaced the recurrent forecast generation
+strategy with the multi-step prediction strategy. Aside from
+The Thirty-Seventh AAAI Conference on Artificial Intelligence (AAAI-23)
+its convenient bias-variance benefits and robustness , the
+multi-step strategy has enabled the models to efficiently predict long sequences in a single forward pass .
+Despite all the recent progress, long-horizon forecasting
+remains challenging for neural networks because their unbounded expressiveness translates directly into excessive computational complexity and forecast volatility, both of which
+become especially pronounced in this context. For instance,
+both attention and fully connected layers scale quadratically
+in memory and computational cost with respect to the forecasting horizon length. Fig. 1 illustrates how forecasting
+errors and computation costs inflate dramatically with the
+growing forecasting horizon in the case of the fully connected
+architecture electricity consumption predictions. Attentionbased predictions show similar behavior.
+Neural long-horizon forecasting research has mostly
+focused on attention efficiency making self-attention
+sparse or
+local . In the same vein, attention has been
+cleverly redefined through locality-sensitive hashing or FFT .
+Although that research has led to incremental improvements
+in computing cost and accuracy, the silver bullet long-horizon
+forecasting solution is yet to be found. In this paper, we make
+a bold step in this direction by developing a novel forecasting
+approach that cuts long-horizon compute cost by an order
+of magnitude while simultaneously offering 16% accuracy
+improvements on a large array of multi-variate forecasting
+datasets compared to existing state-of-the-art Transformerbased techniques. We redefine existing fully-connected
+N-BEATS architecture by enhancing
+its input decomposition via multi-rate data sampling and
+its output synthesizer via multi-scale interpolation. Our
+extensive experiments show the importance of the proposed
+novel architectural components and validate significant
+improvements in the accuracy and computational complexity
+of the proposed algorithm.
+Our contributions are summarized below:
+1. Multi-Rate Data Sampling: We incorporate subsampling layers in front of fully-connected blocks, significantly reducing the memory footprint and the amount
+of computation needed, while maintaining the ability to
+model long-range dependencies.
+2. Hierarchical Interpolation: We enforce smoothness of
+the multi-step predictions by reducing the dimensionality
+of neural network’s prediction and matching its time scale
+with that of the final output via multi-scale hierarchical
+interpolation. This novel technique is not unique to our
+proposed model, and can be incorporated into different
+architectures.
+3. NHITS architecture: A novel way of hierarchically synchronizing the rate of input sampling with the scale of
+output interpolation across blocks, which induces each
+block to specialize in forecasting its own frequency band
+of the time-series signal.
+4. State-of-the-art results on six large-scale benchmark
+datasets from the long-horizon forecasting literature: electricity transformer temperature, exchange rate, electricity consumption, San Francisco bay area highway traffic,
+weather, and influenza-like illness.
+The remainder of this paper is structured as follows. First,
+we review the relevant literature. Second, we introduce notation and describe the methodology. After it, we describe and
+analyze our empirical findings. The last section concludes
+the paper.
+Related Work
+Neural forecasting. Over the past few years, deep forecasting methods have become ubiquitous in industrial forecasting systems, with examples in optimal resource allocation
+and planning in transportation , large ecommerce retail , or financial trading
+ . The evident success
+of the methods in recent forecasting competitions has renovated the interest within the academic community . In the context of multi-variate long-horizon
+forecasting, Transformer-based approaches have dominated
+the landscape in recent years, including Autoformer , an encoder-decoder model with decomposition capabilities and an approximation to attention based
+on Fourier transform, Informer , Transformer with MLP based multi-step prediction strategy, that
+approximates self-attention with sparsity, Reformer , Transformer that
+approximates attention with locality-sensitive hashing and
+LogTrans , Transformer with local/logsparse attention.
+Multi-step forecasting. Investigations of the bias/variance
+trade-off in multi-step forecasting strategies reveal that the
+direct strategy, which allocates a different model for each
+step, has low bias and high variance, avoiding error accumulation across steps, exhibited by the classical recursive strategy,
+but losing in terms of net model parsimony. Conversely, in
+the joint forecasting strategy, a single model produces forecasts for all steps in one shot, striking the perfect balance
+between variance and bias, avoiding error accumulation and
+leveraging shared model parameters .
+Multi-rate input sampling. Previous forecasting literature recognized challenges of extremely long horizon predictions, and proposed mixed data sampling regression to ameliorate the problem of parameter proliferation while preserving high-frequency temporal
+information. MIDAS regressions maintained the classic recursive forecasting strategy of linear auto-regressive models
+but defined a parsimonious fashion of feeding the inputs.
+Interpolation. Interpolation has been extensively used to
+augment the resolution of modeled signals in many fields
+such as signal and image processing . In
+time-series forecasting, its applications range from com-
+Forecast Period
+Backcast Period
+Model Input
+̂yt+1:t+H,ℓ
+Stack Input
+yt−L:t,s−1
+Global Forecast
+(model output)
+Stack Residual
+(to next stack)
+Block Input
+yt−L:t,ℓ−1
+Figure 2: NHITS architecture. The model is composed of several MLPs with ReLU nonlinearities. Blocks are connected via
+doubly residual stacking principle with the backcast ˜yt−L:t,ℓand forecast ˆyt+1:t+H,ℓoutputs of the ℓ-th block. Multi-rate input
+pooling, hierarchical interpolation and backcast residual connections together induce the specialization of the additive predictions
+in different signal bands, reducing memory footprint and compute time, improving architecture parsimony and accuracy.
+pleting unevenly sampled data and noise filters to fine-grained
+quantile-regressions with recurrent networks . To our knowledge, temporal interpolation has not been
+used to induce multi-scale hierarchical time-series forecasts.
+NHITS Methodology
+In this section, we describe our proposed approach, NHITS,
+whose high-level diagram and main principles of operation
+are depicted in Fig. 2. Our method extends the Neural Basis
+Expansion Analysis approach in several important respects, making it more accurate
+and computationally efficient, especially in the context of
+long-horizon forecasting. In essence, our approach uses multirate sampling of the input signal and multi-scale synthesis
+of the forecast, resulting in a hierarchical construction of
+forecast, greatly reducing computational requirements and
+improving forecasting accuracy.
+Similarly to N-BEATS, NHITS performs local nonlinear
+projections onto basis functions across multiple blocks. Each
+block consists of a multilayer perceptron (MLP), which learns
+to produce coefficients for the backcast and forecast outputs
+of its basis. The backcast output is used to clean the inputs of
+subsequent blocks, while the forecasts are summed to compose the final prediction. The blocks are grouped in stacks,
+each specialized in learning a different characteristic of the
+data using a different set of basis functions. The overall network input, yt−L:t, consists of L lags.
+NHITS is composed of S stacks, B blocks each. Each
+block contains an MLP predicting forward and backward
+basis coefficients. The next subsections describe the novel
+components of our architecture. Note that in the following,
+we skip the stack index s for brevity.
+Multi-Rate Signal Sampling
+At the input to each block ℓ, we propose to use a MaxPool
+layer with kernel size kℓto help it focus on analyzing components of its input with a specific scale. Larger kℓwill tend to
+cut more high-frequency/small-time-scale components from
+the input of the MLP, forcing the block to focus on analyzing
+large scale/low frequency content. We call this multi-rate
+signal sampling, referring to the fact that the MLP in each
+block faces a different effective input signal sampling rate.
+Intuitively, this helps the blocks with larger pooling kernel
+size kℓfocus on analyzing large scale components critical for
+producing consistent long-horizon forecasts.
+Additionally, multi-rate processing reduces the width of
+the MLP input for most blocks, limiting the memory footprint
+and the amount of computation as well as reducing the number of learnable parameters and hence alleviating the effects
+of overfitting, while maintaining the original receptive field.
+Given block ℓinput yt−L:t,ℓ(the input to the first block ℓ= 1
+is the network-wide input, yt−L:t,1 ≡yt−L:t), this operation
+can be formalized as follows:
+t−L:t,ℓ= MaxPool (yt−L:t,ℓ, kℓ)
+Non-Linear Regression
+Following subsampling, block ℓlooks at its input and nonlinearly regresses forward θf
+ℓand backward θb
+ℓinterpolation
+MLP coefficients that learns hidden vector hℓ∈RNh, which
+is then linearly projected:
+ℓ= LINEARf (hℓ)
+ℓ= LINEARb (hℓ)
+The coefficients are then used to synthesize backcast ˜yt−L:t,ℓ
+and forecast ˆyt+1:t+H,ℓoutputs of the block, via the process
+described below.
+Hierarchical Interpolation
+In most multi-horizon forecasting models, the cardinality
+of the neural network prediction equals the dimensionality
+of the horizon, H. For example, in N-BEATSi |θf
+in Transformer-based models, decoder attention layer crosscorrelates H output embeddings with L encoded input embeddings (L tends to grow with growing H). This leads to
+quick inflation in compute requirements and unnecessary
+explosion in model expressiveness as horizon H increases.
+We propose to use temporal interpolation to combat these
+issues. We define the dimensionality of the interpolation coefficients in terms of the expressiveness ratio rℓthat controls the number of parameters per unit of output time,
+ℓ| = ⌈rℓH⌉. To recover the original sampling rate and
+predict all H points in the horizon, we use temporal interpolation via the interpolation function g:
+ˆyτ,ℓ= g(τ, θf
+∀τ ∈{t + 1, . . . , t + H},
+˜yτ,ℓ= g(τ, θb
+∀τ ∈{t −L, . . . , t}.
+Interpolation can vary in smoothness, g ∈C0, C1, C2. In
+Appendix G we explore the nearest neighbor, piece-wise
+linear, and cubic alternatives. For concreteness, the linear
+interpolator g ∈C1, along with the time partition T = {t +
+1, t + 1 + 1/rℓ, . . . , t + H −1/rℓ, t + H}, is defined as
+g(τ, θ) = θ[t1] +
+θ[t2] −θ[t1]
+t∈T :t≤τ τ −t,
+t2 = t1 + 1/rℓ.
+The hierarchical interpolation principle is implemented
+by distributing expressiveness ratios across blocks in a manner synchronized with multi-rate sampling. Blocks closer to
+the input have smaller rℓand larger kℓ, implying that input
+blocks generate low-granularity signals via more aggressive
+interpolation, being also forced to look at more aggressively
+sub-sampled (and smoothed) signals. The resulting hierarchical forecast ˆyt+1:t+H is assembled by summing the outputs
+of all blocks, essentially composing it out of interpolations at
+different time-scale hierarchy levels.
+Since each block specializes on its own scale of input and
+output signal, this induces a clearly structured hierarchy of
+interpolation granularity, the intuition conveyed in Fig. 1 and
+3. We propose to use exponentially increasing expressiveness ratios to handle a wide range of frequency bands while
+controlling the number of parameters. Alternatively, each
+Prediction τ ∈{t + 1, … , t + H}
+Coefficients Scale
+Length=1/rℓ
+Coefficients θf
+Figure 3: NHITS composes its predictions hierarchically
+using blocks specializing on different frequencies, through
+expressiveness ratios, and interpolation. The coefficients are
+locally determined along the horizon, allowing NHITS to
+reconstruct non-periodic/stationary signals, beyond constant
+Fourier transform.
+stack can specialize in modeling a different known cycle of
+the time-series (weekly, daily etc.) using a matching rℓ(see
+Table A.3). Finally, the backcast residual formed at previous
+hierarchy scale is subtracted from the input of the next hierarchy level to amplify the focus of the next level block on
+signals outside of the band that has already been handled by
+the previous hierarchy members.
+ˆyt+1:t+H =
+ˆyt+1:t+H,ℓ
+yt−L:t,ℓ+1 = yt−L:t,ℓ−˜yt−L:t,ℓ
+Hierarchical interpolation has advantageous theoretical
+guarantees. We show in Appendix A, that it can approximate
+infinitely/dense horizons. As long as the interpolating
+function g is characterized by projections to informed
+multi-resolution functions Vw, and the forecast relationships
+are smooth.
+Neural Basis Approximation Theorem. Let a forecast
+mapping be Y(· | yt−L:t) : L →F, where the forecast
+functions F = {Y(τ) : →R} = L2( ) representing a infinite/dense horizon, are square integrable. If the
+multi-resolution functions Vw = {ϕw,h(τ) = ϕ(2w(τ −
+h)) | w ∈Z, h ∈2−w × [0, . . . , 2w]} can arbitrarily approximate L2( ). And the projection ProjVw(Y(τ)) varies
+smoothly on yt−L:t. Then the forecast mapping Y(· | yt−L:t)
+can be arbitrarily approximated by a neural basis expansion
+learning a finite number of multi-resolution coefficients ˆθw,h.
+That is ∀ϵ > 0,
+|Y(τ | yt−L:t) −
+ˆθw,h(yt−L:t)ϕw,h(τ)|dτ ≤ϵ (5)
+Examples of multi-resolution functions Vw = {ϕw,h(τ) =
+ϕ(2w(τ −h)) | w ∈Z, h ∈2−w × [0, . . . , 2w]} include
+piece-wise constants, piece-wise linear functions and splines
+with arbitrary approximation capabilities.
+Experimental Results
+We follow the experimental settings from . We first describe datasets, baselines and metrics used
+for the quantitative evaluation of our model. Table 1 presents
+our key results, demonstrating SoTA performance of our
+method relative to existing work. We then carefully describe
+the details of training and evaluation setups. We conclude the
+section by describing ablation studies.
+All large-scale datasets used in our empirical studies are
+publicly available and have been used in neural forecasting
+literature, particularly in the context of long-horizon . Table
+A1 summarizes their characteristics. Each set is normalized
+with the train data mean and standard deviation.
+Electricity Transformer Temperature. The ETTm2
+dataset measures an electricity transformer from a region
+of a province of China including oil temperature and variants of load (such as high useful load and high useless load)
+from July 2016 to July 2018 at a fifteen minutes frequency.
+Exchange-Rate. The Exchange dataset is a collection of
+daily exchange rates of eight countries relative to the US
+dollar. The countries include Australia, UK, Canada, Switzerland, China, Japan, New Zealand and Singapore from 1990 to
+2016. Electricity. The ECL dataset reports the fifteen minute
+electricity consumption (KWh) of 321 customers from 2012
+to 2014. For comparability, we aggregate it hourly. San Francisco Bay Area Highway Traffic. This TrafficL dataset
+was collected by the California Department of Transportation,
+it reports road hourly occupancy rates of 862 sensors, from
+January 2015 to December 2016. Weather. This Weather
+dataset contains the 2020 year of 21 meteorological measurements recorded every 10 minutes from the Weather Station
+of the Max Planck Biogeochemistry Institute in Jena, Germany. Influenza-like illness. The ILI dataset reports weekly
+recorded influenza-like illness (ILI) patients from Centers for
+Disease Control and Prevention of the United States from
+2002 to 2021. It is a ratio of ILI patients vs. the week’s total.
+Evaluation Setup
+We evaluate the accuracy of our approach using mean absolute error (MAE) and mean squared error (MSE) metrics,
+which are well-established in the literature , for varying horizon lengths H:
+(yτ −ˆyτ)2 ,
+Note that for multivariate datasets, our algorithm produces
+forecast for each feature in the dataset and metrics are averaged across dataset features. Since our model is univariate,
+each variable is predicted using only its own history, yt−L:t,
+as input. Datasets are partitioned into train, validation and
+test splits. Train split is used to train model parameters, validation split is used to tune hyperparameters, and test split
+is used to compute metrics reported in Table 1. Appendix C
+Horizon [H]
+Computational Time
+[Log10 Scale, Seconds]
+Autoformer
+Transformer
+(a) Time Efficiency
+Horizon [H]
+Parameters
+[Millions]
+(b) Memory Efficiency
+Figure 4: Computational efficiency comparison. NHITS exhibits the best training time compared to Transformer-based
+and fully connected models, and smallest memory footprint.
+shows partitioning into train, validation and test splits: seventy, ten, and twenty percent of the available observations
+respectively, with the exception of ETTm2 that uses twenty
+percent as validation.
+Key Results
+We compare NHITS to the following SoTA multivariate baselines: (1) FEDformer , (2)
+Autoformer , (3) Informer , (4) Reformer and (5) LogTrans . Additionally, we
+consider the univariate baselines: (6) DilRNN and (7) auto-ARIMA .
+Forecasting Accuracy. Table 1 summarizes the multivariate forecasting results. NHITS outperforms the best baseline,
+with average relative error decrease across datasets and horizons of 14% in MAE and 16% in MSE. NHITS maintains a
+comparable performance to other state-of-the-art methods for
+the shortest measured horizon (96/24), while for the longest
+measured horizon (720/60) decreases multivariate MAE by
+11% and MSE by 17%. We complement the key results in
+Table 1, with the additional univariate forecasting experiments in Appendix F, again demonstrating state-of-the-art
+performance against baselines.
+Computational Efficiency. We measure the computational
+training time of NHITS, N-BEATS and Transformer-based
+methods in the multivariate setting and show compare in Figure 4. The experiment monitors the whole training process
+for the ETTm2 dataset. For the Transformer-based models we
+used hyperparameters reported in . Compared
+to the Transformer-based methods, NHITS is 45× faster than
+Autoformer. In terms of memory, NHITS has less than
+26% of the parameters of the second-best alternative since it
+scales linearly with respect to the input’s length. Compared
+to the original N-BEATS, our method is 1.26× faster and requires only 54% of the parameters. Finally, while NHITS is
+an univariate model, it has global (shared) parameters for all
+time-series in the dataset. Just like , our
+experiments (Appendix I) show that NHITS maintains constant parameter/training computational complexity regarding
+dataset’s size.
+Autoformer
+Table 1: Main empirical results in long-horizon forecasting setup, lower scores are better. Metrics are averaged over eight runs,
+best results are highlighted in bold. In Appendix E we complement the main results with standard deviations.
+Prediction τ ∈ {t+1,..., t+H}
+(a) hie. interp., multi-rate sampling
+Prediction τ ∈ {t+1,..., t+H}
+(b) No hie. interp., multi-rate sampling
+Figure 5: ETTm2 and 720 ahead forecasts using NHITS (left panel), NHITS with hierarchical linear interpolation and multi-rate
+sampling removed (right panel). The top row shows the original signal and the forecast. The second, third and fourth rows show
+the forecast components for each stack. The last row shows the residuals, y −ˆy. In (a), each block shows scale specialization,
+unlike (b), in which signals are not interpretable.
+Table 2: Empirical evaluation of long multi-horizon multivariate forecasts for NHITS with/without enhancements. MAE
+for predictions averaged over eight runs, and five datasets.
+Training and Hyperparameter Optimization
+We consider a minimal search space. We tune the kernel size
+for multi-rate sampling from Equation (1) and the number of
+coefficients from Equation (2), some matching common seasonalities and others exponentially increasing. Additionally,
+we tune the random seed to escape underperforming local
+minima. Details are reported in Table A3 in Appendix D.
+During the hyperparameter optimization phase, we measure MAE on the validation set and use a Bayesian optimization library , with 20
+iterations. We use the optimal configuration based on the validation loss to make predictions on the test set. We refer to the
+combination of hyperparameter optimization and test prediction as a run. NHITS is implemented in PyTorch and trained using ADAM optimizer , MAE loss, batch size 256 and initial learning rate of
+1e-3, halved three times across the training procedure. All our
+experiments are conducted on a GeForce RTX 2080 GPU.
+Ablation Studies
+We believe that the advantages of the NHITS architecture are
+rooted in its multi-rate hierarchical nature. Fig. 5 shows a
+qualitative comparison of NHITS with and without hierarchical interpolation/multi-rate sampling components. Unlike the
+control model, we clearly see NHITS developing the ability
+to produce interpretable forecast decomposition providing
+valuable information about trends and seasonality in separate
+channels. Appendix G presents the decomposition for the
+different interpolation techniques.
+We support our qualitative conclusion with quantitative
+results. We define the following set of alternative models:
+NHITS2 only hierarchical interpolation, NHITS3 only multirate sampling, NHITS4 no multi-rate sampling or interpolation ), finally N-BEATSi, the interpretable version
+of the N-BEATS ). Tab. 2 clearly
+shows that combining both proposed components results in
+the best performance, emphasizing their complementary nature in long-horizon forecasting. We see that the original
+N-BEATS is consistently worse, especially the N-BEATSi.
+The advantages of multi-rate sampling, and interpolation for
+long-horizon forecasting, are not limited to the NHITS architecture. In Appendix H we demonstrate how adding them to
+a DilRNN improves its performance.
+Additional ablation studies are reported in Appendix
+G. The MaxPool multi-rate sampling wins over Average-
+Pool. Linear interpolation wins over nearest neighbor and
+cubic. Finally and most importantly, we show that the order in which hierarchical interpolation is implemented matters significantly. The best configuration is to have the lowfrequency/large-scale components synthesized and removed
+from analysis first, followed by more fine-grained modeling
+of high-frequency/intermittent signals.
+Discussion of Findings
+Our results indicate the complementarity and effectiveness of
+multi-rate sampling and hierarchical interpolation for longhorizon time-series forecasting. Table 2 indicates that these
+components enforce a useful inductive bias compared to both
+the free-form model NHITS4 (plain fully connected architecture) and the parametric model N-BEATSi (polynomial
+trend and sinusoidal seasonality used as basis functions in two
+respective stacks). The latter provides a detrimental inductive
+bias for long-horizon forecasting. We barely scratched the
+surface in the right direction and further progress is possible using advanced multi-scale processing approaches in the
+forecasting context, motivating further research.
+NHITS outperforms SoTA baselines and provides an interpretable non-linear decomposition. Fig. 1 and 5 showcase
+NHITS perfectly specializing and reconstructing latent harmonic signals from synthetic and real data respectively. This
+novel interpretable decomposition can provide insights to
+users, improving their confidence in high-stakes applications
+like healthcare. Finally, NHITS hierarchical interpolation is
+connected to Wavelet’s multi-resolution analysis . Replacing the interpolation functions with orthogonal
+Wavelet spaces is a possible research line.
+Our study questions the effectiveness of existing longhorizon multi-variate forecasting approaches, as all of them
+are substantially outperformed by our univariate algorithm.
+If these approaches underperform due to overfitting problems
+at the level of marginals, the integration of our approach with
+Transformer-inspired architectures is a promising research
+direction as Appendix F results suggest. However, there is
+a chance that existing approaches underperform due to their
+inability to integrate information from multiple variables,
+which clearly hints at possibly untapped research potential.
+Whichever is the case, we believe our results provide a strong
+guidance signal and a valuable baseline for future research in
+the area of long-horizon multivariate forecasting.
+Conclusions
+We proposed a novel neural forecasting algorithm NHITS
+that combines two complementary techniques, multi-rate input sampling, and hierarchical interpolation, to produce drastically improved, interpretable, and computationally efficient
+long-horizon time-series predictions. Our model, operating
+in the univariate regime and accepting only the predicted
+time-series history, significantly outperforms all previous
+Transformer-based multi-variate models using an order of
+magnitude less computation. This sets a new baseline for all
+ensuing multivariate work on six popular datasets and motivates research to effectively use information across variables.
+Acknowledgements
+This work was partially supported by the Defense Advanced Research Projects Agency (award FA8750-17-2-
+0130), the National Science Foundation (grant 2038612), the
+Space Technology Research Institutes grant from NASA’s
+Space Technology Research Grants Program, the U.S. Department of Homeland Security (award 18DN-ARI-00031),
+and by the U.S. Army Contracting Command (contracts
+W911NF20D0002 and W911NF22F0014 delivery order #4).
+Thanks to Mengfei Cao for in-depth discussion and comments on the method, and Kartik Gupta for his insights on
+the connection of NHITS with Wavelet’s theory. The authors
+are also grateful to Stefania La Vattiata for her assistance in
+the upbeat visualization of the Neural Hierarchical Interpolation for Time Series method.

@@ -1,0 +1,611 @@
+Collective Classiﬁcation in Network Data
+Prithviraj Sen, Galileo Namata, Mustafa Bilgic, Lise Getoor
+University of Maryland, College Park
+Brian Gallagher, Tina Eliassi-Rad
+Lawrence Livermore National Laboratory
+ 
+Numerous real-world applications produce networked data such as web data
+(hypertext documents connected via hyperlinks) and communication networks (people connected via communication links). A recent focus in machine learning research has been to extend traditional machine learning classiﬁcation techniques to
+classify nodes in such data. In this report, we attempt to provide a brief introduction to this area of research and how it has progressed during the past decade.
+We introduce four of the most widely used inference algorithms for classifying
+networked data and empirically compare them on both synthetic and real-world
+Introduction
+Networks have become ubiquitous. Communication networks, ﬁnancial transaction
+networks, networks describing physical systems, and social networks are all becoming
+increasingly important in our day-to-day life. Often, we are interested in models of how
+objects in the network inﬂuence each other (e.g., who infects whom in an epidemiological network), or we might want to predict an attribute of interest based on observed
+attributes of objects in the network (e.g., predicting political afﬁliations based on online
+purchases and interactions), or we might be interested in identifying important links in
+the network (e.g., in communication networks). In most of these scenarios, an important step in achieving our ﬁnal goal, that either solves the problem completely or in
+part, is to classify the objects in the network.
+Given a network and an object o in the network, there are three distinct types of
+correlations that can be utilized to determine the classiﬁcation or label of o:
+1. The correlations between the label of o and the observed attributes of o.
+2. The correlations between the label of o and the observed attributes (including
+observed labels) of objects in the neighborhood of o.
+NEIGHBOR LABELS
+Aggregation
+NEIGHBOR LABELS
+Figure 1: A small webpage classiﬁcation problem. Each box denotes a webpage, each
+directed edge between a pair of boxes denotes a hyperlink, each oval node denotes a
+random variable, each shaded oval denotes an observed variable whereas an unshaded
+oval node denotes an unobserved variable whose value needs to be predicted. Assume
+that the set of label values is L = {′SH′,′ CH′}. The ﬁgure shows a snapshot during a
+run of ICA. Assume that during the last ICA labeling iteration we chose the following
+labels: y1 =′ SH′ and y2 =′ CH′. a′
+2 show what may happen if we try to
+encode the respective values into vectors naively, i.e., we get variable-length vectors.
+The vectors a1 and a2 obtained after applying count aggregation shows one way of
+getting around this issue to obtain ﬁxed-length vectors. See text for more explanation.
+3. The correlations between the label of o and the unobserved labels of objects in
+the neighborhood of o.
+Collective classiﬁcation refers to the combined classiﬁcation of a set of interlinked
+objects using all three types of information described above. Note that, sometimes
+the phrase relational classiﬁcation is used to denote an approach that concentrates on
+classifying network data by using only the ﬁrst two types of correlations listed above.
+However, in many applications that produce data with correlations between labels of
+interconnected objects (a phenomenon sometimes referred to as relational autocorrelation ) labels of the objects in the neighborhood are often unknown as well. In
+such cases, it becomes necessary to simultaneously infer the labels for all the objects
+in the network.
+Within the machine learning community, classiﬁcation is typically done on each
+object independently, without taking into account any underlying network that connects the objects. Collective classiﬁcation does not ﬁt well into this setting. For instance, in the webpage classiﬁcation problem where webpages are interconnected with
+hyperlinks and the task is to assign each webpage with a label that best indicates its
+topic, it is common to assume that the labels on interconnected webpages are correlated. Such interconnections occur naturally in data from a variety of applications such
+as bibliographic data , email networks and social networks . Traditional
+classiﬁcation techniques would ignore the correlations represented by these interconnections and would be hard pressed to produce the classiﬁcation accuracies possible
+using a collective classiﬁcation approach.
+Even though traditional exact inference algorithms such as variable elimination
+ and the junction tree algorithm harbor the potential to perform collective
+classiﬁcation, they are practical only when the graph structure of the network satisﬁes
+certain conditions. In general, exact inference is known to be an NP-hard problem
+and there is no guarantee that real-world network data satisfy the conditions that make
+exact inference tractable for collective classiﬁcation. As a consequence, most of the research in collective classiﬁcation has been devoted to the development of approximate
+inference algorithms.
+In this report we provide an introduction to four popular approximate inference
+algorithms used for collective classiﬁcation, iterative classiﬁcation, Gibbs sampling,
+loopy belief propagation and mean-ﬁeld relaxation labeling. We provide an outline of
+the basic algorithms by providing pseudo-code, explain how one could apply them to
+real-world data, provide theoretical justiﬁcations (if there exist any), and discuss issues
+such as feature construction and various heuristics that may lead to improved classi-
+ﬁcation accuracy. We provide case studies, on both real-world and synthetic data, to
+demonstrate the strengths and weaknesses of these approaches. All of these algorithms
+have a rich history of development and application to various problems relating to collective classiﬁcation and we provide a brief discussion of this when we examine related
+work. Collective classiﬁcation has been an active ﬁeld of research for the past decade
+and as a result, there are numerous other approximate inference algorithms besides the
+four we describe here. We provide pointers to these works in the related work section. In the next section, we begin by introducing the required notation and deﬁne the
+collective classiﬁcation problem formally.
+Collective Classiﬁcation: Notation and Problem Definition
+Collective classiﬁcation is a combinatorial optimization problem, in which we are
+given a set of nodes, V = {V1, . . . , Vn} and a neighborhood function N, where
+Ni ⊆V \ {Vi}, which describes the underlying network structure. Each node in V
+is a random variable that can take a value from an appropriate domain. V is further
+divided into two sets of nodes: X, the nodes for which we know the correct values
+(observed variables) and, Y, the nodes whose values need to be determined. Our task
+is to label the nodes Yi ∈Y with one of a small number of labels, L = {L1, . . . , Lq};
+we’ll use the shorthand yi to denote the label of node Yi.
+We explain the notation further using a webpage classiﬁcation example that will
+serve as a running example throughout the report. Figure 1 shows a network of web-
+pages with hyperlinks. In this example, we will use the words (and phrases) contained
+in the webpages as local attributes. For brevity, we abbreviate the local attributes, thus,
+‘ST’ stands for “student”, ‘CO’ stands for “course”, ‘CU’ stands for “curriculum” and
+‘AI’ stands for “Artiﬁcial Intelligence”. Each webpage is indicated by a box, the corresponding topic of the webpage is indicated by an ellipse inside the box, and each word
+in the webpage is represented using a circle inside the box. The observed random variables X are shaded whereas the unobserved ones Y are not. We will assume that the
+domain of the unobserved label variables L, in this case, is a set of two values: “student homepage” (abbreviated to ‘SH’) and “course homepage” (abbreviated to ‘CH’).
+Figure 1 shows a network with two unobserved variables (Y1 and Y2), which require
+prediction, and seven observed variables (X3, X4, X5, X6, X7, X8 and X9). Note that
+some of the observed variables happen to be labels of webpages (X6 and X8) for which
+we know the correct values. Thus, from the ﬁgure, it is easy to see that the webpage
+W1, whose unobserved label variable is represented by Y1, contains two words ‘ST’
+and ‘CO’ and hyperlinks to webpages W2, W3 and W4.
+As mentioned in the introduction, due to the large body of work done in this area
+of research, we have a number of approaches for collective classiﬁcation. At a broad
+level of abstraction, these approaches can be divided into two distinct types, one in
+which we use a collection of unnormalized local conditional classiﬁers and one where
+we deﬁne the collective classiﬁcation problem as one global objective function to be
+optimized. We next describe these two approaches and, for each approach, we describe
+two approximate inference algorithms. For each topic of discussion, we will try to
+mention the relevant references so that the interested reader can follow up for a more
+in-depth view.
+Approximate Inference Algorithms for Approaches
+based on Local Conditional Classiﬁers
+Two of the most commonly used approximate inference algorithms following this approach are the iterative classiﬁcation algorithm (ICA) and gibbs sampling (GS), and
+we next describe these in turn.
+Iterative Classiﬁcation
+The basic premise behind ICA is extremely simple. Consider a node Yi ∈Y whose
+value we need to determine and suppose we know the values of all the other nodes in its
+neighborhood Ni (note that Ni can contain both observed and unobserved variables).
+Then, ICA assumes that we are given a local classiﬁer f that takes the values of Ni
+as arguments and returns the best label value for Yi from the class label set L. For
+local classiﬁers f that do not return a class label but a goodness/likelihood value given
+a set of attribute values and a label, we simply choose the label that corresponds to the
+maximum goodness/likelihood value; in other words, we replace f with argmaxl∈Lf.
+This makes the local classiﬁer f an extremely ﬂexible function and we can use anything
+ranging from a decision tree to an SVM in its place. Unfortunately, it is rare in practice
+that we know all values in Ni which is why we need to repeat the process iteratively,
+in each iteration, labeling each Yi using the current best estimates of Ni and the local
+classiﬁer f, and continuing to do so until the assignments to the labels stabilize.
+Algorithm 1 Iterative Classiﬁcation Algorithm (ICA)
+for each node Yi ∈Y do // bootstrapping
+// compute label using only observed nodes in Ni
+compute ⃗ai using only X ∩Ni
+yi ←f(⃗ai)
+repeat // iterative classiﬁcation
+generate ordering O over nodes in Y
+for each node Yi ∈O do
+// compute new estimate of yi
+compute ⃗ai using current assignments to Ni
+yi ←f(⃗ai)
+until all class labels have stabilized or a threshold number of iterations have elapsed
+Most local classiﬁers are deﬁned as functions whose argument consists of a ﬁxedlength vector of attribute values. Going back to the example we introduced in the last
+section in Figure 1, assume that we are looking at a snapshot of the state of the labels
+after a few ICA iterations have elapsed and the label values assigned to Y1 and Y2 in
+the last iteration are ‘SH’ and ‘CH’, respectively. ⃗a′
+1 in Figure 1 denotes one attempt
+to pool all values of N1 into one vector. Here, the ﬁrst entry in ⃗a′
+1 corresponds to the
+ﬁrst neighbor of Y1 is a ‘1’ denoting that Y1 has a neighbor that is the word ‘ST’ (X3),
+and so on. Unfortunately, this not only requires putting an ordering on the neighbors,
+but since Y1 and Y2 have a different number of neighbors, this type of encoding results
+1 consisting of a different number of entries than ⃗a′
+2. Since the local classiﬁer can
+take only vectors of a ﬁxed length, this means we cannot use the same local classiﬁer
+to classify both ⃗a′
+A common approach to circumvent such a situation is to use an aggregation operator such as count or mode. Figure 1 shows the two vectors ⃗a1 and ⃗a2 that are
+obtained by applying the count operator to ⃗a′
+2, respectively. The count operator simply counts the number of neighbors assigned ‘SH’ and ‘CH’ and adds these
+entries to the vectors. Thus we get one new value for each entry in the set of label
+values. Assuming that the set of label values does not change from one unobserved
+node to another, this results in ﬁxed-length vectors which can now be classiﬁed using
+the same local classiﬁer. Thus, for instance, ⃗a1 contains two entries, besides the entries
+corresponding to the local word attributes, encoding that Y1 has one neighbor labeled
+‘SH’ (X8) and two neighbors currently labeled ‘CH’ (Y2 and X6). Algorithm 1 depicts
+the ICA algorithm as pseudo-code where we use ⃗ai to denote the vector encoding the
+values in Ni obtained after aggregation. Note that in the ﬁrst ICA iteration, all labels
+yi are undeﬁned and to initialize them we simply apply the local classiﬁer to the observed attributes in the neighborhood of Yi, this is referred to as “bootstrapping” in
+Algorithm 1.
+Gibbs Sampling
+Gibbs sampling (GS) is widely regarded as one of the most accurate approximate
+inference procedures. It was originally proposed in Geman & Geman in the context of image restoration. Unfortunately, it is also very slow and a common issue while
+implementing GS is to determine when the procedure has converged. Even though
+there are tests that can help one determine convergence, they are usually expensive or
+complicated to implement.
+Due to the issues with traditional GS, researchers in collective classiﬁcation use a simpliﬁed version where they assume, just like in the case of ICA, that we
+have access to a local classiﬁer f that can be used to estimate the conditional probability distribution of the labels of Yi given all the values for the nodes in Ni. Note that,
+unlike traditional GS, there is no guarantee that this conditional probability distribution is the correct conditional distribution to be sampling from. At best, we can only
+assume that the conditional probability distribution given by the local classiﬁer f is
+an approximation of the correct conditional probability distribution. Neville & Jensen
+ provide more discussion and justiﬁcation for this line of thought in the context of
+relational dependency networks, where they use a similar form of GS for inference.
+The pseudo-code for GS is shown in Algorithm 2. The basic idea is to sample for
+the best label estimate for Yi given all the values for the nodes in Ni using local classiﬁer f for a ﬁxed number of iterations (a period known as “burn-in”). After that, not
+only do we sample for labels for each Yi ∈Y but we also maintain count statistics as to
+how many times we sampled label l for node Yi. After collecting a predeﬁned number
+of such samples, we output the best label assignment for node Yi by choosing the label
+that was assigned the maximum number of times to Yi while collecting samples. For
+all our experiments (that we report later) we set burn-in to 200 iterations and collected
+1000 samples.
+Feature Construction and Further Optimizations
+One of the beneﬁts of both ICA and GS is the fact that it is fairly simple to plug in
+any local classiﬁer. Table 1 depicts the various local classiﬁers that have been used
+in the past. There is some evidence to indicate that some local classiﬁers tend to produce higher accuracies than others, at least in the application domains where such
+experiments have been conducted. For instance, Lu & Getoor report that on bibliography datasets and webpage classiﬁcation problems logistic regression outperforms
+na¨ıve Bayes.
+Recall that, to represent the values of Ni, we described the use of an aggregation
+operator. In the example, we used count to aggregate values of the labels in the
+neighborhood but count is by no means the only aggregation operator available. Past
+research has used a variety of aggregation operators including minimum, maximum,
+mode, exists and proportion. Table 2 depicts various aggregation operators
+and the systems that used these operators. The choice of which aggregation operator to
+use depends on the application domain and relates to the larger question of relational
+Algorithm 2 Gibbs sampling algorithm (GS)
+for each node Yi ∈Y do // bootstrapping
+// compute label using only observed nodes in Ni
+compute ⃗ai using only X ∩Ni
+yi ←f(⃗ai)
+for n=1 to B do // burn-in
+generate ordering O over nodes in Y
+for each node Yi ∈O do
+compute ⃗ai using current assignments to Ni
+yi ←f(⃗ai)
+for each node Yi ∈Y do // initialize sample counts
+for label l ∈L do
+c[i, l] = 0
+for n=1 to S do // collect samples
+generate ordering O over nodes in Y
+for each node Yi ∈O do
+compute ⃗ai using current assignments to Ni
+yi ←f(⃗ai)
+c[i, yi] ←c[i, yi] + 1
+for each node Yi ∈Y do // compute ﬁnal labels
+yi ←argmaxl∈Lc[i, l]
+feature construction where we are interested in determining which features to use so
+that classiﬁcation accuracy is maximized. In particular, there is some evidence to indicate that new attribute values derived from the graph structure of the network in the
+data, such as the betweenness centrality, may be beneﬁcial to the accuracy of the classiﬁcation task . Within the inductive logic programming community, aggregation
+has been studied as a means for propositionalizing a relational classiﬁcation problem
+ . Within the statistical relational learning community, Perlich and Provost
+ have studied aggregation extensively and Popescul and Ungar Popescul & Ungar have worked on feature construction using techniques from inductive logic
+programming.
+Other aspects of ICA that have been the subject of investigation include the ordering strategy to determine in which order to visit the nodes to relabel in each ICA
+iteration. There is some evidence to suggest that ICA is fairly robust to a number of
+simple ordering strategies such as random ordering, visiting nodes in ascending order
+of diversity of its neighborhood class labels and labeling nodes in descending order
+local classiﬁer used
+Neville & Jensen 
+na¨ıve Bayes
+Lu & Getoor 
+logistic regression
+Jensen, Neville, & Gallagher 
+na¨ıve Bayes,
+decision trees
+Macskassy & Provost 
+na¨ıve Bayes,
+logistic regression,
+weighted-vote
+relational neighbor,
+class distribution
+relational neighbor
+McDowell, Gupta, & Aha 
+na¨ıve Bayes,
+k-nearest neighbors
+Table 1: Summary of local classiﬁers used by previous work in conjunction with ICA
+of label conﬁdences . However, there is also some evidence that certain modiﬁcations to the basic ICA procedure tend to produce improved classiﬁcation accuracies.
+For instance, both Neville & Jensen and McDowell, Gupta, & Aha propose
+a strategy where only a subset of the unobserved variables are utilized as inputs for
+feature construction. More speciﬁcally, in each iteration, they choose the top-k most
+conﬁdent predicted labels and use only those unobserved variables in the following
+iteration’s predictions, thus ignoring the less conﬁdent predicted labels. In each subsequent iteration they increase the value of k so that in the last iteration all nodes are
+used for prediction. McDowell et al. report that such a “cautious” approach leads to
+improved accuracies.
+Approximate Inference Algorithms for Approaches
+based on Global Formulations
+An alternate approach to performing collective classiﬁcation is to deﬁne a global objective function to optimize. In what follows, we will describe one common way of
+deﬁning such an objective function and this will require some more notation.
+We begin by deﬁning a pairwise Markov random ﬁeld (pairwise MRF) . Let
+G = (V, E) denote a graph of random variables as before where V consists of two
+types of random variables, the unobserved variables, Y, which need to be assigned
+values from label set L, and observed variables X whose values we know. Let Ψ
+denote a set of clique potentials. Ψ contains three distinct types of functions:
+• For each Yi ∈Y, ψi ∈Ψ is a mapping ψi : L →ℜ≥0, where ℜ≥0 is the set of
+non-negative real numbers.
+• For each (Yi, Xj) ∈E, ψij ∈Ψ is a mapping ψij : L →ℜ≥0.
+aggr. operators
+PRMs, Friedman et al. 
+mode, count,
+RMNs, Taskar, Abbeel, & Koller 
+MLNs, Richardson & Domingos 
+Lu & Getoor 
+mode, count,
+Macskassy & Provost 
+Gupta, Diwan, & Sarawagi 
+mode, count
+McDowell, Gupta, & Aha 
+Table 2: A list of systems and the aggregation operators they use to aggregate neighborhood class labels. The systems include probabilistic relational models (PRMs),
+relational Markov networks (RMNs) and Markov logic networks (MLNs). The aggregation operators include Mode, which is the most common class label, prop which
+is the proportion of each class in the neighborhood, count, which is the number of
+each class label, and exists, which is an indicator for each class label. SQL denotes
+the standard structured query language for databases and all aggregation operators it
+includes and, FOL stands for ﬁrst order logic.
+• For each (Yi, Yj) ∈E, ψij ∈Ψ is a mapping ψij : L × L →ℜ≥0.
+Let x denote the values assigned to all the observed variables in G and let xi denote the value assigned to Xi. Similarly, let y denote any assignment to all the unobserved variables in G and let yi denote a value assigned to Yi.
+For brevity of
+notation we will denote by φi the clique potential obtained by computing φi(yi) =
+(Yi,Xj)∈E ψij(yi). We are now in a position to deﬁne a pairwise MRF.
+Deﬁnition 1. A pairwise Markov random ﬁeld (MRF) is given by a pair ⟨G, Ψ⟩where
+G is a graph and Ψ is a set of clique potentials with φi and ψij as deﬁned above. Given
+an assignment y to all the unobserved variables Y, the pairwise MRF is associated
+with the probability distribution P(y|x) =
+Yi∈Y φi(yi) Q
+(Yi,Yj)∈E ψij(yi, yj)
+where x denotes the observed values of X and Z(x) = P
+Yi∈Y φi(y′
+(Yi,Yj)∈E ψij(y′
+The above notation is further explained in Figure 2 where we augment the running
+example introduced earlier by adding clique potentials. MRFs are deﬁned on undirected graphs and thus we have dropped the directions on all the hyperlinks in the
+example. In Figure 2, ψ1 and ψ2 denote two clique potentials deﬁned on the unobserved variables (Y1 and Y2) in the network. Similarly, we have one ψ deﬁned for each
+edge that involves at least one unobserved variable as an end-point. For instance, ψ13
+deﬁnes a mapping from L (which is set to {SH, CH} in the example) to non-negative
+real numbers. There is only one edge between the two unobserved variables in the network and this edge is associated with the clique potential ψ12 that is a function over two
+arguments. Figure 2 also shows how to compute the φ clique potentials. Essentially,
+given an unobserved variable Yi, one collects all the edges that connect it to observed
+Φ1 = Ψ1* Ψ13* Ψ14* Ψ16* Ψ18 =
+Φ2 = Ψ2* Ψ25 * Ψ26 =
+ 2(y2)= Σy1 Φ1(y1) Ψ12(y1,y2)
+ 1(y1) = Σy2 Φ2(y2) Ψ12(y1,y2)
+Figure 2: A small webpage classiﬁcation problem expressed as a pairwise Markov
+random ﬁeld with clique potentials. The ﬁgure also shows the message passing steps
+followed by LBP. See text for more explanation.
+variables in the network and multiplies the corresponding clique potentials along with
+the clique potential deﬁned on Yi itself. Thus, as the ﬁgure shows, φ2 = ψ2×ψ25×ψ26.
+Given a pairwise MRF, it is conceptually simple to extract the best assignments
+to each unobserved variable in the network. For instance, we may adopt the criterion
+that the best label value for Yi is simply the one corresponding to the highest marginal
+probability obtained by summing over all other variables from the probability distribution associated with the pairwise MRF. Computationally however, this is difﬁcult to
+achieve since computing one marginal probability requires summing over an exponentially large number of terms which is why we need approximate inference algorithms.
+We describe two approximate inference algorithms in this report. Both of them
+adopt a similar approach to avoiding the computational complexity of computing marginal
+probability distributions. Instead of working with the probability distribution associated with the pairwise MRF directly (Deﬁnition 1) they both use a simpler “trial” distribution. The idea is to design the trial distribution so that once we ﬁt it to the MRF
+distribution then it is easy to extract marginal probabilities from the trial distribution
+(as easy as reading off the trial distribution). This is a general principle which forms
+the basis of a class of approximate inference algorithms known as variational methods
+We are now in a position to discuss loopy belief propagation (LBP) and mean-ﬁeld
+relaxation labeling (MF).
+Algorithm 3 Loopy belief propagation (LBP)
+for each (Yi, Yj) ∈E(G) s.t. Yi, Yj ∈Y do
+for each yj ∈L do
+mi→j(yj) ←1
+repeat // perform message passing
+for each (Yi, Yj) ∈E(G) s.t. Yi, Yj ∈Y do
+for each yj ∈L do
+mi→j(yj) ←α P
+yi ψij(yi, yj)φi(yi)
+Yk∈Ni∩Y\Yj mk→i(yi)
+until all mi→j(yj) stop showing any change
+for each Yi ∈Y do // compute beliefs
+for each yi ∈L do
+bi(yi) ←αφi(yi) Q
+Yj∈Ni∩Y mj→i(yi)
+Loopy Belief Propagation
+Loopy belief propagation (LBP) applied to pairwise MRF ⟨G, Ψ⟩is a message passing
+algorithm that can be concisely expressed as the following set of equations:
+ψij(yi, yj)φi(yi)
+Yk∈Ni∩Y\Yj
+mj→i(yi), ∀yi ∈L
+where mi→j is a message sent by Yi to Yj and α denotes a normalization constant
+that ensures that each message and each set of marginal probabilities sum to 1, more
+precisely, P
+yj mi→j(yj) = 1 and P
+yi bi(yi) = 1. The algorithm proceeds by making
+each Yi ∈Y communicate messages with its neighbors in Ni ∩Y until the messages
+stabilize (Eq. (1)). After the messages stabilize, we can calculate the marginal probability of assigning Yi with label yi by computing bi(yi) using Eq. (2). The algorithm is
+described more precisely in Algorithm 3. Figure 2 shows a sample round of message
+passing steps followed by LBP on the running example.
+LBP has been shown to be an instance of a variational method. Let bi(yi) denote
+the marginal probability associated with assigning unobserved variable Yi the value yi
+and let bij(yi, yj) denote the marginal probability associated with labeling the edge
+(Yi, Yj) with values (yi, yj). Then Yedidia, Freeman, & Weiss showed that the
+following choice of trial distribution,
+(Yi,Yj)∈E bij(yi, yj)
+Yi∈Y bi(yi)|Y∩Ni|−1
+and subsequently minimizing the Kullback-Liebler divergence between the trial distribution from the distribution associated with a pairwise MRF gives us the LBP message
+passing algorithm with some qualiﬁcations. Note that the trial distribution explicitly
+contains marginal probabilities as variables. Thus, once we ﬁt the distribution, extracting the marginal probabilities is as easy as reading them off.
+Relaxation Labeling via Mean-Field Approach
+Another approximate inference algorithm that can be applied to pairwise MRFs is
+mean-ﬁeld relaxation labeling (MF). The basic algorithm can be described by the following ﬁxed point equation:
+bj(yj) = αφj(yj)
+where bj(yj) denotes the marginal probability of assigning Yj ∈Y with label yj and α
+is a normalization constant that ensures P
+yj bj(yj) = 1. The algorithm simply computes the ﬁxed point equation for every node Yj and keeps doing so until the marginal
+probabilities bj(yj) stabilize. When they do, we simply return bj(yj) as the computed
+marginals. The pseudo-code for MF is shown in Algorithm 4.
+Algorithm 4 Mean-ﬁeld relaxation labeling (MF)
+for each Yi ∈Y do // initialize messages
+for each yi ∈L do
+repeat // perform message passing
+for each Yj ∈Y do
+for each yj ∈L do
+bj(yj) ←αφj(yj) Q
+Yi∈Nj∩Y,yi∈L ψbi(yi)
+until all bj(yj) stop changing
+MF can also be justiﬁed as a variational method in almost exactly the same way as
+LBP. In this case, however, we choose a simpler trial distribution:
+We refer the interested reader to Weiss , Yedidia, Freeman, & Weiss for
+more details.
+Experiments
+In our experiments, we compared the four collective classiﬁcation algorithms (CC)
+discussed in the previous sections and a content-only classiﬁer (CO), which does not
+take the network into account, along with two choices of local classiﬁers on document
+classiﬁcation tasks. The two local classiﬁers we tried were na¨ıve Bayes (NB) and
+Logistic Regression (LR). This gave us 8 different classiﬁers: CO with NB, CO with
+LR, ICA with NB, ICA with LR, GS with NB, GS with LR, MF and LBP. The datasets
+we used for the experiments included both real-world and synthetic datasets.
+Features used
+For CO classiﬁers, we used the words in the documents for observed attributes. In
+particular, we used a binary value to indicate whether or not a word appears in the
+document. In ICA and GS, we used the same local attributes (i.e., words) followed by
+count aggregation to count the number of each label value in a node’s neighborhood.
+Finally, for LBP and MF, we used pairwise MRF with clique potentials deﬁned on the
+edges and unobserved nodes in the network.
+Experimental Setup
+Due to the fact that we are dealing with network data, traditional approaches to experimental data preparation such as creating splits for k-fold cross-validation may not be
+directly applicable. Splitting the dataset into k subsets randomly and using k −1 of
+them for training leads to splits where we expect k−1
+portion of the neighborhood of a
+test node are labeled. When k is reasonably high (say, 10) then this will result in almost
+the entire neighborhood of a test node being labeled. If we were to experiment with
+such a setup, we would not be able to compare how well the CC algorithms exploit the
+correlations between the unobserved labels of the connected nodes.
+To construct splits whose neighbors are unlabeled as much as possible, we use a
+strategy that we refer to as snowball sampling evaluation strategy (SS). In this strategy,
+we construct splits for test data by randomly selecting the initial node and expanding
+around it. We do not expand randomly; instead, we select nodes based on the class
+distribution of the whole corpus; that is, the test data is stratiﬁed. The nodes selected
+by the SS are used as the test set while the rest are used for training. We repeat this
+process k times to obtain k test-train pairs of splits. Besides experimenting on test
+splits created using SS, we also experimented with splits created using the standard
+k-fold cross-validation methodology where we choose nodes randomly to create splits
+and refer to this as RS.
+When using SS, some of the objects may appear in more than one test split. In
+that case, we need to adjust accuracy computation so that we do not over count those
+objects. A simple strategy is to average the accuracy for each instance ﬁrst and then
+take the average of the averages. Further, to help the reader compare the SS results
+with the RS results, we also provide accuracies averaged per instance and across all
+instances that appear in at least one SS split. We denote these numbers using the term
+matched cross-validation (M).
+Learning the classiﬁers
+One aspect of the collective classiﬁcation problem that we have not discussed so far is
+how to learn the various classiﬁers described in the previous sections. Learning refers
+to the problem of determining the parameter values for the local classiﬁer, in the case
+of ICA and GS, and the entries in the clique potentials, in the case of LBP and MF,
+which can then be subsequently used to classify unseen test data. For all our experiments, we learned the parameter values from fully labeled datasets created through
+the splits generation methodology described above using gradient-based optimization
+approaches. For a more detailed discussion, see, for example,Taskar, Abbeel, & Koller
+ , Sen & Getoor , and Sen & Getoor .
+Real-world Datasets
+We experimented with two real-world bibliographic datasets: Cora and CiteSeer
+ . The Cora dataset contains a number of Machine Learning papers divided into one
+of 7 classes while the CiteSeer dataset has 6 class labels. For both datasets, we performed stemming and stop word removal besides removing the words with document
+frequency less than 10. The ﬁnal corpus has 2708 documents, 1433 distinct words in
+the vocabulary and 5429 links, in the case of Cora, and 3312 documents, 3703 distinct
+words in the vocabulary and 4732 links in the case of CiteSeer. For each dataset, we
+performed both RS evaluation (with 10 splits) and SS evaluation (averaged over 10
+The accuracy results for the real world datasets are shown in Table 3. The accuracies
+are separated by sampling method and base classiﬁer. The highest accuracy at each
+partition is in bold. We performed t-test (paired where applicable, and Welch t-test
+otherwise) to test statistical signiﬁcance between results. Here are the main results:
+1. Do CC algorithms improve over CO counterparts?
+In both datasets, CC algorithms outperformed their CO counterparts, in all evaluation strategies (SS, RS and M). The performance differences were signiﬁcant
+for all comparisons except for the NB (M) results for Citeseer.
+2. Does the choice of the base classiﬁer affect the results of the CC algorithms?
+We observed a similar trend for the comparison between NB and LR. LR (and
+the CC algorithms that used LR as a base classiﬁer) outperformed NB versions
+in all datasets, and the difference was statistically signiﬁcant for Cora.
+3. Is there any CC algorithm that dominates the other?
+The results for comparing CC algorithms are less clear. In the NB partition,
+ICA-NB outperformed GS-NB signiﬁcantly for Cora using SS and M, and GS-
+NB outperformed ICA-NB for Citeseer SS. Thus, there was no clear winner
+between ICA-NB and GS-NB in terms of performance. In the LR portion, again
+Table 3: Accuracy results for the Cora and Citeseer datasets. For Cora, the CC algorithms outperformed their CO counterparts signiﬁcantly. LR versions signiﬁcantly
+outperformed NB versions. ICA-NB outperformed GS-NB for SS and M, the other differences between ICA and GS were not signiﬁcant (both NB and LR versions). Even
+though MF outperformed ICA-LR, GS-LR, and LBP, the differences were not statistically signiﬁcant. For Citeseer, the CC algorithms signiﬁcantly outperformed their CO
+counterparts except for ICA-NB and GS-NB for matched cross-validation. CO and
+CC algorithms based on LR outperformed the NB versions, but the differences were
+not signiﬁcant. ICA-NB outperformed GS-NB signiﬁcantly for SS; but, the rest of the
+differences between LR versions of ICA and GS, LBP, and MF were not signiﬁcant.
+the differences between ICA-LR and GS-LR were not signiﬁcant for all datasets.
+As for LBP and MF, they often slightly outperformed ICA-LR and GS-LR, but
+the differences were not signiﬁcant.
+4. How do SS results and RS results compare?
+Finally, we take a look at the numbers under the columns labeled M. First, we
+would like to remind the reader that even though we are comparing the results
+on the test set that is the intersection of the two evaluation strategies (SS and
+RS), different training data could have been potentially used for each test instance, thus the comparison can be questioned. Nonetheless, we expected the
+matched cross-validation results (M) to outperform SS results simply because
+each instance had more labeled data around it from RS splitting. The differences
+were not big (around 1% or 2%); however, they were signiﬁcant. These results
+tell us that the evaluation strategies can have a big impact on the ﬁnal results,
+and care must be taken while designing an experimental setup for evaluating CC
+algorithms on network data .
+Synthetic Data
+We implemented a synthetic data generator following Sen and Getoor . High-level
+pseudo-code is given in Algorithm 5 for completeness, but more details can be found
+in Sen & Getoor.
+Algorithm 5 Synthetic data generator
+while i = 1 < numNodes do
+Sample r uniformly random from [0, 1).
+if r < ld then
+Pick a source node nodes
+Pick a destination node noded based on dh and degree
+Add a link between nodes and noded
+Generate a node nodei
+Sample a class for nodei
+Sample attributes for nodei using a binomial distribution. Introduce noise to
+the process based on the attribute noise parameter.
+Connect it to a destination node based on dh and degree
+At each step, we either add a link between two existing nodes or create a node
+based on the ld parameter (such that higher ld value means higher link density, i.e.,
+more links in the graph) and link this new node to an existing node. When we are
+adding a link, we choose the source node randomly but we choose the destination node
+using the dh parameter (which varies homophily by specifying what percentage,
+on average, of a node’s neighbor is of the same type) as well as the degree of the candidates (preferential attachment ). When we are generating a node, we sample a class
+for it and generate attributes based on this class using a binomial distribution. Then,
+we add a link between the new node and one of the existing nodes, again using the
+homophily parameter and the degree of the existing nodes. In all of these experiments,
+we generated 1000 nodes, where each node is labeled with one of 5 possible class labels and has 10 attributes. We experimented with varying degree of homophily and
+link density in the graphs generated and we used SS strategy to generate the train-test
+The results for varying values of dh, homophily, are shown in Figure 3(a). When homophily in the graph was low, both CO and CC algorithms performed equally well,
+which was expected result based on similar work. As we increased the amount of homophily, all CC algorithms drastically improved their performance over CO classiﬁers.
+With homophily at dh=.9, for example, the difference between our best performing
+CO algorithm and our best performing CC algorithm is about 40%. Thus, for datasets
+which demonstrate some level of homophily, using CC can signiﬁcantly improve performance.
+We present the results for varying the ld, link density, parameter in Figure 3(b) . As
+we increased the link density of the graphs, we saw that accuracies for all algorithms
+Link Density
+Figure 3: (a) Accuracy of algorithms through different values for dh varying the levels
+of homophily. When the homophily is very low, both CO and CC algorithms perform
+equally well but as we increase homophily, CC algorithms improve over CO classiﬁer.
+(b) Accuracy of algorithms through different values for ld varying the levels of link
+density. As we increase link density, ICA and GS improve their performance the most.
+Next comes MF. However, LBP has convergence issues due to increased cycles and in
+fact performs worse than CO for high link density.
+went up, possibly because the relational information became more signiﬁcant and useful. However, the LBP accuracy had a sudden drop when the graph was immensely
+dense. The reason behind this result is the well known fact that LBP has convergence
+issues when there are many closed loops in the graph .
+Practical Issues
+In this section, we discuss some of the practical issues to consider when applying the
+various CC algorithms. First, although MF and LBP performance is in some cases
+a bit better than ICA and GS, they were also the most difﬁcult to work with in both
+learning and inference. Choosing the initial weights so that the weights will converge
+during training is non-trivial. Most of the time, we had to initialize the weights with
+the weights we got from ICA in order to get the algorithms to converge. Thus, the MF
+and LBP had some extra advantage in the above experiments. We also note that of the
+two, we had the most trouble with MF being unable to converge, or when it did, not
+converging to the global optimum. Our difﬁculty with MF and LBP are consistent with
+previous work and should be taken into consideration when choosing to
+apply these algorithms.
+In contrast, ICA and GS parameter initializations worked for all datasets we used
+and we did not have to tune the initializations for these two algorithms. They were the
+easiest to train and test among all the collective classiﬁcation algorithms evaluated.
+Finally, while ICA and GS produced very similar results for almost all experiments,
+ICA is a much faster algorithm than GS. In our largest dataset, Citeseer, for example,
+ICA-NB took 14 minutes to run while GS-NB took over 3 hours. The large difference is
+due to the fact that ICA converges in just a few iterations, whereas GS has to go through
+signiﬁcantly more iterations per run due to the initial burn-in stage (200 iterations), as
+well as the need to run a large number of iterations to get a sufﬁciently large sampling
+(800 iterations).
+Related Work
+Even though collective classiﬁcation has gained attention only in the past ﬁve to seven
+years, initiated by the work of Jennifer Neville and David Jensen and
+the work of Ben Taskar et al. , the general problem of inference for
+structured output spaces has received attention for a considerably longer period of time
+from various research communities including computer vision, spatial statistics and
+natural language processing. In this section, we attempt to describe some of the work
+that is most closely related to the work described in this report, however, due to the
+widespread interest in collective classiﬁcation our list is sure to be incomplete.
+One of the earliest principled approximate inference algorithms, relaxation labeling
+ , was developed by researchers in computer vision in the context of object labeling
+in images. Due to its simplicity and appeal, relaxation labeling was a topic of active
+research for some time and many researchers developed different versions of the basic
+algorithm . Mean-ﬁeld relaxation labeling , discussed in this report, is a
+simple instance of this general class of algorithms. Besag also considered statistical
+analysis of images and proposed a particularly simple approximate inference algorithm
+called iterated conditional modes which is one of the earliest descriptions and a speciﬁc
+version of the iterative classiﬁcation algorithm presented in this report. Besides computer vision, researchers working with an iterative decoding scheme known as “Turbo
+Codes” came up with the idea of applying Pearl’s belief propagation algorithm 
+on networks with loops. This led to the development of the approximate inference algorithm that we, in this report, refer to as loopy belief propagation (LBP) (also known
+as sum product algorithm) .
+Another area that often uses collective classiﬁcation techniques is document classiﬁcation. Chakrabarti, Dom, & Indyk was one of the ﬁrst to apply collective classiﬁcation to a corpora of patents linked via hyperlinks and reported that considering
+attributes of neighboring documents actually hurts classiﬁcation performance. Slattery
+& Craven also considered the problem of document classiﬁcation by constructing features from neighboring documents using an inductive logic programming rule
+learner. Yang, Slattery, & Ghani conducted an in-depth investigation over multiple
+datasets commonly used for document classiﬁcation experiments and identiﬁed different patterns. Since then, collective classiﬁcation has also been applied to various other
+applications such as part-of-speech tagging , classiﬁcation of hypertext documents
+using hyperlinks , link prediction in friend-of-a-friend networks , optical character recognition , entity resolution in sensor networks , predicting disulphide
+bonds in protein molecules , segmentation of 3D scan data and classiﬁcation of
+email “speech acts” .
+Besides the four approximate inference algorithms discussed in this report, there
+are other algorithms that we did not discuss such as graph-cuts based formulations ,
+formulations based on linear programming relaxations and expectation propagation . Other examples of approximate inference algorithms include algorithms
+developed to extend and improve loopy belief propagation to remove some of its shortcomings such as alternatives with convergence guarantees and alternatives that go
+beyond just using edge and node marginals to compute more accurate marginal probability estimates such as the cluster variational method , junction graph method 
+and region graph method .
+More recently, there have been some attempts to extend collective classiﬁcation
+techniques to the semi-supervised learning scenario .
+Conclusion
+In this report, we gave a brief description of four popular collective classiﬁcation algorithms. We explained the algorithms, showed how to apply them to various applications
+using examples and highlighted various issues that have been the subject of investigation in the past. Most of the inference algorithms available for practical tasks relating
+to collective classiﬁcation are approximate. We believe that a better understanding of
+when these algorithms perform well will lead to more widespread application of these
+algorithms to more real-world tasks and that this should be a subject of future research.
+Most of the current applications of these algorithms have been on homogeneous networks with a single type of unobserved variable that share a common domain. Even
+though extending these ideas to heterogeneous networks is conceptually simple, we believe that a further investigation into techniques that do so will lead to novel approaches
+to feature construction and a deeper understanding of how to improve the classiﬁcation
+accuracies of approximate inference algorithms. Collective classiﬁcation has been a
+topic of active research for the past decade and we hope that more reports such as
+this one will help more researchers gain introduction to this area thus promoting further research into the understanding of existing approximate inference algorithms and
+perhaps help develop new, improved inference algorithms.
+Acknowledgements
+We would like to thank Luke McDowell for his useful and detailed comments. This material is based upon work supported in part by the National Science Foundation under
+Grant No.0308030. In addition, this work was partially performed under the auspices
+of the U.S. Department of Energy by Lawrence Livermore National Laboratory under
+Contract DE-AC52-07NA27344.

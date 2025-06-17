@@ -1,0 +1,531 @@
+Deep Closest Point: Learning Representations for Point Cloud Registration
+Massachusetts Institute of Technology
+77 Massachusetts Ave, Cambridge, MA 02139
+ 
+Justin M. Solomon
+Massachusetts Institute of Technology
+77 Massachusetts Ave, Cambridge, MA 02139
+ 
+Point cloud registration is a key problem for computer
+vision applied to robotics, medical imaging, and other applications. This problem involves ﬁnding a rigid transformation from one point cloud into another so that they align.
+Iterative Closest Point (ICP) and its variants provide simple and easily-implemented iterative methods for this task,
+but these algorithms can converge to spurious local optima.
+To address local optima and other difﬁculties in the ICP
+pipeline, we propose a learning-based method, titled Deep
+Closest Point (DCP), inspired by recent techniques in computer vision and natural language processing. Our model
+consists of three parts: a point cloud embedding network,
+an attention-based module combined with a pointer generation layer, to approximate combinatorial matching, and a
+differentiable singular value decomposition (SVD) layer to
+extract the ﬁnal rigid transformation. We train our model
+end-to-end on the ModelNet40 dataset and show in several
+settings that it performs better than ICP, its variants (e.g.,
+Go-ICP, FGR), and the recently-proposed learning-based
+method PointNetLK. Beyond providing a state-of-the-art registration technique, we evaluate the suitability of our learned
+features transferred to unseen objects. We also provide preliminary analysis of our learned model to help understand
+whether domain-speciﬁc and/or global features facilitate
+rigid registration.
+1. Introduction
+Geometric registration is a key task in many computational ﬁelds, including medical imaging, robotics, autonomous driving, and computational chemistry. In its most
+basic incarnation, registration involves the prediction of a
+rigid motion to align one shape to another, potentially obfuscated by noise and partiality.
+Many modeling and computational challenges hamper the
+design of a stable and efﬁcient registration method. Given exact correspondences, singular value decomposition yields the
+Figure 1. Left: a moved guitar. Right: rotated human. All methods
+work well with small transformation. However, only our method
+achieve satisfying alignment for objects with sharp features and
+large transformation.
+globally optimal alignment; similarly, computing matchings
+becomes easier given some global alignment information.
+Given these two observations, most algorithms alternate between these two steps to try to obtain a better result. The resultant iterative optimization algorithms, however, are prone
+to local optima.
+The most popular example, Iterative Closest Point (ICP)
+ , alternates between estimating the rigid motion based
+ 
+on a ﬁxed correspondence estimate and updating the correspondences to their closest matches. Although ICP monotonically decreases a certain objective function measuring
+alignment, due to the non-convexity of the problem, ICP
+often stalls in suboptimal local minima. Many methods
+ attempt to alleviate this issue by using heuristics
+to improve the matching or by searching larger parts of the
+motion space SE(3). These algorithms are typically slower
+than ICP and still do not always provide acceptable output.
+In this work, we revisit ICP from a deep learning perspective, addressing key issues in each part of the ICP pipeline using modern machine learning, computer vision, and natural
+language processing tools. We call our resulting algorithm
+Deep Closest Point (DCP), a learning-based method that
+takes two point clouds and predicts a rigid transformation
+aligning them.
+Our model consists of three parts: (1) We map the input
+point clouds to permutation/rigid-invariant embeddings that
+help identify matching pairs of points (we compare PointNet
+ and DGCNN for this step); then, (2) an attention
+based module combining pointer network predicts
+a soft matching between the point clouds; and ﬁnally, (3) a
+differentiable singular value decomposition layer predicts
+the rigid transformation. We train and test our model endto-end on ModelNet40 in various settings, showing our
+model is not only efﬁcient but also outperforms ICP and
+its extensions, as well as the recently-proposed PointNetLK
+method . Our learned features generalize to unseen
+data, suggesting that our model is learning salient geometric
+Contributions:
+Our contributions include the following:
+• We identify sub-network architectures designed to address
+difﬁculties in the classical ICP pipeline.
+• We propose a simple architecture to predict a rigid transformation aligning two point clouds.
+• We evaluate efﬁciency and performance in several settings
+and provide an ablation study to support details of our
+construction.
+• We analyze whether local or global features are more
+useful for registration.
+• We release our code1, to facilitate reproducibility and
+future research.
+2. Related Work
+Traditional point cloud registration methods:
+is the best-known algorithm for solving rigid registration
+problems; it alternates between ﬁnding point cloud correspondences and solving a least-squares problem to update
+the alignment. ICP variants consider issues with
+1 
+the basic method, like noise, partiality, and sparsity; probabilistic models also can improve resilience to
+uncertain data. ICP can be viewed as an optimization algorithm searching jointly for a matching and a rigid alignment;
+hence, propose using the Levenberg–Marquardt algorithm to optimize the objective directly, which can yield a
+better solution. For more information, summarize
+ICP and its variants developed over the last 20 years.
+ICP-style methods are prone to local minima due to nonconvexity. To ﬁnd a good optimum in polynomial time, Go-
+ICP uses a branch-and-bound (BnB) method to search
+the motion space SE(3). It outperforms local ICP methods when a global solution is desired but is several orders
+of magnitude slower than other ICP variants despite using
+local ICP to accelerate the search process. Other methods
+attempt to identify global optima using Riemannian optimization , convex relaxation , and mixed-integer
+programming .
+Learning on graphs and point sets:
+A broad class of
+deep architectures for geometric data termed geometric deep
+learning includes recent methods learning on graphs
+ and point clouds .
+The graph neural network (GNN) is introduced in ;
+similarly, deﬁnes convolution on graphs (GCN) for
+molecular data. uses renormalization to adapt to graph
+structure and applies GCN to semi-supervised learning on
+graphs. MoNet learns a dynamic aggregation function
+based on graph structure, generalizing GNNs. Finally, graph
+attention networks (GATs) incorporate multi-head attention into GCNs. DGCNN can be regarded as graph
+neural network applied to point clouds with dynamic edges.
+Another branch of geometric deep learning includes Point-
+Net and other algorithms designed to process point
+clouds. PointNet can be seen as applying GCN to graphs
+without edges, mapping points in R3 to high-dimensional
+space. PointNet only encodes global features gathered from
+the point cloud’s embedding, impeding application to tasks
+involving local geometry. To address this issue, PointNet++
+ applies a shared PointNet to k-nearest neighbor clusters to learn local features. As an alternative, DGCNN 
+explicitly recovers the graph structure in both Euclidean
+space and feature space and applies graph neural networks
+to the result. PCNN uses an extension operator to deﬁne
+convolution on point clouds, while PointCNN applies
+Euclidean convolution after applying a learned transformation. Finally, SPLATNet encodes point clouds on a
+lattice and performs bilateral convolution. All these works
+aim to apply convolution-like operations to point clouds and
+extract local geometric features.
+Sequence-to-sequence learning and pointer networks:
+Many tasks in natural language processing, including ma-
+(a) Network architecture
+(b) Transformer module
+Figure 2. Network architecture for DCP, including the Transformer module for DCP-v2.
+chine translation, language modeling, and question answering, can be formulated as sequence-to-sequence problems
+(seq2seq). ﬁrst uses deep neural networks (DNN) to
+address seq2seq problems at large scale. Seq2seq, however,
+often involves predicting discrete tokens corresponding to
+positions in the input sequence. This problem is difﬁcult because there is an exponential number of possible matchings
+between input and output positions. Similar problems can
+be found in optimal transportation , combinatorial
+optimization , and graph matching . To address this
+issue, In our registration pipeline, we use a related method
+to Pointer Networks , which use attention as a pointer to
+select from the input sequence. In each output step, a Pointer
+Network predicts a distribution over positions and uses it as
+a “soft pointer.” The pointer module is fully differentiable,
+and the whole network can be trained end-to-end.
+Non-local approaches:
+To denoise images, non-local
+means leverages the simple observation that Gaussian
+noise can be removed by non-locally weighted averaging
+all pixels in an image. Recently, non-local neural networks
+ have been proposed to capture long-range dependencies
+in video understanding; uses the non-local module to
+denoise feature maps to defend against adversarial attacks.
+Another instantiation of non-local neural networks, known as
+relational networks , has shown effectiveness in visual
+reasoning , meta-learning , object detection ,
+and reinforcement learning . Its counterpart in natural
+language processing, attention, is arguably the most fruitful
+recent advance in this discipline. replaces recurrent
+neural networks with a model called Transformer,
+consisting of several stacked multi-head attention modules.
+Transformer-based models outperform other recurrent models by a considerable amount in natural language
+processing. In our work, we also use Transformer to learn
+contextual information of point clouds.
+3. Problem Statement
+In this section, we formulate the rigid alignment problem and discuss the ICP algorithm, highlighting key issues in the ICP pipeline. We use X and Y to denote two
+point clouds, where X = {x1, . . . , xi, . . . , xN} ⊂R3 and
+Y = {y1, . . . , yj, . . . , yM} ⊂R3. For ease of notation, we
+consider the simplest case, in which M = N; the methods
+we describe here extend easily to the M ̸= N case.
+In the rigid alignment problem, we assume Y is transformed from X by an unknown rigid motion. We denote the
+rigid transformation as [RXY, tXY] where RXY ∈SO(3)
+and tXY ∈R3. We want to minimize the mean-squared
+error E(RXY, tXY), which—if X and Y are ordered the
+same way (meaning xi and yi are paired)—can be written
+E(RXY, tXY) = 1
+∥RXYxi + tXY −yi∥2.
+Deﬁne centroids of X and Y as
+Then the cross-covariance matrix H is given by
+(xi −x)(yi −y)⊤.
+We can use the singular value decomposition (SVD) to decompose H = USV ⊤. Then, the alignment minimizing
+E(·, ·) in (1) is given in closed-form by
+RXY = V U ⊤
+tXY = −RXYx + y.
+Here, we take the convention that U, V ∈SO(3), while S is
+diagonal but potentially signed; this accounts for orientationreversing choices of H. This classic orthogonal Procrustes
+problem assumes that the point sets are matched to each
+other, that is, that xi should be mapped to yi in the ﬁnal
+alignment for all i. If the correspondence is unknown, however, the objective function E must be revised to account for
+E(RXY, tXY)= 1
+∥RXYxi + tXY −ym(xi)∥2. (5)
+Here, a mapping m from each point in X to its corresponding
+point in Y is given by
+m(xi, Y) = arg min
+∥RXYxi + tXY −yj∥
+Equations (5) and (6) form a classic chicken-and-egg
+If we know the optimal rigid transformation
+[RXY, tXY], then the mapping m can be recovered from
+(6); conversely, given the optimal mapping m, the transformation can be computed using (4).
+ICP iteratively approaches a stationary point of E in (5),
+including the mapping m(·) as one of the variables in the
+optimization problem. It alternates between two steps: ﬁnding the current optimal transformation based on a previous
+mapping mk−1 and ﬁnding an optimal mapping mk based
+on the current transformation using (6), where k denotes
+the current iteration. The algorithm terminates when a ﬁxed
+point or stall criterion is reached. This procedure is easy to
+implement and relatively efﬁcient, but it is extremely prone
+to local optima; a distant initial alignment yields a poor
+estimate of the mapping m, quickly leading to a situation
+where the algorithm gets stuck. Our goal is to use learned
+embeddings to recover a better matching m(·) and use that
+to compute a rigid transformation, which we will detail in
+next section.
+4. Deep Closest Point
+Having established preliminaries about the rigid alignment problem, we are now equipped to present our Deep
+Closest Point architecture, illustrated in Figure 2. In short,
+we embed point clouds into high-dimensional space using
+PointNet or DGCNN (§4.1), encode contextual
+information using an attention-based module (§4.2), and ﬁnally estimate an alignment using a differentiable SVD layer
+4.1. Initial Features
+The ﬁrst stage of our pipeline embeds the unaligned input
+point clouds X and Y into a common space used to ﬁnd
+matching pairs of points between the two clouds. The goal
+is to ﬁnd an embedding that quotients out rigid motion while
+remaining sensitive to relevant features for rigid matching.
+We evaluate two possible choices of learnable embedding
+modules, PointNet and DGCNN .
+Since we use per-point embeddings of the two input
+point clouds to generate a mapping m and recover the
+rigid transformation, we seek a feature per point in the
+input point clouds rather than one feature per cloud. For
+this reason, in these two network architectures, we use the
+representations generated before the last aggregation function, notated FX = {xL
+2 , ..., xL
+i , ..., xL
+N} and FY =
+2 , ..., yL
+i , ..., yL
+N}, assuming a total of L layers.
+In more detail, PointNet takes a set of points, embeds each
+by a nonlinear function from R3 into a higher-dimensional
+space, and optionally outputs a global feature vector for the
+whole point cloud after applying a channel-wise aggregation
+function f (e.g., max or P). Let xl
+i be the embedding of
+point i in the l-th layer, and let hl
+θ be a nonlinear function
+in the l-th layer parameterized by a shared multilayer perceptron (MLP). Then, the forward mechanism is given by
+While PointNet largely extracts information based on the
+embedding of each point in the point cloud independently,
+DGCNN explicitly incorporates local geometry into its representation. In particular, given a set of points X, DGCNN
+constructs a k-NN graph G, applies a nonlinearity to the
+values at edge endpoints to obtain edgewise values, and performs vertex-wise aggregation (max or P) in each layer.
+The forward mechanism of DGCNN is thus
+) ∀j ∈Ni}),
+where Ni denotes the neighbors of vertex i in graph G. While
+PointNet features do not incorporate local neighborhood information, we ﬁnd empirically that DGCNN’s local features
+are critical for high-quality matching in subsequent steps of
+our pipeline (see §6.1).
+4.2. Attention
+Our transition from PointNet to DGCNN is motivated
+by the observation that the most useful features for rigid
+alignment are learned jointly from local and global information. We additionally can improve our features for matching
+by making them task-speciﬁc, that is, changing the features
+depending on the particularities of X and Y together rather
+than embedding X and Y independently. That is, the task
+of rigidly aligning, say, organic shapes might require different features than those for aligning mechanical parts with
+sharp edges. Inspired by the recent success of BERT ,
+non-local neural networks , and relational networks 
+using attention-based models, we design a module to learn
+co-contextual information by capturing self-attention and
+conditional attention.
+Take FX and FY to be the embeddings generated by the
+modules in §4.1; these embeddings are computed independently of one another. Our attention model learns a function
+φ : RN×P × RN×P →RN×P , where P is embedding dimension, that provides new embeddings of the point clouds
+ΦX = FX + φ(FX , FY)
+ΦY = FY + φ(FY, FX )
+Notice we treat φ as a residual term, providing an additive change to FX and FY depending on the order of its
+inputs. The idea here is that the map FX 7→ΦX modiﬁes
+the features associated to the points in X in a fashion that is
+knowledgeable about the structure of Y; the map FY 7→ΦY
+serves a symmetric role. We choose φ as an asymmetric
+function given by a Transformer ,2 since the matching
+problem we encounter in rigid alignment is analogous to the
+sequence-to-sequence problem that inspired its development,
+other than their use of positional embeddings to describe
+where words are in a sentence.
+4.3. Pointer Generation
+The most common failure mode of ICP occurs when the
+matching estimate mk is far from optimal. When this occurs,
+the rigid motion subsequently estimated using (6) does not
+signiﬁcantly improve alignment, leading to a spurious local
+optimum. As an alternative, our learned embeddings are
+trained speciﬁcally to expose matching pairs of points using
+a simple procedure explained below. We term this step
+pointer generation, again inspired by terminology in the
+attention literature introduced in §4.2.
+To avoid choosing non-differentiable hard assignments,
+we use a probabilistic approach that generates a (singlystochastic) “soft map” from one point cloud into the other.
+That is, each xi ∈X is assigned a probability vector over
+elements of Y given by
+m(xi, Y) = softmax(ΦYΦ⊤
+Here, ΦY ∈RN×P denotes the embedding of Y generated
+by the attention module, and Φxi denotes the i-th row of
+the matrix ΦX from the attention module. We can think of
+m(xi, Y) as a soft pointer from each xi into the elements of
+4.4. SVD Module
+The ﬁnal module in our architecture extracts the rigid
+motion from the soft matching computed in §4.3. We use
+the soft pointers to generate a matching averaged point in Y
+for each point in X:
+ˆyi = Y ⊤m(xi, Y) ∈R3.
+Here, we deﬁne Y ∈RN×3 to be a matrix containing the
+points in Y . Then, RXY and tXY are extracted using (4)
+based on the pairing xi 7→ˆyi over all i.
+2For details, see 
+03/attention.html.
+Figure 3. Top left: input. Top right: result of ICP with random
+initialization. Bottom left: initial transformation provided by DCP.
+Bottom right: result of ICP initialized with DCP. Using a good
+initial transformation provided by DCP, ICP converges to the global
+To backpropagate gradients through the networks, we
+need to differentiate the SVD. describes a standard
+means of computing this derivative; version of this calculations are included in PyTorch and TensorFlow . Note
+we need to solve only 3 × 3 eigenproblems, small enough
+to be solved using simple algorithms or even (in principle) a
+closed-form formula.
+Combined, the modules above map from a pair of point
+clouds X and Y to a rigid motion [RXY, tXY] that aligns
+them to each other. The initial feature module (§4.1) and
+the attention module (§4.2) are both parameterized by a
+set of neural network weights, which must be learned during a training phase. We employ a fairly straightforward
+strategy for training, measuring deviation of [RXY, tXY]
+from ground truth for synthetically-generated pairs of point
+We use the following loss function to measure our model’s
+agreement to the ground-truth rigid motions:
+Loss = ∥R⊤
+XY −I∥2 + ∥tXY −tg
+XY∥2 + λ∥θ∥2
+Here, g denotes ground-truth. The ﬁrst two terms deﬁne a
+simple distance on SE(3). The third term denotes Tikhonov
+regularization of the DCP parameters θ, which serves to
+reduce the complexity of the network.
+5. Experiments
+We compare our models to ICP, Go-ICP , Fast Global
+Registration (FGR) , and the recently-proposed Point-
+NetLK deep learning method . We denote our model
+without attention (§4.2) as DCP-v1 and the full model with
+attention as DCP-v2. Go-ICP is ported from the authors’ released code. For ICP and FGR, we use the implementations
+in Intel Open3D . For PointNetLK, we adapt the code
+partially released by the authors.3 Notice that FGR uses
+additional geometric features.
+The architecture of DCP is shown in Figure 2. We use 5
+EdgeConv (denoted as DGCNN ) layers for both DCPv1 and DCP-v2. The numbers of ﬁlters in each layer are
+ . In the Transformer layer, the number
+of heads in multi-head attention is 4 and the embedding
+dimension is 1024. We use LayerNorm without Dropout
+ . Adam is used to optimize the network parameters,
+with initial learning rate 0.001. We divide the learning rate
+by 10 at epochs 75, 150, and 200, training for a total of 250
+epochs. DCP-v1 does not use the Transformer module but
+rather employs identity mappings ΦX = FX and ΦY = FY.
+We experiment on the ModelNet40 dataset, which
+consists of 12,311 meshed CAD models from 40 categories.
+Of these, we use 9,843 models for training and 2,468 models
+for testing. We follow the experimental settings of PointNet
+ , uniformly sampling 1,024 points from each model’s
+outer surface. As in previous work, points are centered and
+rescaled to ﬁt in the unit sphere, and no features other than
+(x, y, z) coordinates appear in the input.
+We measure mean squared error (MSE), root mean
+squared error (RMSE), and mean absolute error (MAE) between ground truth values and predicted values. Ideally, all
+of these error metrics should be zero if the rigid alignment is
+perfect. All angular measurements in our results are in units
+of degrees.
+5.1. ModelNet40: Full Dataset Train & Test
+In our ﬁrst experiment, we randomly divide all the point
+clouds in the ModelNet40 dataset into training and test sets,
+with no knowledge of the category label; different point
+clouds are used during training and during testing. During
+training, we sample a point cloud X. Along each axis, we
+randomly draw a rigid transformation; the rotation along
+each axis is uniformly sampled in [0, 45◦] and translation
+is in [−0.5, 0.5]. X and a transformation of X by the rigid
+motion are used as input to the network, which is evaluated
+against the known ground truth using (11).
+Table 1 evaluates performance of our method and its
+peers in this experiment (vanilla ICP nearly fails). DCP-v1
+already outperforms other methods under all the performance
+metrics, and DCP-v2 exhibits even stronger performance.
+Figure 4 shows results of DCP-v2 on some objects.
+5.2. ModelNet40: Category Split
+To test the generalizability of different models, we split
+ModelNet40 evenly by category into training and testing sets.
+3 
+894.897339
+Go-ICP 
+140.477325
+PointNetLK 
+227.870331
+DCP-v1 (ours)
+DCP-v2 (ours)
+Table 1. ModelNet40: Test on unseen point clouds
+892.601135
+Go-ICP 
+192.258636
+PointNetLK 
+306.323975
+DCP-v1 (ours)
+DCP-v2 (ours)
+Table 2. ModelNet40: Test on unseen categories
+882.564209
+Go-ICP 
+131.182495
+607.694885
+PointNetLK 
+256.155548
+DCP-v1 (ours)
+DCP-v2 (ours)
+Table 3. ModelNet40: Test on objects with Gaussian noise
+We train DCP and PointNetLK on the ﬁrst 20 categories, then
+test them on the held-out categories. ICP, Go-ICP and FGR
+are also tested on the held-out categories. As shown in Table
+2, on unseen categories, FGR behaves more strongly than
+other methods. DCP-v1 has much worse performance than
+DCP-v2, supporting our use of the attention module. Although the learned representations are task-dependent, DCPv2 exhibits smaller error than others except FGR, including
+the learning-based method PointNetLK.
+5.3. ModelNet40: Resilience to Noise
+We also experiment with adding noise to each point of
+the input point clouds. We sample noise independently from
+N(0, 0.01), clip the noise to [−0.05, 0.05], and add it to X
+during testing. In this experiment, we use the model from
+§5.1 trained on noise-free data from all of ModelNet40.
+Table 3 shows the results of this experiment. ICP typically
+converges to a far-away ﬁxed point, and FGR is sensitive
+to noise. Go-ICP, PointNetLK and DCP, however, remain
+robust to noise.
+5.4. DCP Followed By ICP
+Since our experiments involve point clouds whose initial
+poses are far from aligned, ICP fails nearly every experiment
+we have presented so far. In large part, this failure is due to
+the lack of a good initial guess. As an alternative, we can
+PointNetLK
+Table 4. Inference time (in seconds)
+PN+DCP-v1,
+DGCNN+DCP-v1
+DGCNN+DCP-v2
+Table 5. Ablation study: PointNet or DGCNN?
+use ICP as a local algorithm by initializing ICP with a rigid
+transformation output from our DCP model. Figure 3 shows
+an example of this two-step procedure; while ICP fails at
+the global alignment task, with better initialization provided
+by DCP, it converges to the global optimum. In some sense,
+this experiment shows how ICP can be an effective way to
+“polish” the alignment generated by DCP.
+5.5. Efﬁciency
+We proﬁle the inference time of different methods on a
+desktop computer with an Intel I7-7700 CPU, an Nvidia
+GTX 1070 GPU, and 32G memory. Computational time
+is measured in seconds and is computed by averaging 100
+results. As shown in Table 4, DCP-v1 is the fastest method
+among our points of comparison, and DCP-v2 is only slower
+than vanilla ICP.
+6. Ablation Study
+We conduct several ablation experiments in this section,
+dissecting DCP and replacing each part with an alternative
+to understand the value of our construction. All experiments
+are done in the same setting as the experiments in §5.1.
+6.1. PointNet or DGCNN?
+We ﬁrst try to answer whether the localized features gathered by DGCNN provide value over the coarser features
+that can be measured using the simpler PointNet model. As
+discussed in , PointNet learns a global descriptor of
+the whole shape while DGCNN learns local geometric
+features via constructing the k-NN graph. We replace the
+DGCNN with PointNet (denoted as PN) and conduct the
+experiments in §5.1 on ModelNet40 , using DCP-v1 and
+DCP-v2. Table 5. Models perform consistently better with
+DGCNN that their counterparts with PointNet.
+DCP-v1+MLP
+DCP-v1+SVD
+DCP-v2+MLP
+DCP-v2+SVD
+Table 6. Ablation study: MLP or SVD?
+DCP-v1 (512)
+DCP-v1 (1024)
+DCP-v2 (512)
+DCP-v2 (1024)
+Table 7. Ablation study: Embedding dimension
+6.2. MLP or SVD?
+While MLP is in principle a universal approximator, our
+SVD layer is designed to compute a rigid motion speciﬁcally.
+In this experiment, we examine whether an MLP or a customdesigned layer is better for registration. We compare MLP
+and SVD with both DCP-v1 and DCP-v2 on ModelNet40.
+Table 6 shows both DCP-v1 and DCP-v2 perform better
+with SVD layer than MLP. This supports our motivation to
+compute rigid transformation using SVD.
+6.3. Embedding Dimension
+ remarks that the embedding dimension is an important parameter affecting the accuracy of point cloud deep
+learning models up to a critical threshold, after which there
+is an insigniﬁcant difference. To verify our choice of dimensionality, we compare models with embeddings into spaces
+of different dimensions. We test models with DCP-v1 and
+v2, using DGCNN to embed the point clouds into R512 or
+R1024. The results in Table 7 show that increasing the embedding dimension from 512 to 1024 does marginally help
+DCP-v2, but for DCP-v1 there is small degeneracy. Our
+results are consistent with the hypothesis in .
+7. Conclusion
+In some sense, the key observation in our Deep Closest
+Point technique is that learned features greatly facilitate rigid
+alignment algorithms; by incorporating DGCNN and an
+attention module, our model reliably extracts the correspondences needed to ﬁnd rigid motions aligning two input point
+clouds. Our end-to-end trainable model is reliable enough to
+extract a high-quality alignment in a single pass, which can
+be improved by iteration or “polishing” via classical ICP.
+DCP is immediately applicable to rigid alignment prob-
+Figure 4. Results of DCP-v2. Top: inputs. Bottom: outputs of DCP-v2.
+lems as a drop-in replacement for ICP with improved behavior. Beyond its direct usage, our experiments suggest several
+avenues for future inquiry. One straightforward extension is
+to see if our learned embeddings transfer to other tasks like
+classiﬁcation and segmentation. We could also train DCP
+to be applied iteratively (or recursively) to reﬁne the alignment, rather than attempting to align in a single pass; insight
+from reinforcement learning could help reﬁne approaches in
+this direction, using mean squared error as reward to learn a
+policy that controls when to stop iterating. Finally, we can
+incorporate our method into larger pipelines to enable highaccuracy Simultaneous Localization and Mapping (SLAM)
+or Structure from Motion (SFM).
+8. Acknowledgement
+The authors acknowledge the generous support of Army
+Research Ofﬁce grant W911NF-12-R-0011, of National Science Foundation grant IIS-1838071, from an Amazon Research Award, from the MIT-IBM Watson AI Laboratory,
+from the Toyota-CSAIL Joint Research Center, and from the
+Skoltech-MIT Next Generation Program. Yue Wang wants
+to thank David Palmer for helpful discussion.

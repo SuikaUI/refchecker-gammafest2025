@@ -1,0 +1,554 @@
+Graph Implementations for Nonsmooth
+Convex Programs
+Michael C. Grant I and Stephen P. Boyd 2
+1 Stanford University
+2 Stanford University
+boydOstanf ord. edu
+Summary. We describe graph implementations, a generic method for representing
+a convex function via its epigraph, described in a disciplined convex programming
+framework. This simple and natural idea allows a very wide variety of smooth and
+nonsmooth convex programs to be easily specified and efficiently solved, using interior-
+point methods for smooth or cone convex programs.
+Keywords: Convex optimization, nonsmooth optimization, disciplined convex pro-
+gramming, optimization modeling languages, semidefinite programming, second-order
+cone programming, conic optimization, nondifferentiable functions.
+Introduction
+It is well known that convex programs have many attractive properties, includ-
+ing the proven existence of efficient methods to solve them. What is not as
+widely appreciated, however, is that nonsmooth convex programs--i.e., models
+with nondifferentiable constraints or objectives--can, in theory, be solved just
+as efficiently as their smooth counterparts. But here, as is often the case, theory
+and practice do not coincide. Methods that are theoretically efficient for general
+nondifferentiable problems, such as the ellipsoid method , are notoriously slow
+in practice.
+In contrast, there are many solvers available for smooth convex programs, as
+well as for certain standard forms such as semidefinite programs (SDPs), that are
+efficient in both theory and practice; e.g., . These solvers can often
+be used to solve a general nonsmooth problem as well--not directly of course,
+but by first transforming it into an equivalent form supported by the solver. The
+equivalent problem is usually larger than the original, but the superior efficiency
+of the solver more than compensates for the increase in size, especially if problem
+structure is taken into account.
+The transformation approach dates back to the very first days of linear pro-
+graming . It is usually taught as a collection of tricks that a modeler can use
+to (hopefully) reformulate problems by hand. The versatility of the approach,
+of course, depends upon the variety of transformations known by the modeler.
+But while some transformations are fairly obvious and widely known, others are
+V.D. Blondel et al. (Eds.) Recent Advances in Learning and Control, LNCIS 371, pp. 95-110, 2008.
+springerlink.com
+(~) Springer-Verlag Berlin Heidelberg 2008
+M.C. Grant and S.P. Boyd
+neither obvious nor well known, even to some experts in convex optimization.
+Furthermore, even if a transformation is identified, the reformulation process is
+often time consuming and error prone, for both experts and applications-oriented
+modelers alike.
+We propose to enable modeling frameworks to largely automate the process
+of identifying and applying these transformations, so that a much wider variety
+of models--smooth and nonsmooth alike--can be both easily specified and era-
+ciently solved. Our approach depends upon two distinct but interrelated devel-
+opments. The first is a methodology for constructing convex optimization models
+called disciplined convex programming. The methodology imposes a set of rules
+or conventions that must be followed when constructing convex programs. The
+rules are simple and teachable, drawn from basic principles of convex analy-
+sis, and follow the practices of those who regularly use convex optimization.
+Conforming problems are called, appropriately, disciplined convex programs, or
+DCPs. The DCP ruleset does not limit generality, but it does require that the
+modeler explicitly provide just enough structure to allow further analysis and
+solution of a problem to be automated.
+The second development is a new method for defining or implementing a func-
+tion in a modeling framework, as as the optimal value of a parameterized convex
+program (specifically, a DCP). We call such a function definition a graph ira-
+plementation because it exploits the relationship between convex and concave
+functions and their epigraphs and hypographs, respectively. A graph implemen-
+tation encapsulates a method for transforming instances of a specific function
+in a constraint or objective into a form compatible with the underlying solver's
+standard form. The conditions imposed by the DCP ruleset ensure that these
+transformations always preserve equivalence and convexity. The most significant
+benefit of graph implementations is their ability to efficiently implement non-
+differentiable functions. But in fact, graph implementations can also be used
+to implement many smooth functions as well when the target standard form is
+nonsmooth (e.g., an SDP).
+We have created a modeling framework called cvx that supports disciplined
+convex programming and graph implementations, cvx uses the object-oriented
+features of MATLAB~to turn it into an optimization modeling language: opti-
+mization variables can be declared and constraints and objectives specified using
+natural MATLAB| syntax, cvx verifies compliance with the DCP ruleset, trans-
+forms conforming models to solvable form, calls an appropriate numerical solver,
+and translates the numerical results back to the original problem--all without
+user intervention. The framework includes a large library of common convex and
+concave functions, both smooth and nonsmooth, and more can be added.
+To an applications-oriented user, the conceptual model presented by cvx is
+very simple: cvx solves any problem (up to some practical size limits, of course)
+constructed according to the DCP ruleset from functions found in the cvx library.
+The modeler need not know what transformations are taking place, or even
+that a transformation is necessary. That is, graph implementations are entirely
+opaque or hidden from a standard cvx user. On the other hand, expert users
+Graph Implementations for Nonsmooth Convex Programs
+can use graph implementations to add new transformations to the system that
+general users can exploit simply by calling the new functions in their models.
+This division of labor allows modelers to focus on building convex programs, and
+experts to focus on solving them.
+In what follows, we will describe disciplined convex programming
+implementations
+in detail. Both are abstract, language-independent
+nevertheless, it will be easier to explain both using examples from an actual
+modeling framework such as cvx. So we begin by i~roducing cvx with a few
+simple examples. A basic familiarity with MATLAB~is
+assumed throughout.
+A Brief Introduction
+To begin, consider the simple linear program
+subject to Ax < b,
+with variable x C R n and data A C R mxn, b C R m, and c C R n. The following
+(MATLAB@/cvx) code generates and solves a random instance of (1)"
+A = randn(m,n) ; b = randn(m,1) ; c = randn(n,1);
+minimize( c' * x )
+subject to
+The indentation is purely for stylistic reasons and is optional. The code is rela-
+tively self-explanatory, but a few notes are in order:
+9 The cvx begin and cvx end commands mark the beginning and end, re-
+spectively, of any cvx model.
+9 Variables must be declared before their first use. For example, the variable
+statement above declares x to be a vector of length n.
+9 The subject to statement is optional--it is provided by cvx only to make
+models more readable and has no mathematical effect.
+9 Objectives and constraints may be placed in any order.
+When cvx end is reached, cvx will complete the conversion of the model to
+solvable form and call the underlying numerical solver. It will replace the
+variable x, which up to that point was a special cvx variable object,
+with a numeric vector representing an optimal value.
+Now consider a norm minimization problem with box constraints:
+minimize IIAy- bll 2
+subject to g __ y _ u
+M.C. Grant and S.P. Boyd
+The following cvx/MATLAB@ code constructs and solves a version of (2),
+reusing A and b from above and generating random bounds:
+-abs(randn(n,2))
++abs(randn(n,2))
+variable y(n)
+minimize(norm(A,y-b,2) )
+subject to
+It is well known that (2) can be reformulated as a (convex) quadratic program
+(QP) or a second-order cone program (SOCP). (cvx, in fact, converts this prob-
+lem to an SOCP.) The transformation in this case is not particularly complicated;
+still, it is nice to have it completely automated.
+cvx supports a variety of other norms and penalties for this model simply by
+replacing the objective function; for example:
+minimize(norm(A,y-b,2)
++ O. l,norm(y, I) )
+minimize(norm(A,y-b,3.5)
+minimize(sum(huber(A,y-b))
+All of these examples can be reformulated as SOCPs as well. Here, however, the
+transformations are not at all obvious, even to experts; and in all three cases
+working out the transformation by hand would be tedious and error prone, cvx,
+however, can solve all three problems automatically.
+As a final example, consider the task of determining the minimum volume
+ellipsoid (also known as the LSwner-John ellipsoid) g containing a finite set of
+points Zl, z2,
+9 zn c R d"
+minimize vol(g)
+subject tozicg,
+i-1,...,n.
+The parameterization we will use for g is
+-~ {u I IIPu + qll2 -< 1 },
+where (P, q) E R dxd x R d, and P is symmetric positive semidefinite. In this case,
+vol(g) is proportional to det(P -1) (see [6, w
+With this parametrization we
+can cast the problem above as
+minimize det P-1
+subject tollPzi+ql[2<l,
+i-l,2,...,n,
+with variables P -
+E a dxd and q C R d. We have written the objective
+informally as det P- 1; a more precise description is faet_inv (P), where
+A [det(P) -1
+P - pT ~_ 0
+otherwise.
+Graph Implementations for Nonsmooth Convex Programs
+This function implicitly constrains P to be symmetric and positive definite. The
+function faet_inv is convex, so the,problem above is a convex problem.
+The following cvx/MATLAB~ code generates a random set of points and
+computes the optimal ellipsoid by solving (5)"
+z = randn(d,n) ;
+variables P(d,d) q(d)
+minimize (det_inv(P) )
+subject to
+norm( P,z(',i)+q,2 ) <= I;
+The function det_inv represents faet_inv('), including the implicit constraint that
+its argument be symmetric and positive definite. It is known that this problem
+can be cast as a semidefinite program (SDP), but the required conversion is
+quite complicated. Fortunately, that conversion is buried inside cvx's definition
+of det_inv and performed automatically.
+This is, of course, a considerably abbreviated introduction to cvx, intended
+only to give the reader an idea of the basic syntax and structure of cvx models.
+The reader is encouraged to read the user's guide for a more thorough treat-
+ment, or to download the software and try it. The examples presented here can
+be entered exactly as listed.
+3 Disciplined Convex Programming
+Disciplined convex programming was first named and described by Grant, Boyd,
+and Ye in and Grant in . It was modeled on the methods used by those who
+regularly construct convex optimization models. Such modelers do not simply
+construct arbitrary nonlinear programs and attempt to verify convexity after the
+fact; rather, they begin with a mental library of functions and sets with known
+geometries, and combine them in ways which convex analysis guarantees will
+preserve convexity.
+Disciplined convex programming is an attempt to formalize and this practice
+and codify its techniques. It consists of two key components:
+9 an atom library--a collection of functions or sets with known properties of
+curvature (convexity and concavity) and monotonicity; and
+9 the DCP ruleset--a finite enumeration of ways in which atoms may be com-
+bined in objectives and constraints while preserving convexity.
+The rules are drawn from basic principles of convex analysis, and are easy to
+learn, once you have had an exposure to convex analysis and convex optimization.
+They constitute a set of sufficient but not necessary conditions for convexity,
+M.C. Grant and S.P. Boyd
+which means that it is possible to build models that violate the rules but are still
+convex. We will provide examples of such violations and their resolution later in
+this section.
+Preliminaries
+The rules of disciplined convex programming depend primarily upon the cur-
+vature of numeric expressions. The four categories of curvature considered are
+constant, affine, convex, and concave. The usual definitions apply here; for ex-
+ample, a function f : R n ~ a is convex if its domain is a convex set, and
+f(Gx + (1 -G)y) _< c~f(x) + (1 -(~)f(y)
+Vx, y e R n, c~ E .
+Of course, there is significant overlap in these categories: constant expressions
+are affine, and real affine expressions are both convex and concave. Complex
+constant and affine expressions are considered as well, but of course convex and
+concave expressions are real by definition.
+Functions in the atom library are chracterized not just by curvature but by
+monotonicity as well. Three categories of monotonicity are considered: nonde-
+creasing, nonincreasing, and nonmonotonic. Again, the usual mathematical def-
+initions apply; for example, a function f" R ~ R is nondecreasing if
+f (x) >_ f (y).
+Two technical clarifications are worth making here. First, monotonicit X
+sidered in a global, extended-valued sense. For example, the MATLAB
+root function sqrt is interpreted in cvx as follows:
+fsqrt" R + (R tO-~),
+Under this interpretation, it is concave and nondecreasing. Secondly, for func-
+tions with multiple arguments, curvature is considered jointly, while mon-
+tonicity is considered separately for each argument. For example, the function
+quad over_lin in cvx, given by
+(X, y) - [
+fqol (x, y)" (R n • R) ~ (R O +c~),
+is jointly convex in x and y, but nonincreasing in y alone.
+With terminology defined, we now proceed to the ruleset itself.
+Constraints and Objectives
+A disciplined convex program may either be an optimization problem consist-
+ing of a single objective and zero or more constraints, or a feasibility problem
+Graph Implementations for Nonsmooth Convex Programs
+consisting of one or more constraints and no objective. The rules for objectives
+and constraints are as follows:
+9 A valid objective is
+the minimization of a convex expression;
+the maximization of a concave expression.
+9 A valid constraint is
+a set membership relation (E) in which the left-hand side (LHS) is affine
+and the right-hand side (RHS) is a convex set.
+an equality (=) with an affine LHS and an affine RHS.
+a less-than inequality (_<) with a convex LHS and a concave RHS.
+a greater-than inequality (>_) with a concave LHS and a convex RHS.
+For any problem that conforms to these rules, the constraint set is convex.
+These rules, however, require more than just convexity of the constraint set:
+They constrain how the constraint set is described. For example, the constraint
+square (x)==0, where x is a scalar variable, defines the convex set {0}. But it is
+rejected by the rules above, since the LHS of this equality constraint is not affine.
+When the constraint is written in the equivalent form x==O, however, which is
+accepted by the rules above, since both sides are affine.
+Simple Expressions
+Disciplined convex programming determines the curvature of numeric and set
+expressions by recursively applying the following rules. This list may seem long,
+but it is for the most part an enumeration of basic rules of convex analysis for
+combining convex, concave, and affine forms: sums, multiplication by scalars,
+and so forth. For the basics of convex analysis, see, e.g., .
+9 A valid affine expression is
+a valid constant expression;
+a declared variable;
+a valid call to a function with an affine result;
+the sum or difference of affine expressions;
+the product of an affine expression and a constant.
+9 A valid convex expression is
+a valid constant or affine expression;
+a valid call to a function with a convex result;
+the sum of two or more convex expressions;
+the difference between a convex expression and a concave expression;
+the product of a convex expression and a nonnegative constant;
+the product of a concave expression and a nonpositive constant;
+the negation of a concave expression.
+9 A valid concave expression is
+a valid constant or affine expression;
+a valid call to a function in the atom library with a concave result;
+the sum of two or more concave expressions;
+M.C. Grant and S.P. Boyd
+the difference between a concave expression and a convex expression;
+the product of a concave expression and a nonnegative constant;
+the product of a convex expression and a nonpositive constant;
+the negation of a convex expression.
+A valid convex set expression is
+a valid reference to a convex set in the atom library;
+the intersection of two or more convex set expressions;
+the sum or difference of convex set expressions;
+the sum or difference of a convex set expression and a constant;
+the product of a convex set expression and constant.
+If an expression cannot be categorized by this ruleset, then it is rejected by
+cvx. For matrix and array expressions, these rules are applied on an elementwise
+basis. We note that the set of rules listed above is redundant; there are much
+smaller, equivalent sets of rules.
+Of particular note is that these expression rules forbid products between non-
+constant expressions. We call this the no-product rule for obvious reasons. For
+example, the expression xv/x , written in cvx as x,sqrt (x), is convex (at least
+when x is positive) but is rejected by cvx as violating the above rules. Fortu-
+nately, cvx provides a function called pou_pos (x, p) that implements the convex
+and concave branches of x^p, so this expression can be written as pow(x,3/2).
+Compositions
+A basic rule of convex analysis is that convexity is closed under composition
+with an atone mapping. This is part of the DCP ruleset as well:
+9 A convex, concave, or atone function may accept as an argument an ai~ne
+expression (assuming it is of compatible size).
+For example, consider the function square, which is provided in the cvx atom
+library. This function squares its argument; i.e., it computes x. ,x. (For array
+arguments, it squares each element independently.) It is known to be convex,
+provided its argument is real. So if x is a real variable, then
+square( x )
+is accepted by cvx; and, thanks to the above rule, so is
+if A and b are constant matrices of compatible size.
+The DCP ruleset also provides for certain nonlinear compositions as well. The
+four composition rules are:
+9 If a convex function is nondecreasing in a given argument, then that argument
+may be convex.
+9 If a convex function is nonincreasing in a given argument, then that argument
+may be concave.
+Graph Implementations for Nonsmooth Convex Programs
+9 If a concave function is nondecreasing in a given argument, then that argu-
+ment may be concave.
+9 If a concave function is nonincreasing in a given argument, then that argu-
+ment may be convex.
+(In each case, we assume that the argument is of compatible size.) In fact, nearly
+every rule in the DCP ruleset can be derived from these composition rules.
+For example, the pointwise maximum of convex functions is convex, because
+the maximum function is convex and nondecreasing. Thus if x is a vector variable
+max( abs( x ) )
+obeys the first of the four composition rules and is therefore accepted by cvx.
+In fact, the infinity-norm function norm( x, Inf ) is defined in exactly this
+manner. Affine functions must obey these composition rules as well; but because
+they are both convex and concave, they prove a bit more flexible. So, for example,
+the expressions
+sum( square( x ) )
+sum( sqrt( x ) )
+are both valid nonlinear compositions in cvx since the rules for both the convex-
+nondecreasing and convex-nonincreasing cases apply to sum.
+The Ruleset in Practice
+As we stated in the introduction to this section, the DCP rules are sufficient
+but not necessary conditions for the convexity (or concavity) of an expression,
+constraint, or objective. Some expressions which are obviously convex or concave
+will fail to satisfy them. For example, if x is a cvx vector variable, then the
+expression
+sqrt( sum( square( x ) ) )
+is rejected by cvx, because there is no rule governing the composition of a concave
+nondecreasing function with a convex function. Fortunately, there is a simple
+workaround in this case: use norm ( x ) instead, since norm is in the atom library
+and is known by cvx to be convex.
+This is an example of what is meant by our statement in the introduction that
+disciplined convex programming requires the modeler to supply "just enough"
+structure to enable the automation of the solution process. Obviously, both norm
+and the longer, non-compliant version are equivalent numerically, but the latter
+form enables cvx to complete the verification and conversion process. Of course,
+because the library is finite, there will inevitably be instances where a simple
+substitution is not possible. Thus to insure generality, the atom library must be
+expandable.
+M.C. Grant and S.P. Boyd
+4 Graph Implementations
+Any modeling framework for optimization must provide a computational de-
+scription of the functions its supports to the underlying solver. For a smooth
+function, this traditionally consists of code to compute the value an derivatives
+of the function at requested points. In cvx, it is possible to define a convex
+or a concave function as the solution of a parameterized DCP. We call such a
+definition a graph implementation, a term first coined in and inspired by
+the properties of epigraphs and hypographs of convex and concave functions,
+respectively.
+The Basics
+Recall the definition of the epigraph of a function f :R n --~ (R U +oc):
+epi f _a { (x, y) e R n x a I f(x) _ y }.
+A fundamental principle of convex analysis states that f is a convex function
+if and only if epi f is a convex set. The relationship between the two can be
+expresed in a reverse fashion as well:
+f(x) =_ inf { y I (x, y) C epi f }.
+(We adopt the convention that the infimum of an empty set is +oc.) Equation
+(12) expresses f as the solution to a convex optimization problem---or, more
+accurately, a family of such problems, parameterized by the argument x.
+A graph implementation of f takes the relationship in (12) and makes it
+concrete, by expressing epi f in a solvable manner--that is, with an equivalent
+collection of constraints in x and y that are compatible with the target solver.
+For example, consider the real absolute value function Abs(X) =
+IX I. Its epigraph
+can be represented as an intersection of two linear inequalities:
+epi fabs = { (x, y) l lxl <_ Y } = { (x, y) l x < y,-x < y }
+A graph implementation is just a description or encapsulation of that transfor-
+mation, justified mathematically through a simple equivalency of sets.
+In cvx, graph implementations can be specified using the same syntax as other
+cvx models, and are subject to the same DCP ruleset as well. The following
+cvx/MATLAB@ code is a representation of faDs"
+function y = f_abs(x)
+variable y
+minimize( y )
+subject to
+Graph Implementations for Nonsmooth Convex Programs
+(The absolute value function abs in cvx is actually implemented
+a bit differently;
+for example, it supports complex values and vector-valued arguments,
+elementwise fashion.)
+If f_abs is called with a numeric value of x, then the cvx specification it con-
+tains will construct a linear program with a single variable and two inequalities.
+reaching cvx_end, cvx will call the underlying solver and compute
+correct result--at least to within the tolerances of the solver. This is, of course,
+a rather impractical way to compute
+the absolute value; in the real implemen-
+tation of abs in cvx we avoid this inefficiency. But it is, at least, technically
+correct, and it is also a useful way to debug a graph implementation.
+The more interesting case is when f_abs is used within a cvx model, with
+an affine cvx expression for an argument.
+In this case, the cvx specification
+will be incomplete, because the value of x is not yet known. What
+cvx does in
+this circumstance is to incorporate the specification into the surrounding model
+itself, in a manner
+not unlike the expansion of a inline function in C++.
+example, if z is a scalar cvx variable, then the constraint
+f_abs(z-3)
+will be translated internally by cvx as follows:
+(Steps are taken as needed to avoid name conflicts with existing variables.) The
+constraint is now in a form compatible with an efficient solver. Of course, two
+new variables and several new constraints have been added, but in the long run
+the added costs of expansions like this are far outweighed by the fact that a
+much more efficient solver can now be used, because the nondifferentiability has
+been eliminated.
+Of course, the transformation of the absolute value function into an efficiently
+solvable form is relatively well known. But while it may be obvious to some, it
+is certainly not to everyone; and it is certainly convenient to have the transfor-
+mation automated. For more advanced functions, the benefits should be more
+Advanced Usage
+Graph implementations of convex functions are not, in fact, limited to strict
+epigraph representations. Suppose that S c R n x R m is a convex set and f
+(R n • R m) ~ (R U +ce) is jointly convex in x and y; then
+(a u -~-cx)),
+f (x) ~- inf { f(x, y) [ (x, y) C S }
+is a convex function of x. If m -- 1 and f(x, y) a_ Y, then the epigraph form (12)
+is recovered; but cvx fully supports this more general form.
+M.C. Grant and S.P. Boyd
+For example, consider the unit-halfwidth Huber penalty function h(x):
+This function cannot be used in an optimization algorithm utilizing Newton's
+method, because its Hessian is discontiuous at x = +1, and zero for Ix[ _> 1.
+However, it can be expressed in the form (14) in this manner:
+h(x) a_inf{2v+w 2 [[x[_<v+w, w<_l}
+We can implement the Huber penalty function in cvx as follows:
+function cvx_optval = huber( x )
+variables w v;
+minimize( 2 * v + square( w ) );
+subject to
+abs( x ) <= w + v;
+If huber is called with a numeric value of x, then cvx will solve the resulting
+QP and return the numeric result. (As with f_abs, there is a simpler way to
+compute the Huber penalty when its argument is a numeric constant.) But
+if huber is called from within a larger cvx specification, then cvx will use this
+implementation to transform the call into a form compatible with the underlying
+solver. Note that the precise transformation depends on how square and abs are
+themselves implemented; multilevel transformations like this are quite typical.
+There is a corresponding development for concave functions as well. Given
+the set S above and a concave function g: ( Rn • Rm) --+ (R [3 +oo) is concave,
+the function
+{ g(x, y) I (x, y) c s }
+is also a concave function. If 9(x, y) -~ y, then
+f(x) A sup { y I (x, y) E S }
+gives the hypograph representation of f; that is, S- hypo f. In cvx, a concave
+incomplete specification is simply one that uses a maximize objective instead of
+a minimize objective.
+Some functions are not thought of as nondifferentiable in a casual setting but
+are technically so, and must be dealt with as such in an optimization algorithm.
+Consider, for example, the real square root function (9) above. This function is
+concave, and is smooth for positive x, but not at x - 0. Its hypograph, however, is
+hypo fsqrt -~ { (x, y) [ x _> 0, ~
+_> y } - { (x, y) [ max{y, 0} 2 _< x }
+Graph Implementations for Nonsmooth Convex Programs
+Thus a graph implementation can solve the nondifferentiability problem. In cvx,
+this function can be implemented as follows:
+function y = f_sqrt(x)
+variable y
+maximize( y )
+subject to
+square( y ) <= x
+This particular type of nondifferentiability also occurs in the concave entropy
+function; it can be eliminated with a similar transformation.
+Conic Solver Support
+The most obvious benefit of graph implementations is their ability to describe
+nonsmooth functions in a computationally efficient manner. But the solvers used
+in the first publicly released versions of cvx posed a different challenge: they did
+not support smooth functions either. Rather, these solvers solved semidefinite-
+quadratic-linear programs (SQLPs)--problems of the form
+subject to Ax = b
+X C K:I • K~2 x ...~L
+where x is the optimization variable, .4 is a linear operator, b and c are vectors,
+and the sets K:i are convex cones from a select list: the nonnegative orthant R~_,
+the second-order cone Qn, and the semidefinite cone S~:
+~n ~_A { (X, y) e R n • R ] Ilxll2 <_ y }
+~; A { X C a nxn ] Z - X T, ~min(X) ~ 0 }
+Clearly, SQLPs are very closely related to SDPs; in fact, all SQLPs can be solved
+as SDPs. For more information about these problems, consult , or the
+documentation on the solvers themselves .
+In practice, few application-driven models naturally present themselves as
+SQLPs; rather, modelers have simply recognized that their problems can be
+transformed into that form. In fact, as is known to readers of certain well-known
+texts on the subject , SQLPs are very versatile, and can represent
+a wide variety of smooth and nonsmooth convex programs. The challenge, then,
+lies in finding an SQLP representation of of a given convex program--assuming
+one exists.
+Using graph implementations, a variety of both smooth and nonsmooth func-
+tions were added to the cvx atom library for SQLP solvers, including minimums
+and maximums, absolute values, quadratic forms, convex and concave branches
+of the power function x p, ~p norms, convex and concave polynomials, geometric
+M.C. Grant and S.P. Boyd
+means, eigenvalue and singular value functions, and determinants. Key omissions
+include logarithms, exponentials, and entropy; such functions simply cannot be
+exactly represented in an SQLP solver. (On the other hand, smooth solvers can-
+not solve many of the eigenvalue and determinant problems for which SQLP
+solvers excel.)
+For a simple example, consider the function fsq(X) a_ x2; its epigraph form
+(12) can be expressed using a single semidefinite cone:
+fsq(X) A inf { y l[ y x
+The cvx version of this function is
+function y = f_sq(x)
+variable y
+minimize( y )
+[ y, x ; x, I ] == semidefinite(2);
+(Since MATLAB| does not have a set membership c operator, cvx uses equality
+constraints and functions like semidefinite to accomplish the same result.)
+For a somewhat more complex example, consider the matrix fractional func-
+tion f~f: (R n • R n•
+--~ (R U +oc), where
+f~f(x, Y) -
+This function is convex in both arguments, and implicitly constrains Y to be
+both symmetric and positive definite. Its epigraph representation is
+fmf(X,Y) Asup{z I Ix YT :] ES~ +1 }
+so it may be implemented in cvx as follows:
+function cvx_optval = f_mf( x, Y )
+n = length( x );
+variable z ;
+minimize( z ) ;
+subject to
+[ Y, x ; x', z ] == semidefinite(n+l);
+Both f_sq and f_mf are relatively simple examples in comparison to other
+functions in the cvx library. The complexity of some SQLP implementations is in
+some cases quite striking. For example, the ~p norm can be represented exactly in
+an SQLP whenever p = n/d is rational. The number of cone constraints required
+to represent it, however, depends not only on the size of the vector involved, but
+also in the pattern of bits in a binary representation of n and d! Needless to
+say, performing such transformations by hand is quite impractical--but once
+implemented, quite reasonable for a computer.
+Graph Implementations for Nonsmooth Convex Programs
+Final Words
+We believe that disciplined convex programming closes a significant gap between
+the theory and practice of convex optimization. A large fraction of useful con-
+vex programs are nonsmooth; and until now, those who wished to solve them
+were faced with unattractive options: transform them by hand to a different,
+more easily solved form; develop a custom solver; utilize a poorly-performing
+subgradient-based method; or approximate. A modeling framework that sup-
+ports disciplined convex programming provides a truly attractive alternative in
+most of these cases.

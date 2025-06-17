@@ -1,0 +1,622 @@
+Using Inaccurate Models in Reinforcement Learning
+Pieter Abbeel
+ 
+Morgan Quigley
+ 
+Andrew Y. Ng
+ 
+Computer Science Department, Stanford University, Stanford, CA 94305, USA
+In the model-based policy search approach
+to reinforcement learning (RL), policies are
+found using a model (or “simulator”) of the
+Markov decision process. However, for highdimensional continuous-state tasks, it can
+be extremely diﬃcult to build an accurate
+model, and thus often the algorithm returns
+a policy that works in simulation but not in
+real-life. The other extreme, model-free RL,
+tends to require infeasibly large numbers of
+real-life trials.
+In this paper, we present a
+hybrid algorithm that requires only an approximate model, and only a small number
+of real-life trials. The key idea is to successively “ground” the policy evaluations using
+real-life trials, but to rely on the approximate model to suggest local changes.
+theoretical results show that this algorithm
+achieves near-optimal performance in the real
+system, even when the model is only approximate.
+Empirical results also demonstrate
+that—when given only a crude model and
+a small number of real-life trials—our algorithm can obtain near-optimal performance
+in the real system.
+1. Introduction
+In model-based reinforcement learning (or optimal
+control), one ﬁrst builds a model (or simulator) for the
+real system, and ﬁnds the control policy that is optimal in the model. Then this policy is deployed in the
+real system. Research in reinforcement learning and
+optimal control has generated eﬃcient algorithms to
+ﬁnd (near-)optimal policies for a large variety of models and reward functions.
+ ; Bertsekas ; Bertsekas and Tsitsiklis ; Sutton and Barto .)
+However, for many important control problems, particularly high-dimensional continuous-state tasks, it is
+Appearing in Proceedings of the 23 rd International Conference on Machine Learning, Pittsburgh, PA, 2006. Copyright 2006 by the author(s)/owner(s).
+extremely diﬃcult to build an accurate model of the
+Markov decision process. When we learn a policy using an inaccurate model, we are often left with a policy that works well in simulation (i.e., the policy works
+well in the model), but not in real-life. In contrast to
+model-based policy search, there is the other extreme
+of searching for controllers only on the real system,
+without ever explicitly building a model.
+successfully applied to a few applications , these model-free RL approaches
+tend to require huge, and often infeasibly large, numbers of real-life trials.
+The large number of real-life trials required by modelfree RL is in sharp contrast to, e.g., humans learning to
+perform a task. Consider, for example, a young adult
+learning to drive a car through a 90-degree turn, more
+speciﬁcally, learning the amount of steering required.
+On the ﬁrst trial, she might take the turn wide. She
+will then adjust and take the next turn much less wide
+(or maybe even take it short). Typically, it will require
+only a few trials to learn to take the turn correctly.
+The human driver clearly does not have a perfect
+model of the car. Neither does she need a large number
+of real-life trials. Instead, we believe that she combines
+a crude model of the car together with a small number
+of real-life trials to quickly learn to perform well.
+In this paper, we formalize this idea and develop an algorithm that exploits a crude model to quickly learn to
+perform well on real systems. Our theoretical results
+show that—assuming the model derivatives are good
+approximations of the true derivatives, and assuming
+deterministic dynamics—our algorithm will return a
+policy that is (locally) near-optimal.
+The key idea is to use a real-life trial to evaluate a
+policy, but then use the simulator (or model) to estimate the derivative of the evaluation with respect
+to the policy parameters (and suggest local improvements).
+For example, if in a car our current policy
+drives a maneuver too far to the left, then driving in
+real-life will be what tells us that we are driving too
+far to the left. However, even a very poor model of
+the car can then be used to tell us that the change
+Using Inaccurate Models in Reinforcement Learning
+we should make is to turn the steering wheel clockwise
+(rather than anti-clockwise) to correct for this error.
+In particular, we do not need additional real-life trials
+of turning the steering wheel both clockwise and anticlockwise in order to decide which direction to turn
+it. Therefore, even a crude model of the car allows
+us to signiﬁcantly reduce the number of real-life trials
+needed compared to model-free algorithms that operate directly on the real system.
+Compared to standard model-based algorithms, our
+approach has the advantage that it does not require a
+“correct” model of the Markov decision process. Despite the progress in learning algorithms for building
+better dynamical models, it remains an extremely diﬃcult problem to model the detailed dynamics of many
+systems, such as helicopters, cars and some aircraft.
+The approach we present requires only a very crude
+model of the system.
+Although an extension to stochastic systems might be
+possible, the algorithm and guarantees we present in
+this paper only apply to systems that are (close to) deterministic. Despite this limitation, we believe our algorithm still has wide applicability. In our experience
+with a variety of systems, such as autonomous cars
+and helicopters, we have observed that they behave
+close to deterministically (in the absence of external
+disturbances, such as wind).1
+Throughout the paper, we assume a continuous state
+space and a continuous action space.
+The remainder of this paper is organized as follows:
+Section 2 covers preliminaries. Section 3 describes our
+algorithm in full detail. Section 4 gives formal performance guarantees for our algorithm. Section 5 demonstrates the eﬀectiveness of our algorithm when applied
+to ﬂying a ﬁxed-wing aircraft in a ﬂight simulator and
+when applied to driving a real RC car.
+2. Preliminaries
+A non-stationary Markov decision process (MDP) can
+be described by a tuple (S, A, T, H, s0, R), where S =
+Rn is a set of states; A = Rp is a set of actions/inputs;
+T = {Pt(·|s, a)}t,s,a is a set of time-dependent state
+transition probabilities (here, Pt(·|s, a) is the state
+transition distribution upon taking action a in state s
+at time t); the horizon H is the number of time steps;
+s0 is the initial state at time 0; and R : S 7→R is the
+reward function. We assume that R is bounded from
+above, i.e., for all states s ∈S we have R(s) ≤Rmax.
+A policy π = (π(0), π(1), . . . , π(H)) is a set of mappings
+from the set of states S to the set of actions A for
+1Even though stochastic models are often used in reinforcement learning, the stochasticity of the models is often
+artiﬁcial and is to a large part used to capture unmodeled
+dynamics, rather than actual stochasticity.
+each time t = 0, 1, . . . , H. The utility of a policy π in
+an MDP M is given by UM(π) = E[PH
+t=0 R(st)|π, M].
+Here the expectation is over all possible state trajectories s0, s1, . . . , sH in the MDP M. Throughout the
+paper we consider policies parameterized by a parameter θ. We let π(t)
+θ (s) denote the action taken by the
+policy πθ when in state s at time t.
+This paper focuses on MDPs that are (close to) deterministic. We let {ft : S × A →S}H
+t=0 denote the
+set of state transition functions. Here, ft(s, a) gives
+the expected state at time t + 1 upon taking action
+a in state s at time t. For deterministic systems, the
+system dynamics (T) are speciﬁed completely by the
+time-dependent state transition functions {ft}H
+We use ∥· ∥2 to denote the matrix 2-norm.2
+3. Algorithm
+Our algorithm takes as input an approximate MDP
+M = (S, A, ˆT, H, s0, R) and a local policy improvement algorithm A. The MDP’s dynamics model ˆT is
+a (possibly inaccurate) model of the true dynamics T
+of the true MDP M = (S, A, T, H, s0, R). The local
+policy improvement algorithm A could be any method
+that iteratively makes local improvements upon the
+current policy.
+Two examples are policy gradient
+methods and diﬀerential dynamic programming.3
+The algorithm proceeds as follows:
+1. Set i = 0. Set the initial model estimate ˆT (0) = ˆT.
+2. Find the (locally) optimal policy πθ(0) for the
+M (0) = (S, A, ˆT (0), H, s0, R) by running the
+local policy improvement algorithm A.
+3. Execute the current policy πθ(i) in the real MDP
+M and record the resulting state-action trajectory
+1 , . . . , s(i)
+4. Construct the new model ˆT (i+1) by adding a
+(time-dependent) bias term to the original model
+ˆT. More speciﬁcally, set ˆf (i+1)
+(s, a) = ˆft(s, a) +
+t+1 −ˆft(s(i)
+t ) for all times t.
+5. Use the local policy improvement algorithm A in
+2In the case the matrix is a vector, the matrix 2-norm is
+equal to the Euclidean norm. In general, the matrix 2-norm
+is equal to the maximum singular value of the matrix.
+3Diﬀerential dynamic programming iteratively computes a time-varying linear model by linearizing the state
+transition functions around the current trajectory, and
+then uses the well-known exact solution to the resulting
+LQR (linear quadratic regulator) control problem as the
+step direction to locally improve the current policy. In its full generality, diﬀerential dynamic programming also approximates the reward function
+by a concave quadratic function. The reward function approximation is irrelevant for this paper: in our experiments
+the reward functions themselves are already quadratic.
+Using Inaccurate Models in Reinforcement Learning
+M (i+1) = (S, A, ˆT (i+1), H, s0, R) to ﬁnd
+a local policy improvement direction d(i) such that
+ˆU(πθ(i)+αd(i)) ≥ˆU(πθ(i)) for some step-size α > 0.
+Here ˆU is the utility as evaluated in ˆ
+6. Find the next (and improved) policy πθ(i+1),
+where θ(i+1) = θ(i) + αd(i), by a line search over
+α > 0. During the line search, evaluate the policies πθ(i)+αd(i)in the real MDP M.
+7. If the line-search did not ﬁnd an improved policy, then return the current policy πθ(i) and exit.
+Otherwise, set i = i + 1 and go back to step 3.
+The algorithm is initialized with the policy πθ(0), which
+is locally optimal for the initial (approximate) model
+of the dynamics.
+In subsequent iterations, the performance in the real system improves, and thus the
+resulting policy performs at least as well as the modelbased policy πθ(0), and possibly much better.
+In each iteration i, we add a time-dependent bias to
+the model: the term s(i)
+t+1 −ˆft(s(i)
+t ) in step 4 of
+the algorithm. For the resulting model ˆT (i+1) we have
+that ˆf (i+1)
+t ) = s(i)
+t+1 for all times t.
+the resulting model ˆT (i+1) exactly predicts the real-life
+state sequence s(i)
+1 , . . . , s(i)
+H obtained when executing the policy πθ(i). Thus, when computing the policy
+gradient (or, more generally, a local policy improvement direction) in step 5, our algorithm evaluates the
+derivatives along the correct state-action trajectory.
+In contrast, the pure model-based approach evaluates
+the derivatives along the state-action trajectory predicted by the original model ˆT, which—in the case of
+an imperfect model—would not correspond to the true
+state-action trajectory.
+In contrast to our algorithm, one might also try a
+model-free algorithm in which real-life trajectories are
+used to estimate the policy gradient. However, doing
+so requires at least n real-life trajectories if there are
+n parameters in the policy.5 In contrast, our approach
+requires only a single real-life trajectory to obtain an
+estimate of the gradient. So long as the estimated gradient is within 90◦of the true gradient, taking a small
+4When the local policy improvement algorithm is policy
+gradient, we have d(i) = ∇θ ˆU(θ(i)), the policy gradient in
+M (i+1) evaluated at the current policy πθ(i).
+5If our policy πθ is parameterized by θ ∈Rn, we can
+estimate the derivative of the utility with respect to θi by
+evaluating the policy’s performance U(πθ) using parameters θ and again obtain its utility U(πθ+ϵei) using θ + ϵ · ei
+(where ei is the i-th basis vector).
+Then, we estimate
+the derivative as ∂U(πθ)/∂θi ≈(U(πθ+ϵei) −U(πθ)) /ϵ. In
+practice, this approach of using ﬁnite diﬀerences to numerically estimate derivatives not only suﬀers from the problem
+of requiring a large number of real-life trajectories, but is
+also very sensitive to even small amounts of noise in the
+estimates of the policy’s utility.
+step in the direction of the estimated gradient will improve the policy. Consequently, our approach requires
+signiﬁcantly fewer real-life trials than model-free algorithms to learn a good policy.
+4. Theoretical Results
+Throughout this section we assume that the real system is deterministic, and we assume that the local policy improvement algorithm is policy gradient. In Section 4.1 we give an informal argument as to why our
+algorithm can be expected to outperform model-based
+algorithms that use the same model.
+Then in Section 4.2 we formalize this intuition and provide formal
+performance and convergence guarantees.
+4.1. Gradient Approximation Error
+The dependence of the state st on the policy πθ plays a
+crucial role in our results. To express this dependence
+compactly, we deﬁne the function ht(s0, θ):
+f0(s0, πθ(s0)),
+ft−1 (ht−1(s0, θ)) .
+Thus ht(s0, θ) is equal to the state at time t when using
+policy πθ and starting in state s0 at time 0. For an
+approximate model ˆT we similarly deﬁne ˆht in terms
+of the approximate transition functions ˆft (instead of
+the true transition functions ft).
+Let s0, s1, . . . , sH be the (real-life) state sequence obtained when executing the current policy πθ. Then the
+true policy gradient is given by:
+∇θU(θ) = PH
+t=0 ∇sR(st) dht
+s0,s1,...,st−1 .
+The derivatives appearing in
+can be computed
+by applying the chain rule to the deﬁnition of ht
+(Eqn. 1).6 Expanding the chain rule results in a sum
+and product of derivatives of the transition functions
+{ft}t and derivatives of the policy πθ, which are evaluated at the states of the current trajectory s0, s1, . . ..
+Let s0, ˆs1, . . . , ˆsH be the state sequence according to
+the model ˆT when executing the policy πθ. Then, according to the model ˆT, the policy gradient is given
+t=0 ∇sR(ˆst) dˆht
+ˆs0,ˆs1,...,ˆst−1
+Two sources of error make the policy gradient estimate
+(Eqn. 3) diﬀer from the true policy gradient (Eqn. 2):
+1. The derivatives appearing in
+according to
+6We use the phrasing “derivatives appearing in
+since for an n-dimensional state-space and a q-dimensional
+policy parameterization vector θ, the expression
+denotes the n × q Jacobian of derivatives of each statecoordinate with respect to each entry of θ.
+Using Inaccurate Models in Reinforcement Learning
+the model are only an approximation of the true
+derivatives appearing in dht
+2. The derivatives appearing in ∇sR and in dˆht
+evaluated along the wrong trajectory, namely the
+estimated (rather than the true) trajectory.
+In our algorithm, by adding the time-dependent bias
+to the model (in step 4 of the algorithm), the resulting
+model perfectly predicts the true state sequence resulting from executing the current policy. This results in
+the following gradient estimate:
+∇θ ˆU(θ) = PH
+t=0 ∇sR(st) dˆht
+s0,s1,...,st−1
+which evaluates the derivatives along the true trajectory. Thus, by successively grounding its policy evaluations in real-life trials, our algorithm’s policy gradient
+estimates are actually evaluated along true trajectories,
+eliminating the second source of error.
+We discussed the speciﬁc case of policy gradient. However, for any local policy improvement algorithm used
+in conjunction with our algorithm, we get the beneﬁt of evaluating local changes along the true trajectory.
+For example, our experiments successfully
+demonstrate the beneﬁts of our algorithm when used
+in conjunction with diﬀerential dynamic programming.
+4.2. Formal Results
+The following theorem shows that (under certain assumptions) our algorithm converges to a region of local
+optimality (as deﬁned more precisely in the theorem).
+Theorem 1. Let the local policy improvement algorithm be policy gradient. Let ϵ > 0 be such that for all
+t = 0, 1, . . . , H we have ∥dft
+ds ∥2 ≤ϵ and ∥dft
+da ∥2 ≤ϵ. Let the line search in our algorithm be ηoptimal (i.e., it ﬁnds a point that is within η of the optimal utility along the line). Let all ﬁrst and second order derivatives of {ft(·, ·)}H
+t=0, { ˆft(·, ·)}H
+t=0, πθ(·), R(·)
+be bounded by a constant C. Let R ≤Rmax. Let n, p, q
+denote the dimensionality of the state space, action
+space and policy parameterization space respectively.
+Then our algorithm converges to a locally optimal region, in the following sense: there exist constants K
+and M—which are expressible as a function only of
+n, p, q, the constant C, and the MDP’s horizon H—
+such that our algorithm converges to a region where
+the following holds:
+2 ≤2K2ϵ2 + 2Mη.
+For the case of exact line search (η = 0) we obtain:
+Proof (sketch). 7 The assumptions on the transition
+functions {ft}H
+t=0, the approximate transition functions { ˆft}H
+t=0, the policy class πθ and the reward function R imply that there exist constants K and M (expressible as a function of n, p, q, C and H only) such
+∥∇θU(θ) −∇θ ˆU(θ)∥2
+Thus, our algorithm performs an iterative gradient ascent (with approximate gradient directions and approximate line search) to optimize the utility function U, which is bounded from above and which has
+bounded second order derivatives. Our proof proceeds
+by showing that this optimization procedure converges
+to a region where Eqn. (5) holds.
+Theorem 1 shows that—if certain boundedness and
+smoothness conditions hold for the true MDP and
+the model—our algorithm will converge to a region
+of small gradient. It also shows that, as the model’s
+derivatives approach the true system’s derivatives, the
+gradients in the (shrinking) convergence region approach zero (assuming exact line search).8
+In contrast, no non-trivial bound holds for the modelbased approach without additional assumptions.9
+Theorem 1 assumes a deterministic MDP. Space constraints preclude an in-depth discussion, but we note
+that the ideas can be extended to systems with (very)
+limited stochasticity.10
+7Due to space constraints we refer the reader to the long
+version of the paper for the complete
+8We note that, like exact gradient ascent, our algorithm
+could (pathologically) end up in a local minimum, rather
+than a local maximum.
+9Consider the MDP with horizon H=1, state-space S =
+R, transition function f(s, a) = a, and R(s) = C exp(−s2).
+Now consider the model with transition function ˆf(s, a) =
+a + b, with b ∈R.
+Then, for C and b arbitrarily large,
+the model-based optimal policy will be arbitrarily worse
+than the true optimal policy. However, the assumptions of
+Theorem 1 are satisﬁed with ϵ = 0, and our algorithm will
+ﬁnd the optimal policy in a single iteration.
+10The results can be extended to those stochastic systems for which we can bound the change in the utility
+and the change in the values of the derivatives (used in
+our algorithm) resulting from being evaluated along state
+trajectories from diﬀerent random trials under the same
+policy. We note that the assumption concerns the trajectories obtained under a ﬁxed policy in the policy class πθ,
+rather than any policy or sequence of inputs. Feedback can
+often signiﬁcantly reduce the diversity of state trajectories
+obtained, and thus help in satisfying the assumption. Still,
+the stochasticity needs to be very limited for the resulting
+bounds to be useful. A signiﬁcant change in the algorithm
+(or at least in the analysis of the algorithm) seems necessary to obtain a useful bound for systems with signiﬁcant
+Using Inaccurate Models in Reinforcement Learning
+Table 1. Utilities achieved in the ﬂight simulator: mean
+and one standard error for the mean (10 runs).
+Model-based
+Our algorithm
+Improvement
+−13, 028 (±330)
+−3, 000 (±100)
+5. Experimental Results
+In all of our experiments, the local policy improvement
+algorithm is diﬀerential dynamic programming (DDP).
+We also used DDP to ﬁnd the initial policy πθ(0).11
+5.1. Flight Simulation
+We ﬁrst tested our algorithm using a ﬁxed-wing aircraft ﬂight simulator. The ﬂight simulator model contains 43 parameters corresponding to mass, inertia,
+drag coeﬃcients, lift coeﬃcients etc.
+We randomly
+generated “approximate models” by multiplying each
+parameter with a random number between 0.8 and 1.2
+(one independent random number per parameter).12
+The model with the original (true) parameters is the
+“real system” in our algorithm. Our (closed-loop) controllers control all four standard ﬁxed-wing aircraft inputs: throttle, ailerons, elevators and rudder.
+reward function quadratically penalizes for deviation
+from the desired trajectory (which in our case was a
+ﬁgure-8 at ﬁxed altitude), for non-zero inputs, and for
+changes in inputs at consecutive time steps.13
+Table 1 compares the performance of our algorithm
+and the model-based algorithm.
+Our algorithm signiﬁcantly improves the utility (sum of accumulated
+rewards), namely by about 76%, within 5 iterations.
+Since typically only 1 iteration was required in the line
+searches, this typically corresponded to (only) 5 reallife trials. Figure 1 shows the result of one representative run: the desired trajectory (black, dotted), the
+stochasticity.
+11In iteration i, let πθ(i) be the current policy, and let
+πθ(i)′ be the policy returned by DDP (applied to the MDP
+M (i+1)). Then, we have that d(i) = θ(i)′ −θ(i) is the policy
+improvement direction. For the line search, we initialized
+α = 1 (which corresponds to the policy πθ(i)′), and then
+reduced α by 50% until an improved policy was found.
+12We discarded approximate models for which the initial
+(model-based) controller was unstable in the real system.
+(This was ±20% of the approximate models.)
+13Details of the setup: The ﬁxed-wing ﬂight simulator
+experiments were produced using the linearized 6-DOF
+model developed in Chapter 2 of Stevens and Lewis .
+The parameterization is intended to model a small (1kilogram, 1.5-meter wingspan) wing-body UAV that ﬂies
+at low airspeeds (10 m/s). The simulation ran at 50Hz.
+The target trajectory was a ﬁgure-8 at ﬁxed altitude with
+varying speed: slower in the turns, faster in the straight
+segments. The penalties on the inputs and on the changes
+in inputs make the controller more robust to model inaccuracies. The trajectory was 60 seconds long.
+Figure 1. Results of our algorithm for the ﬂight simulator.
+Black, dotted: desired trajectory; blue, solid: controller
+from model; green, dashed: controller after ﬁve iterations
+of our algorithm. (See text for details.)
+trajectory with the controller from the (approximate)
+model (blue, solid), and the trajectory obtained after
+5 iterations of our algorithm (green, dashed). The top
+plot shows the (x, y) coordinates (North, East), the
+bottom plot shows z (the altitude) over time.
+initial controller (based on the perturbed model) performs reasonably well at following the (x, y) coordinates of the trajectory. However, it performs poorly
+at keeping altitude throughout the maneuver.
+algorithm signiﬁcantly improves the performance, especially the altitude tracking. We note that it is fairly
+common for badly-tuned controllers to fail to accurately track altitude throughout transient parts of maneuvers. (Such as rolling left-right to stay in the ﬁgure-
+8 for our control task.)
+Figure 2. Screenshot of the ﬂight-simulator.
+A graphical simulation14 of the trajectories ﬂown by
+the model-based controller and by the controller found
+by our algorithm is available at the following url:
+www.cs.stanford.edu/~pabbeel/rl-videos.
+14The (OpenGL) graphical ﬂight simulator was originally developed by one of the authors, and is now maintained at 
+Using Inaccurate Models in Reinforcement Learning
+Figure 2 shows a screenshot of the graphical simulator.
+5.2. RC Car
+In our second set of experiments, we used the RC car
+shown in Figure 3. A ceiling-mounted camera was used
+to obtain position estimates of the front and the rear
+of the car (marked with red and blue markers). This
+allowed us to track the car reliably within a rectangle
+of 3 by 2 meters. We then used an extended Kalman
+ﬁlter to track the car’s state based on these observations in real-time.15
+Figure 3. The RC car used in our experiments.
+We modeled the RC car with six state-variables: the
+steering angle δ, the forward velocity of the front
+wheels v, the position coordinates x, y, the heading
+angle ψ and the heading rate ˙ψ. The inputs are the
+steering wheel servo input (u1 ∈[−1, +1]) and the
+drive motor throttle (u2 ∈[−1, +1]). At the speeds we
+consider, the slippage of front and rear wheels is negligible. Rigid-body kinematics then gives the heading
+rate ˙ψ as a function of steering angle and velocity.16
+Data collected from the car showed that, when the
+throttle is decreased, the car slows down with ﬁxed
+acceleration. However, when the throttle is increased,
+the response is similar to a ﬁrst order linear model.
+15Experimental setup details: The RC car is an oﬀ-theshelf XRAY M18, which has an electric drive motor and
+an electric steering servo motor. The car was ﬁtted with
+lower gearing to allow it to run reliably at lower speeds
+(necessary to stay within the 3 by 2 meters area that can
+be tracked by the camera). It was ﬁtted with a switching
+voltage regulator to prevent battery decay from aﬀecting
+performance.
+The video stream captured by the ceiling
+mounted camera was digitized by a 2GHz Linux workstation and processed by OpenCV to dewarp the
+camera image. Custom software was then used to locate
+the largest centroid of red and blue in the image, and to
+map those image locations back to their respective positions in the ground plane. This experimental setup was
+inspired in part by a similar one in Andrew W. Moore’s
+Auton Lab at Carnegie-Mellon University.
+16See, e.g., Gillespie pp. 196-201, for details on
+low-speed turning and details on car modeling in general.
+This results in the following model:
+a1u1 + b1,
+(δss −δ)/τδ,
+a2u2 + a3|u1| + b2,
+1{vss ≥v}(vss −v)/τv + 1{vss < v}a4,
+Here 1{·} is the indicator function, which returns one
+if its argument is true and zero otherwise; δss is the
+steady state steering angle for ﬁxed input u1; vss is
+the steady-state velocity for ﬁxed inputs u1 and u2.
+We ﬁnd the state variables x, y, ψ by numerical integration. The parameters (a1, b1, a2, b2, a3, a4, τδ, τv, L)
+were estimated from measurements from the car and
+data collected from manually driving the car.17
+We considered three control problems: a turn with
+an open-loop controller, circles with a closed-loop controller, and a ﬁgure-8 with a closed-loop controller.
+During the open-loop turn, the desired velocity and
+turning radius change. Thus, the control task requires
+a sequence of inputs, not just a single throttle and
+steering input setting.
+The circle maneuver is nontrivial because of the velocity (1.4m/s) and the tight
+turning radius. Moreover, the carpet threading makes
+the RC car drift, and thus the circle cannot be driven
+with a ﬁxed throttle and steering input. The ﬁgure-8
+maneuver is the most challenging of the three maneuvers: the car is required to drive at varying speeds
+(fast in straight segments (1.4m/s), slower in turns
+(1.0m/s)) and is required to make sharp turns, which
+requires fast and accurate control at the desired velocity.
+In each case, our reward function penalizes
+quadratically for deviation from the target trajectory
+(which deﬁnes a target state for each time step) and
+penalizes quadratically for inputs and changes in the
+17We measured the wheelbase of the car L. We measured
+the steering angle for various inputs u1, and used linear regression to initialize the parameters a1, b1. We collected
+about 30 minutes of data (at 30Hz) from the RC car driving in circles with diﬀerent radii and at various speeds,
+including the velocities and turning radii for the control
+tasks to come. We used linear regression to estimate the
+parameters a2, b2, a3 from the data segments where steadystate velocity was reached. We used step-input responses
+to initialize the parameters τδ, τv, a4. We ﬁne-tuned the
+parameters a1, b1, τδ, τv, a4 by maximizing the likelihood
+of the data (using coordinate ascent). The model included
+that when the throttle input was very close to 0 (more
+speciﬁcally, below 0.18), the RC car’s drive motor would
+stall, i.e., the drive motor acted as if its input was 0. The
+model included the latency from inputs to camera observation: it was estimated from step-input responses to be 0.1
+seconds. Modeled latency does not aﬀect, and is orthogonal
+to, our method. However, unmodeled latency contributes
+to model error and could thus decrease performance.
+Using Inaccurate Models in Reinforcement Learning
+The penalty terms on the inputs make the
+controller more robust to model inaccuracies.
+e.g., Anderson and Moore for more details.)18
+For all three control problems our algorithm significantly outperforms the model-based controller after
+5-10 iterations, with typically 1-4 real-life executions
+required per iteration (due to the line search). Figure 4 shows the improvements throughout the algorithm for the case of the turn with open loop control.
+We see that the algorithm consistently makes progress
+to ﬁnally follow the turn almost perfectly. This is in
+sharp contrast to the performance of the model-based
+controller.
+Figure 5 shows the initial (model-based)
+trajectory and the trajectory obtained with our algorithm for the cases of closed-loop control for following
+a circle and a ﬁgure-8. Our algorithm improved the
+performance (utility) by 97%, 88% and 63% for the
+turn, circles and ﬁgure-8, respectively. Videos of the
+real-life trials when learning to drive the diﬀerent trajectories are available at the url given previously.19
+The sub-optimal performance of the model-based policy approach indicates model inaccuracies.
+the amount of training data collected (covering the
+velocities and turning radii required for the control
+tasks later), we believe that the model inaccuracies
+are caused by our car modeling assumptions, rather
+than lack of data. This suggests a more complex car
+model might be needed for the model-based approach.
+Additional model inaccuracy results from the carpet
+threading.
+The asymmetric carpet threading causes
+the RC car to drift by up to 0.10m per circle when
+driving circles of 1m radius in open-loop (ﬁxed throttle and steering inputs).
+The carpet threading also
+seems to aﬀect the stalling speed of the drive motor.
+To evaluate how deterministic the RC car setup is, we
+repeatedly ran a few open-loop input sequences. For
+the same input sequence, the end-points of the trajectories diﬀered from a few centimeters up to 50cm
+(for 2 second runs). We believe the (apparent) nondeterminism was caused mostly by the (unavoidably)
+slightly diﬀering initial positions, which result in different interactions with the carpet throughout the trajectory. This eﬀect is most signiﬁcant when the car
+drives around the stalling speed of the drive motor.
+18Control setup details: diﬀerential dynamic programming generated a sequence of linear feedback controllers
+(for the closed-loop case) and a sequence of inputs (for the
+open-loop case), all at 20Hz. The extended Kalman ﬁlter
+updated its state at roughly 30Hz (the frame rate of the
+camera). Whenever the state estimate was updated, the
+controller for the time closest to the current time was used.
+All three target trajectories started from zero velocity.
+19We repeated the experiments 3-4 times for each maneuver, with similar results. The reported results correspond
+to the movies we put available online.
+desired trajectory
+controller from model
+controller after last iteration of our algorithm
+controllers at intermediate iterations
+Initial State
+Figure 4. Results of our algorithm for the task of a turn
+with open-loop controller. (See text for details.)
+6. Related Work
+Classical and (especially) robust control theory consider the design of controllers that work well for a
+large set of systems that are similar to the model
+that is used for designing the controller. The resulting
+controllers are less vulnerable to modeling errors, but
+do not achieve optimal performance in the true system. ; Dullerud and Paganini for more details on robust control. See,
+e.g., Bagnell et al. ; Nilim and El Ghaoui ;
+Morimoto and Atkeson for some examples of
+robust-control work within the RL community.) Also
+within the formalism of optimal control one can give
+up optimality and, instead, design controllers that are
+more robust to mismatches between model and reallife, namely by including additional terms into the reward function. For example, one penalizes high frequency inputs (since the simulator is typically less accurate at high frequencies), or one penalizes the integral of the error over time to avoid steady-state errors.
+ for the linear
+quadratic setting.)
+Another approach is to use non-parametric learning
+algorithms to build a model. 
+Although they might require more training data, nonparametric learning algorithms have the advantage of
+being less prone to modeling errors.
+We note that Atkeson and Schaal and Morimoto and Doya also achieved successful robot
+control with a limited number of real-life trials. Our
+work signiﬁcantly diﬀers from both.
+Atkeson and
+Schaal started from a human demonstration of
+the (swing-up) task. Morimoto and Doya use a
+(hierarchical) Q-learning variant.
+Iterative learning control (ILC) is the research area
+most closely related to our work, as our work could be
+Using Inaccurate Models in Reinforcement Learning
+desired trajectory
+controller from model
+controller after last iteration of our algorithm
+desired trajectory
+controller from model
+controller after last iteration of our algorithm
+Figure 5. Results of our algorithm for the task of following a circle (a) and a ﬁgure-8 (b). (See text for details.)
+seen as an instance of iterative learning control. ILC
+refers to the entire family of iterative control design
+approaches where the errors from past trials are used
+to compute the current inputs. In its most common
+form, ILC iteratively optimizes an open-loop (or feedforward) input sequence. In contrast to our approach,
+most work in ILC does not use a model, rather, it just
+uses the past trials to compute the next iteration’s
+controller. See, e.g., Moore , for an overview and
+references to other work in iterative learning control.
+7. Discussion
+We presented an algorithm that uses a crude model
+and a small number of real-life trials to ﬁnd a controller
+that works well in real-life.
+Our theoretical results
+show that—assuming the model derivatives are good
+approximations of the true derivatives, and assuming
+a deterministic setting—our algorithm will return a
+policy that is (locally) near-optimal. Our experiments
+(with a ﬂight simulator and a real RC car) demonstrate
+that our algorithm can signiﬁcantly outperform the
+model-based control approach, even when using only
+an approximate model and a few real-life trials, and
+when the true system is not (perfectly) deterministic.
+An interesting future research direction is to extend
+our algorithm to the case of stochastic dynamics.
+Acknowledgments
+We give warm thanks to Mark Woodward for developing the RC car tracking software, and to Chris Atkeson
+for his helpful comments. M. Quigley is supported by
+a DoD NDSEG fellowship. This work was supported
+in part by the DARPA Learning Locomotion program
+under contract number FA8650-05-C-7261.

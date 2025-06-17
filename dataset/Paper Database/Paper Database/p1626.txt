@@ -1,0 +1,815 @@
+Speed/accuracy trade-offs for modern convolutional object detectors
+Jonathan Huang
+Vivek Rathod
+Menglong Zhu
+Anoop Korattikara
+Alireza Fathi
+Ian Fischer
+Zbigniew Wojna
+Sergio Guadarrama
+Kevin Murphy
+Google Research
+The goal of this paper is to serve as a guide for selecting a detection architecture that achieves the right
+speed/memory/accuracy balance for a given application
+and platform. To this end, we investigate various ways to
+trade accuracy for speed and memory usage in modern convolutional object detection systems. A number of successful
+systems have been proposed in recent years, but apples-toapples comparisons are difﬁcult due to different base feature extractors (e.g., VGG, Residual Networks), different
+default image resolutions, as well as different hardware and
+software platforms. We present a uniﬁed implementation of
+the Faster R-CNN , R-FCN and SSD systems,
+which we view as “meta-architectures” and trace out the
+speed/accuracy trade-off curve created by using alternative feature extractors and varying other critical parameters
+such as image size within each of these meta-architectures.
+On one extreme end of this spectrum where speed and memory are critical, we present a detector that achieves real
+time speeds and can be deployed on a mobile device. On
+the opposite end in which accuracy is critical, we present
+a detector that achieves state-of-the-art performance measured on the COCO detection task.
+1. Introduction
+A lot of progress has been made in recent years on object
+detection due to the use of convolutional neural networks
+(CNNs). Modern object detectors based on these networks
+— such as Faster R-CNN , R-FCN , Multibox ,
+SSD and YOLO — are now good enough to be
+deployed in consumer products (e.g., Google Photos, Pinterest Visual Search) and some have been shown to be fast
+enough to be run on mobile devices.
+However, it can be difﬁcult for practitioners to decide
+what architecture is best suited to their application. Standard accuracy metrics, such as mean average precision
+(mAP), do not tell the entire story, since for real deployments of computer vision systems, running time and memory usage are also critical. For example, mobile devices
+often require a small memory footprint, and self driving
+cars require real time performance. Server-side production
+systems, like those used in Google, Facebook or Snapchat,
+have more leeway to optimize for accuracy, but are still subject to throughput constraints. While the methods that win
+competitions, such as the COCO challenge , are optimized for accuracy, they often rely on model ensembling
+and multicrop methods which are too slow for practical usage.
+Unfortunately, only a small subset of papers (e.g., R-
+FCN , SSD YOLO ) discuss running time in
+any detail. Furthermore, these papers typically only state
+that they achieve some frame-rate, but do not give a full
+picture of the speed/accuracy trade-off, which depends on
+many other factors, such as which feature extractor is used,
+input image sizes, etc.
+In this paper, we seek to explore the speed/accuracy
+trade-off of modern detection systems in an exhaustive and
+fair way. While this has been studied for full image classiﬁcation( (e.g., ), detection models tend to be significantly more complex.
+We primarily investigate singlemodel/single-pass detectors, by which we mean models
+that do not use ensembling, multi-crop methods, or other
+“tricks” such as horizontal ﬂipping. In other words, we only
+pass a single image through a single network. For simplicity
+(and because it is more important for users of this technology), we focus only on test-time performance and not on
+how long these models take to train.
+Though it is impractical to compare every recently proposed detection system, we are fortunate that many of the
+leading state of the art approaches have converged on a
+common methodology (at least at a high level). This has
+allowed us to implement and compare a large number of detection systems in a uniﬁed manner. In particular, we have
+created implementations of the Faster R-CNN, R-FCN and
+SSD meta-architectures, which at a high level consist of a
+single convolutional network, trained with a mixed regression and classiﬁcation objective, and use sliding window
+style predictions.
+To summarize, our main contributions are as follows:
+• We provide a concise survey of modern convolutional
+ 
+detection systems, and describe how the leading ones
+follow very similar designs.
+• We describe our ﬂexible and uniﬁed implementation
+of three meta-architectures (Faster R-CNN, R-FCN
+and SSD) in Tensorﬂow which we use to do extensive experiments that trace the accuracy/speed tradeoff curve for different detection systems, varying metaarchitecture, feature extractor, image resolution, etc.
+• Our ﬁndings show that using fewer proposals for
+Faster R-CNN can speed it up signiﬁcantly without
+a big loss in accuracy, making it competitive with its
+faster cousins, SSD and RFCN. We show that SSDs
+performance is less sensitive to the quality of the feature extractor than Faster R-CNN and R-FCN. And we
+identify sweet spots on the accuracy/speed trade-off
+curve where gains in accuracy are only possible by sacriﬁcing speed . A model
+is then trained to make two predictions for each anchor:
+(1) a discrete class prediction for each anchor, and (2) a
+continuous prediction of an offset by which the anchor
+needs to be shifted to ﬁt the groundtruth bounding box.
+Papers that follow this anchors methodology then
+minimize a combined classiﬁcation and regression loss that
+we now describe. For each anchor a, we ﬁrst ﬁnd the best
+matching groundtruth box b (if one exists). If such a match
+can be found, we call a a “positive anchor”, and assign it
+(1) a class label ya ∈{1 . . . K} and (2) a vector encoding
+of box b with respect to anchor a (called the box encoding
+φ(ba; a)).
+If no match is found, we call a a “negative
+anchor” and we set the class label to be ya = 0. If for
+the anchor a we predict box encoding floc(I; a, θ) and
+corresponding class fcls(I; a, θ), where I is the image and
+θ the model parameters, then the loss for a is measured as
+a weighted sum of a location-based loss and a classiﬁcation
+L(a, I; θ) = α · 1[a is positive] · ℓloc(φ(ba; a) −floc(I; a, θ))
++ β · ℓcls(ya, fcls(I; a, θ)),
+where α, β are weights balancing localization and classi-
+ﬁcation losses. To train the model, Equation 1 is averaged
+over anchors and minimized with respect to parameters θ.
+The choice of anchors has signiﬁcant implications both
+for accuracy and computation.
+In the (ﬁrst) Multibox
+paper , these anchors (called “box priors” by the authors) were generated by clustering groundtruth boxes in
+the dataset. In more recent works, anchors are generated
+by tiling a collection of boxes at different scales and aspect
+ratios regularly across the image. The advantage of having a regular grid of anchors is that predictions for these
+boxes can be written as tiled predictors on the image with
+shared parameters (i.e., convolutions) and are reminiscent
+of traditional sliding window methods, e.g. . The Faster
+R-CNN paper and the (second) Multibox paper 
+(which called these tiled anchors “convolutional priors”)
+were the ﬁrst papers to take this new approach.
+2.1. Meta-architectures
+In our paper we focus primarily on three recent (meta)architectures: SSD (Single Shot Multibox Detector ),
+Faster R-CNN and R-FCN (Region-based Fully Convolutional Networks ). While these papers were originally presented with a particular feature extractor (e.g.,
+VGG, Resnet, etc), we now review these three methods, decoupling the choice of meta-architecture from feature extractor so that conceptually, any feature extractor can be
+used with SSD, Faster R-CNN or R-FCN.
+Single Shot Detector (SSD).
+Though the SSD paper was published only recently (Liu et
+al., ), we use the term SSD to refer broadly to architectures that use a single feed-forward convolutional network to directly predict classes and anchor offsets without
+requiring a second stage per-proposal classiﬁcation operation (Figure 1a).
+Under this deﬁnition, the SSD metaarchitecture has been explored in a number of precursors
+to . Both Multibox and the Region Proposal Network
+Meta-architecture
+Feature Extractor
+Box Encoding φ(ba, a)
+Location Loss functions
+Szegedy et al. 
+InceptionV3
+[x0, y0, x1, y1]
+Redmon et al. 
+Custom (GoogLeNet inspired)
+Box Center
+[xc, yc, √w,
+Ren et al. 
+Faster R-CNN
+ha , log w, log h]
+He et al. 
+Faster R-CNN
+ResNet-101
+ha , log w, log h]
+Liu et al. (v1)
+InceptionV3
+[x0, y0, x1, y1]
+Liu et al. (v2, v3)
+ha , log w, log h]
+Dai et al 
+ResNet-101
+ha , log w, log h]
+Table 1: Convolutional detection models that use one of the meta-architectures described in Section 2. Boxes are encoded with respect to a matching
+anchor a via a function φ (Equation 1), where [x0, y0, x1, y1] are min/max coordinates of a box, xc, yc are its center coordinates, and w, h its width and
+height. In some cases, wa, ha, width and height of the matching anchor are also used. Notes: (1) We include an early arXiv version of , which used a
+different conﬁguration from that published at ECCV 2016; (2) uses a fast feature extractor described as being inspired by GoogLeNet , which we
+do not compare to; (3) YOLO matches a groundtruth box to an anchor if its center falls inside the anchor (we refer to this as BoxCenter).
+Feature Extractor
+(vgg, incep+on,
+resnet, etc)
+Regression
+Classiﬁcation
+Detection Generator
+Classiﬁcation
+Box Classiﬁer
+Feature Extractor
+(vgg, incep+on,
+resnet, etc)
+Regression
+Objectness
+Classiﬁcation
+Proposal Generator
+(b) Faster RCNN.
+Classiﬁcation
+Box Classiﬁer
+Feature Extractor
+(vgg, incep+on,
+resnet, etc)
+Regression
+Objectness
+Classiﬁcation
+Proposal Generator
+(c) R-FCN.
+Figure 1: High level diagrams of the detection meta-architectures compared in this paper.
+(RPN) stage of Faster R-CNN use this approach
+to predict class-agnostic box proposals. use
+SSD-like architectures to predict ﬁnal (1 of K) class labels.
+And Poirson et al., extended this idea to predict boxes,
+classes and pose.
+Faster R-CNN.
+In the Faster R-CNN setting, detection happens in two
+stages (Figure 1b). In the ﬁrst stage, called the region proposal network (RPN), images are processed by a feature
+extractor (e.g., VGG-16), and features at some selected intermediate level (e.g., “conv5”) are used to predict classagnostic box proposals. The loss function for this ﬁrst stage
+takes the form of Equation 1 using a grid of anchors tiled in
+space, scale and aspect ratio.
+In the second stage, these (typically 300) box proposals
+are used to crop features from the same intermediate feature
+map which are subsequently fed to the remainder of the feature extractor (e.g., “fc6” followed by “fc7”) in order to predict a class and class-speciﬁc box reﬁnement for each proposal. The loss function for this second stage box classiﬁer
+also takes the form of Equation 1 using the proposals generated from the RPN as anchors. Notably, one does not crop
+proposals directly from the image and re-run crops through
+the feature extractor, which would be duplicated computation. However there is part of the computation that must be
+run once per region, and thus the running time depends on
+the number of regions proposed by the RPN.
+Since appearing in 2015, Faster R-CNN has been particularly inﬂuential, and has led to a number of follow-up
+works (including SSD
+and R-FCN). Notably, half of the submissions to the COCO
+object detection server as of November 2016 are reported to
+be based on the Faster R-CNN system in some way.
+2.2. R-FCN
+While Faster R-CNN is an order of magnitude faster than
+Fast R-CNN, the fact that the region-speciﬁc component
+must be applied several hundred times per image led Dai
+et al. to propose the R-FCN (Region-based Fully Convolutional Networks) method which is like Faster R-CNN,
+but instead of cropping features from the same layer where
+region proposals are predicted, crops are taken from the
+last layer of features prior to prediction (Figure 1c). This
+approach of pushing cropping to the last layer minimizes
+the amount of per-region computation that must be done.
+Dai et al. argue that the object detection task needs localization representations that respect translation variance and
+thus propose a position-sensitive cropping mechanism that
+is used instead of the more standard ROI pooling operations
+used in and the differentiable crop mechanism of
+ . They show that the R-FCN model (using Resnet 101)
+could achieve comparable accuracy to Faster R-CNN often
+at faster running times. Recently, the R-FCN model was
+also adapted to do instance segmentation in the recent TA-
+FCN model , which won the 2016 COCO instance segmentation challenge.
+3. Experimental setup
+The introduction of standard benchmarks such as Imagenet and COCO has made it easier in recent
+years to compare detection methods with respect to accuracy.
+However, when it comes to speed and memory,
+apples-to-apples comparisons have been harder to come by.
+Prior works have relied on different deep learning frameworks (e.g., DistBelief , Caffe , Torch ) and different hardware. Some papers have optimized for accuracy;
+others for speed. And ﬁnally, in some cases, metrics are
+reported using slightly different training sets (e.g., COCO
+training set vs. combined training+validation sets).
+In order to better perform apples-to-apples comparisons,
+we have created a detection platform in Tensorﬂow and
+have recreated training pipelines for SSD, Faster R-CNN
+and R-FCN meta-architectures on this platform. Having a
+uniﬁed framework has allowed us to easily swap feature extractor architectures, loss functions, and having it in Tensorﬂow allows for easy portability to diverse platforms for
+deployment. In the following we discuss ways to conﬁgure
+model architecture, loss function and input on our platform
+— knobs that can be used to trade speed and accuracy.
+3.1. Architectural conﬁguration
+Feature extractors.
+In all of the meta-architectures, we ﬁrst apply a convolutional feature extractor to the input image to obtain highlevel features. The choice of feature extractor is crucial as
+the number of parameters and types of layers directly affect
+memory, speed, and performance of the detector. We have
+selected six representative feature extractors to compare in
+this paper and, with the exception of MobileNet , all
+have open source Tensorﬂow implementations and have had
+sizeable inﬂuence on the vision community.
+In more detail, we consider the following six feature extractors. We use VGG-16 and Resnet-101 , both
+of which have won many competitions such as ILSVRC and
+COCO 2015 (classiﬁcation, detection and segmentation).
+We also use Inception v2 , which set the state of the art
+in the ILSVRC 2014 classiﬁcation and detection challenges,
+as well as its successor Inception v3 . Both of the Inception networks employed ‘Inception units’ which made it
+possible to increase the depth and width of a network without increasing its computational budget. Recently, Szegedy
+et al. proposed Inception Resnet (v2), which combines
+the optimization beneﬁts conferred by residual connections
+with the computation efﬁciency of Inception units.
+Finally, we compare against the new MobileNet network ,
+which has been shown to achieve VGG-16 level accuracy
+on Imagenet with only 1/30 of the computational cost and
+model size. MobileNet is designed for efﬁcient inference in
+various mobile vision applications. Its building blocks are
+depthwise separable convolutions which factorize a standard convolution into a depthwise convolution and a 1 × 1
+convolution, effectively reducing both computational cost
+and number of parameters.
+For each feature extractor, there are choices to be made
+in order to use it within a meta-architecture. For both Faster
+R-CNN and R-FCN, one must choose which layer to use for
+predicting region proposals. In our experiments, we use the
+choices laid out in the original papers when possible. For
+example, we use the ‘conv5’ layer from VGG-16 and
+the last layer of conv 4 x layers in Resnet-101 . For
+other feature extractors, we have made analogous choices.
+See supplementary materials for more details.
+Liu et al. showed that in the SSD setting, using
+multiple feature maps to make location and conﬁdence predictions at multiple scales is critical for good performance.
+For VGG feature extractors, they used conv4 3, fc7 (converted to a convolution layer), as well as a sequence of
+added layers. In our experiments, we follow their methodology closely, always selecting the topmost convolutional
+feature map and a higher resolution feature map at a lower
+level, then adding a sequence of convolutional layers with
+spatial resolution decaying by a factor of 2 with each additional layer used for prediction. However unlike , we
+use batch normalization in all additional layers.
+For comparison, feature extractors used in previous
+works are shown in Table 1. In this work, we evaluate all
+combinations of meta-architectures and feature extractors,
+most of which are novel. Notably, Inception networks have
+never been used in Faster R-CNN frameworks and until recently were not open sourced . Inception Resnet (v2)
+and MobileNet have not appeared in the detection literature
+Number of proposals.
+For Faster R-CNN and R-FCN, we can also choose the
+number of region proposals to be sent to the box classiﬁer at
+test time. Typically, this number is 300 in both settings, but
+an easy way to save computation is to send fewer boxes potentially at the risk of reducing recall. In our experiments,
+we vary this number of proposals between 10 and 300 in
+order to explore this trade-off.
+Output stride settings for Resnet and Inception
+Our implementation of Resnet-101 is slightly modiﬁed
+from the original to have an effective output stride of 16
+instead of 32; we achieve this by modifying the conv5 1
+layer to have stride 1 instead of 2 (and compensating for reduced stride by using atrous convolutions in further layers)
+as in . For Faster R-CNN and R-FCN, in addition to the
+default stride of 16, we also experiment with a (more expensive) stride 8 Resnet-101 in which the conv4 1 block is
+additionally modiﬁed to have stride 1. Likewise, we experiment with stride 16 and stride 8 versions of the Inception
+Resnet network. We ﬁnd that using stride 8 instead of 16
+improves the mAP by a factor of 5%1, but increased running time by a factor of 63%.
+3.2. Loss function conﬁguration
+Beyond selecting a feature extractor, there are choices in
+conﬁguring the loss function (Equation 1) which can impact
+training stability and ﬁnal performance. Here we describe
+the choices that we have made in our experiments and Table 1 again compares how similar loss functions are conﬁgured in other works.
+Determining classiﬁcation and regression targets for each
+anchor requires matching anchors to groundtruth instances.
+Common approaches include greedy bipartite matching
+(e.g., based on Jaccard overlap) or many-to-one matching
+strategies in which bipartite-ness is not required, but matchings are discarded if Jaccard overlap between an anchor
+and groundtruth is too low.
+We refer to these strategies
+as Bipartite or Argmax, respectively. In our experiments
+we use Argmax matching throughout with thresholds set as
+suggested in the original paper for each meta-architecture.
+After matching, there is typically a sampling procedure designed to bring the number of positive anchors and negative
+anchors to some desired ratio. In our experiments, we also
+ﬁx these ratios to be those recommended by the paper for
+each meta-architecture.
+Box encoding.
+To encode a groundtruth box with respect to its matching
+anchor, we use the box encoding function φ(ba; a) = [10 ·
+wa , 10· yc
+ha , 5·log w, 5·log h] (also used by ).
+Note that the scalar multipliers 10 and 5 are typically used
+in all of these prior works, even if not explicitly mentioned.
+Location loss (ℓloc).
+Following , we use the Smooth L1 (or Huber ) loss function in all experiments.
+3.3. Input size conﬁguration.
+In Faster R-CNN and R-FCN, models are trained on images scaled to M pixels on the shorter edge whereas in SSD,
+images are always resized to a ﬁxed shape M × M. We
+explore evaluating each model on downscaled images as
+1 i.e., (map8 - map16) / map16 = 0.05.
+a way to trade accuracy for speed. In particular, we have
+trained high and low-resolution versions of each model. In
+the “high-resolution” settings, we set M = 600, and in
+the “low-resolution” setting, we set M = 300. In both
+cases, this means that the SSD method processes fewer pixels on average than a Faster R-CNN or R-FCN model with
+all other variables held constant.
+3.4. Training and hyperparameter tuning
+We jointly train all models end-to-end using asynchronous gradient updates on a distributed cluster . For
+Faster RCNN and R-FCN, we use SGD with momentum
+with batch sizes of 1 (due to these models being trained
+using different image sizes) and for SSD, we use RM-
+SProp with batch sizes of 32 (in a few exceptions we
+reduced the batch size for memory reasons). Finally we
+manually tune learning rate schedules individually for each
+feature extractor. For the model conﬁgurations that match
+works in literature ( ), we have reproduced or
+surpassed the reported mAP results.2
+Note that for Faster R-CNN and R-FCN, this end-toend approach is slightly different from the 4-stage training procedure that is typically used.
+Additionally, instead of using the ROI Pooling layer and Position-sensitive
+ROI Pooling layers used by , we use Tensorﬂow’s
+“crop and resize” operation which uses bilinear interpolation to resample part of an image onto a ﬁxed sized grid.
+This is similar to the differentiable cropping mechanism
+of , the attention model of as well as the Spatial
+Transformer Network . However we disable backpropagation with respect to bounding box coordinates as we have
+found this to be unstable during training.
+Our networks are trained on the COCO dataset, using
+all training images as well as a subset of validation images,
+holding out 8000 examples for validation.3 Finally at test
+time, we post-process detections with non-max suppression
+using an IOU threshold of 0.6 and clip all boxes to the image
+window. To evaluate our ﬁnal detections, we use the ofﬁcial
+COCO API , which measures mAP averaged over IOU
+thresholds in [0.5 : 0.05 : 0.95], amongst other metrics.
+3.5. Benchmarking procedure
+To time our models, we use a machine with 32GB RAM,
+Intel Xeon E5-1650 v2 processor and an Nvidia GeForce
+GTX Titan X GPU card. Timings are reported on GPU for
+a batch size of one. The images used for timing are resized
+so that the smallest size is at least k and then cropped to
+2In the case of SSD with VGG, we have reproduced the number reported in the ECCV version of the paper, but the most recent version on
+ArXiv uses an improved data augmentation scheme to obtain somewhat
+higher numbers, which we have not yet experimented with.
+3We remark that this dataset is similar but slightly smaller than the
+trainval35k set that has been used in several papers, e.g., .
+k × k where k is either 300 or 600 based on the model. We
+average the timings over 500 images.
+We include postprocessing in our timing (which includes
+non-max suppression and currently runs only on the CPU).
+Postprocessing can take up the bulk of the running time
+for the fastest models at ∼40ms and currently caps our
+maximum framerate to 25 frames per second. Among other
+things, this means that while our timing results are comparable amongst each other, they may not be directly comparable to other reported speeds in the literature. Other potential
+differences include hardware, software drivers, framework
+(Tensorﬂow in our case), and batch size (e.g., the Liu et
+al. report timings using batch sizes of 8). Finally, we
+use tfprof to measure the total memory demand of the
+models during inference; this gives a more platform independent measure of memory demand. We also average the
+memory measurements over three images.
+3.6. Model Details
+Table 2 summarizes the feature extractors that we use.
+All models are pretrained on ImageNet-CLS. We give details on how we train the object detectors using these feature
+extractors below.
+Faster R-CNN
+implementation
+Tensorﬂow’s
+“crop and resize”
+pooling . Except for VGG, all the feature extractors use
+batch normalization after convolutional layers. We freeze
+the batch normalization parameters to be those estimated
+during ImageNet pretraining. We train faster RCNN with
+asynchronous SGD with momentum of 0.9.
+The initial
+learning rates depend on which feature extractor we used,
+as explained below. We reduce the learning rate by 10x
+after 900K iterations and another 10x after 1.2M iterations.
+9 GPU workers are used during asynchronous training.
+Each GPU worker takes a single image per iteration; the
+minibatch size for RPN training is 256, while the minibatch
+size for box classiﬁer training is 64.
+• VGG : We extract features from the “conv5” layer
+whose stride size is 16 pixels. Similar to , we crop
+and resize feature maps to 14x14 then maxpool to 7x7.
+The initial learning rate is 5e-4.
+• Resnet 101 : We extract features from the last
+layer of the “conv4” block. When operating in atrous
+mode, the stride size is 8 pixels, otherwise it is 16 pixels. Feature maps are cropped and resized to 14x14
+then maxpooled to 7x7. The initial learning rate is 3e-
+• Inception V2 :
+We extract features from the
+“Mixed 4e” layer whose stride size is 16 pixels. Fea-
+Top-1 accuracy
+Num. Params.
+14,714,688
+Inception V2
+10,173,112
+ResNet-101
+42,605,504
+Inception V3
+21,802,784
+Inception Resnet V2
+54,336,736
+Table 2: Properties of the 6 feature extractors that we use.
+Top-1 accuracy is the classiﬁcation accuracy on ImageNet.
+ture maps are cropped and resized to 14x14. The initial
+learning rate is 2e-4.
+• Inception V3 :
+We extract features from the
+“Mixed 6e” layer whose stride size is 16 pixels. Feature maps are cropped and resized to 17x17. The initial
+learning rate is 3e-4.
+• Inception Resnet : We extract features the from
+“Mixed 6a” layer including its associated residual layers. When operating in atrous mode, the stride size
+is 8 pixels, otherwise is 16 pixels. Feature maps are
+cropped and resized to 17x17. The initial learning rate
+• MobileNet :
+We extract features from the
+“Conv2d 11” layer whose stride size is 16 pixels. Feature maps are cropped and resized to 14x14. The initial
+learning rate is 3e-3.
+We follow the implementation of R-FCN closely, but use
+Tensorﬂow’s “crop and resize” operation instead of ROI
+pooling to crop regions from the position-sensitive score
+maps. All feature extractors use batch normalization after
+convolutional layers. We freeze the batch normalization parameters to be those estimated during ImageNet pretraining.
+We train R-FCN with asynchronous SGD with momentum
+of 0.9. 9 GPU workers are used during asynchronous training. Each GPU worker takes a single image per iteration;
+the minibatch size for RPN training is 256. As of the time
+of this submission, we do not have R-FCN results for VGG
+or Inception V3 feature extractors.
+• Resnet 101 : We extract features from “block3”
+layer. When operating in atrous mode, the stride size
+is 8 pixels, otherwise it is 16 pixels. Position-sensitive
+score maps are cropped with spatial bins of size 7x7
+and resized to 21x21. We use online hard example
+mining to sample a minibatch of size 128 for training
+the box classiﬁer. The initial learning rate is 3e-4. It
+is reduced by 10x after 1M steps and another 10x after
+1.2M steps.
+• Inception V2 :
+We extract features from
+“Mixed 4e” layer whose stride size is 16 pixels.
+Position-sensitive score maps are cropped with spatial
+bins of size 3x3 and resized to 12x12. We use online
+hard example mining to sample a minibatch of size 128
+for training the box classiﬁer. The initial learning rate
+is 2e-4. It is reduced by 10x after 1.8M steps and another 10x after 2M steps.
+• Inception Resnet :
+We extract features from
+“Mixed 6a” layer including its associated residual layers. When operating in atrous mode, the stride size is
+8 pixels, otherwise it is 16 pixels. Position-sensitive
+score maps are cropped with spatial bins of size 7x7
+and resized to 21x21. We use all proposals from RPN
+for box classiﬁer training. The initial learning rate is
+7e-4. It is reduced by 10x after 1M steps and another
+10x after 1.2M steps.
+• MobileNet
+“Conv2d 11” layer whose stride size is 16 pixels. Position-sensitive score maps are cropped with
+spatial bins of size 3x3 and resized to 12x12. We use
+online hard example mining to sample a minibatch
+of size 128 for training the box classiﬁer. The initial
+learning rate is 2e-3. Learning rate is reduced by 10x
+after 1.6M steps and another 10x after 1.8M steps.
+As described in the main paper, we follow the methodology of closely, generating anchors in the same way
+and selecting the topmost convolutional feature map and a
+higher resolution feature map at a lower level, then adding
+a sequence of convolutional layers with spatial resolution
+decaying by a factor of 2 with each additional layer used
+for prediction. The feature map selection for Resnet101 is
+slightly different, as described below.
+Unlike , we use batch normalization in all additional
+layers, and initialize weights with a truncated normal distribution with a standard deviation of σ = .03. With the exception of VGG, we also do not perform “layer normalization” (as suggested in ) as we found it not to be necessary for the other feature extractors. Finally, we employ distributed training with asynchronous SGD using 11 worker
+machines. Below we discuss the speciﬁcs for each feature
+extractor that we have considered. As of the time of this
+submission, we do not have SSD results for the Inception
+V3 feature extractor and we only have results for high resolution SSD models using the Resnet 101 and Inception V2
+feature extractors.
+• VGG : Following the paper, we use conv4 3, and
+fc7 layers, appending ﬁve additional convolutional layers with decaying spatial resolution with depths 512,
+256, 256, 256, 256, respectively. We apply L2 normalization to the conv4 3 layer, scaling the feature norm
+at each location in the feature map to a learnable scale,
+s, which is initialized to 20.0.
+During training, we use a base learning rate of lrbase =
+.0003, but use a warm-up learning rate scheme in
+which we ﬁrst train with a learning rate of 0.82 · lrbase
+for 10K iterations followed by 0.8 · lrbase for another
+10K iterations.
+• Resnet 101 : We use the feature map from the last
+layer of the “conv4” block. When operating in atrous
+mode, the stride size is 8 pixels, otherwise it is 16 pixels. Five additional convolutional layers with decaying spatial resolution are appended, which have depths
+512, 512, 256, 256, 128, respectively. We have experimented with including the feature map from the last
+layer of the “conv5” block. With “conv5” features, the
+mAP numbers are very similar, but the computational
+costs are higher. Therefore we choose to use the last
+layer of the “conv4” block. During training, a base
+learning rate of 3e-4 is used. We use a learning rate
+warm up strategy similar to the VGG one.
+• Inception V2 : We use Mixed 4c and Mixed 5c,
+appending four additional convolutional layers with
+decaying resolution with depths 512, 256, 256, 128 respectively. We use ReLU6 as the non-linear activation
+function for each conv layer. During training, we use
+a base learning rate of 0.002, followed by learning rate
+decay of 0.95 every 800k steps.
+• Inception Resnet :
+We use Mixed 6a and
+Conv2d 7b, appending three additional convolutional
+layers with decaying resolution with depths 512, 256,
+128 respectively. We use ReLU as the non-linear activation function for each conv layer. During training,
+we use a base learning rate of 0.0005, followed by
+learning rate decay of 0.95 every 800k steps.
+• MobileNet : We use conv 11 and conv 13, appending four additional convolutional layers with decaying resolution with depths 512, 256, 256, 128 respectively. The non-linear activation function we use
+is ReLU6 and both batch norm parameters β and γ are
+trained. During training, we use a base learning rate of
+0.004, followed by learning rate decay of 0.95 every
+800k steps.
+4. Results
+In this section we analyze the data that we have collected
+by training and benchmarking detectors, sweeping over
+model conﬁgurations as described in Section 3. Each such
+model conﬁguration includes a choice of meta-architecture,
+feature extractor, stride (for Resnet and Inception Resnet) as
+SSD w/MobileNet, Lo Res
+ResNet, Hi Res,
+100 Proposals
+Faster R-CNN w/ResNet, Hi
+Res, 50 Proposals
+Faster R-CNN w/Incep.on
+Resnet, Hi Res, 300
+Proposals, Stride 8
+SSD w/Incep.on V2, Lo Res
+Figure 2: Accuracy vs time, with marker shapes indicating meta-architecture and colors indicating feature extractor. Each (meta-architecture, feature
+extractor) pair can correspond to multiple points on this plot due to changing input sizes, stride, etc.
+Model summary
+minival mAP
+test-dev mAP
+(Fastest) SSD w/MobileNet (Low Resolution)
+(Fastest) SSD w/Inception V2 (Low Resolution)
+(Sweet Spot) Faster R-CNN w/Resnet 101, 100 Proposals
+(Sweet Spot) R-FCN w/Resnet 101, 300 Proposals
+(Most Accurate) Faster R-CNN w/Inception Resnet V2, 300 Proposals
+Table 3: Test-dev performance of the “critical” points along our optimality frontier.
+well as input resolution and number of proposals (for Faster
+R-CNN and R-FCN).
+For each such model conﬁguration, we measure timings
+on GPU, memory demand, number of parameters and ﬂoating point operations as described below. We make the entire
+table of results available in the supplementary material, noting that as of the time of this submission, we have included
+147 model conﬁgurations; models for a small subset of experimental conﬁgurations (namely some of the high resolution SSD models) have yet to converge, so we have for now
+omitted them from analysis.
+4.1. Analyses
+Accuracy vs time
+Figure 2 is a scatterplot visualizing the mAP of each of our
+model conﬁgurations, with colors representing feature extractors, and marker shapes representing meta-architecture.
+Running time per image ranges from tens of milliseconds
+to almost 1 second.
+Generally we observe that R-FCN
+and SSD models are faster on average while Faster R-CNN
+tends to lead to slower but more accurate models, requiring at least 100 ms per image. However, as we discuss below, Faster R-CNN models can be just as fast if we limit
+the number of regions proposed.
+We have also overlaid
+an imaginary “optimality frontier” representing points at
+which better accuracy can only be attained within this family of detectors by sacriﬁcing speed. In the following, we
+highlight some of the key points along the optimality frontier as the best detectors to use and discuss the effect of the
+various model conﬁguration options in isolation.
+Critical points on the optimality frontier.
+(Fastest: SSD w/MobileNet): On the fastest end of this optimality frontier, we see that SSD models with Inception
+v2 and Mobilenet feature extractors are most accurate of
+the fastest models. Note that if we ignore postprocessing
+Incep.on V2
+ResNet-101
+Incep.on V3
+Incep.on Resnet V2
+Figure 3: Accuracy of detector (mAP on COCO) vs accuracy of feature extractor (as measured by top-1 accuracy on ImageNet-CLS). To avoid crowding
+the plot, we show only the low resolution models.
+Figure 4: Accuracy stratiﬁed by object size, meta-architecture and feature extractor, We ﬁx the image resolution to 300.
+costs, Mobilenet seems to be roughly twice as fast as Inception v2 while being slightly worse in accuracy. (Sweet
+Spot: R-FCN w/Resnet or Faster R-CNN w/Resnet and
+only 50 proposals): There is an “elbow” in the middle of
+the optimality frontier occupied by R-FCN models using
+Residual Network feature extractors which seem to strike
+the best balance between speed and accuracy among our
+model conﬁgurations. As we discuss below, Faster R-CNN
+w/Resnet models can attain similar speeds if we limit the
+number of proposals to 50. (Most Accurate: Faster R-CNN
+w/Inception Resnet at stride 8): Finally Faster R-CNN with
+dense output Inception Resnet models attain the best possible accuracy on our optimality frontier, achieving, to our
+knowledge, the state-of-the-art single model performance.
+However these models are slow, requiring nearly a second
+of processing time. The overall mAP numbers for these 5
+models are shown in Table 3.
+The effect of the feature extractor.
+Intuitively, stronger performance on classiﬁcation should be
+positively correlated with stronger performance on COCO
+detection. To verify this, we investigate the relationship between overall mAP of different models and the Top-1 Imagenet classiﬁcation accuracy attained by the pretrained fea-
+Figure 5: Effect of image resolution.
+ture extractor used to initialize each model. Figure 3 indicates that there is indeed an overall correlation between
+classiﬁcation and detection performance. However this correlation appears to only be signiﬁcant for Faster R-CNN and
+R-FCN while the performance of SSD appears to be less reliant on its feature extractor’s classiﬁcation accuracy.
+The effect of object size.
+Figure 4 shows performance for different models on different sizes of objects. Not surprisingly, all methods do
+much better on large objects. We also see that even though
+SSD models typically have (very) poor performance on
+small objects, they are competitive with Faster RCNN and
+R-FCN on large objects, even outperforming these metaarchitectures for the faster and more lightweight feature extractors.
+The effect of image size.
+It has been observed by other authors that input resolution
+can signiﬁcantly impact detection accuracy. From our experiments, we observe that decreasing resolution by a factor of two in both dimensions consistently lowers accuracy
+(by 15.88% on average) but also reduces inference time by
+a relative factor of 27.4% on average.
+One reason for this effect is that high resolution inputs
+allow for small objects to be resolved. Figure 5 compares
+detector performance on large objects against that on small
+objects, conﬁrms that high resolution models lead to significantly better mAP results on small objects (by a factor of
+2 in many cases) and somewhat better mAP results on large
+objects as well. We also see that strong performance on
+small objects implies strong performance on large objects
+in our models, (but not vice-versa as SSD models do well
+on large objects but not small).
+The effect of the number of proposals.
+For Faster R-CNN and R-FCN, we can adjust the number
+of proposals computed by the region proposal network. The
+authors in both papers use 300 boxes, however, our experiments suggest that this number can be signiﬁcantly reduced
+without harming mAP (by much). In some feature extractors where the “box classiﬁer” portion of Faster R-CNN is
+expensive, this can lead to signiﬁcant computational savings. Figure 6a visualizes this trade-off curve for Faster R-
+CNN models with high resolution inputs for different feature extractors. We see that Inception Resnet, which has
+35.4% mAP with 300 proposals can still have surprisingly
+high accuracy (29% mAP) with only 10 proposals. The
+sweet spot is probably at 50 proposals, where we are able
+to obtain 96% of the accuracy of using 300 proposals while
+reducing running time by a factor of 3. While the computational savings are most pronounced for Inception Resnet,
+we see that similar tradeoffs hold for all feature extractors.
+Figure 6b visualizes the same trade-off curves for R-
+Incep.on Resnet V2
+Resnet 101
+Incep.on V2
+Incep.on Resnet V2
+Resnet 101
+Incep.on V2
+Figure 6: Effect of proposing increasing number of regions on mAP accuracy (solid lines) and GPU inference time (dotted). Surprisingly, for Faster
+R-CNN with Inception Resnet, we obtain 96% of the accuracy of using 300 proposals by using only 50 proposals, which reduces running time by a factor
+Figure 7: GPU time (milliseconds) for each model, for image resolution of 300.
+FCN models and shows that the computational savings from
+using fewer proposals in the R-FCN setting are minimal
+— this is not surprising as the box classiﬁer (the expensive part) is only run once per image. We see in fact that
+at 100 proposals, the speed and accuracy for Faster R-CNN
+models with ResNet becomes roughly comparable to that of
+equivalent R-FCN models which use 300 proposals in both
+mAP and GPU speed.
+FLOPs analysis.
+Figure 7 plots the GPU time for each model combination.
+However, this is very platform dependent. Counting FLOPs
+(multiply-adds) gives us a platform independent measure of
+computation, which may or may not be linear with respect
+to actual running times due to a number of issues such as
+caching, I/O, hardware optimization etc,
+Figures 8a and 8b plot the FLOP count against observed
+wallclock times on the GPU and CPU respectively. Interestingly, we observe in the GPU plot (Figure 8a) that each
+Figure 8: FLOPS vs time.
+Figure 9: Memory (Mb) usage for each model. Note that we measure total memory usage rather than peak memory usage. Moreover, we include all data
+points corresponding to the low-resolution models here. The error bars reﬂect variance in memory usage by using different numbers of proposals for the
+Faster R-CNN and R-FCN models (which leads to the seemingly considerable variance in the Faster-RCNN with Inception Resnet bar).
+model has a different average ratio of ﬂops to observed running time in milliseconds. For denser block models such
+as Resnet 101, FLOPs/GPU time is typically greater than 1,
+perhaps due to efﬁciency in caching. For Inception and Mobilenet models, this ratio is typically less than 1 — we conjecture that this could be that factorization reduces FLOPs,
+but adds more overhead in memory I/O or potentially that
+current GPU instructions (cuDNN) are more optimized for
+dense convolution.
+Memory analysis.
+For memory benchmarking, we measure total usage rather
+than peak usage.
+Figures 10a, 10b plot memory usage
+against GPU and CPU wallclock times. Overall, we observe
+high correlation with running time with larger and more
+powerful feature extractors requiring much more memory.
+Figure 9 plots some of the same information in more detail,
+drilling down by meta-architecture and feature extractor selection. As with speed, Mobilenet is again the cheapest, requiring less than 1Gb (total) memory in almost all settings.
+Good localization at .75 IOU means good localization at all IOU thresholds.
+While slicing the data by object size leads to interesting
+insights, it is also worth nothing that slicing data by IOU
+threshold does not give much additional information. Figure 11 shows in fact that both mAP@.5 and mAP@.75
+performances are almost perfectly linearly correlated with
+mAP@[.5:.95]. Thus detectors that have poor performance
+at the higher IOU thresholds always also show poor performance at the lower IOU thresholds. This being said, we
+also observe that mAP@.75 is slightly more tightly corre-
+Figure 10: Memory (Mb) vs time.
+lated with mAP@[.5:.95] (with R2 > .99), so if we were
+to replace the standard COCO metric with mAP at a single
+IOU threshold, we would likely choose IOU=.75.
+4.2. State-of-the-art detection on COCO
+Finally, we brieﬂy describe how we ensembled some of
+our models to achieve the current state of the art performance on the 2016 COCO object detection challenge. Our
+model attains 41.3% mAP@[.5, .95] on the COCO test set
+and is an ensemble of ﬁve Faster R-CNN models based on
+Resnet and Inception Resnet feature extractors. This outperforms the previous best result (37.1% mAP@[.5, .95]) by
+MSRA, which used an ensemble of three Resnet-101 models . Table 4 summarizes the performance of our model
+and highlights how our model has improved on the state-ofthe-art across all COCO metrics. Most notably, our model
+achieves a relative improvement of nearly 60% on small object recall over the previous best result. Even though this
+ensemble with state-of-the-art numbers could be viewed as
+an extreme point on the speed/accuracy tradeoff curves (requires ∼50 end-to-end network evaluations per image), we
+have chosen to present this model in isolation since it is not
+comparable to the “single model” results that we focused on
+in the rest of the paper.
+To construct our ensemble, we selected a set of ﬁve models from our collection of Faster R-CNN models. Each of
+the models was based on Resnet and Inception Resnet feature extractors with varying output stride conﬁgurations, retrained using variations on the loss functions, and different
+random orderings of the training data. Models were selected greedily using their performance on a held-out validation set. However, in order to take advantage of models
+with complementary strengths, we also explicitly encourage diversity by pruning away models that are too similar
+to previously selected models (c.f., ). To do this, we
+computed the vector of average precision results across each
+COCO category for each model and declared two models to
+be too similar if their category-wise AP vectors had cosine
+distance greater than some threshold.
+Table 5 summarizes the ﬁnal selected model speciﬁcations as well as their individual performance on COCO as
+single models.4
+Ensembling these ﬁve models using the
+procedure described in (Appendix A) and using multicrop inference then yielded our ﬁnal model. Note that we do
+not use multiscale training, horizontal ﬂipping, box reﬁnement, box voting, or global context which are sometimes
+used in the literature. Table 6 compares a single model’s
+performance against two ways of ensembling, and shows
+that (1) encouraging for diversity did help against a hand
+selected ensemble, and (2) ensembling and multicrop were
+responsible for almost 7 points of improvement over a single model.
+4.3. Example detections
+In Figures 12 to 17 we visualize detections on images
+from the COCO dataset, showing side-by-side comparisons
+of ﬁve of the detectors that lie on the “optimality frontier”
+of the speed-accuracy trade-off plot. To visualize, we select
+detections with score greater than a threshold and plot the
+top 20 detections in each image. We use a threshold of .5
+for Faster R-CNN and R-FCN and .3 for SSD. These thresholds were hand-tuned for (subjective) visual attractiveness
+and not using rigorous criteria so we caution viewers from
+reading too much into the tea leaves from these visualizations. This being said, we see that across our examples, all
+of the detectors perform reasonably well on large objects
+— SSD only shows its weakness on small objects, missing
+some of the smaller kites and people in the ﬁrst image as
+well as the smaller cups and bottles on the dining table in
+4Note that these numbers were computed on a held-out validation set
+and are not strictly comparable to the ofﬁcial COCO test-dev data results
+(though they are expected to be very close).
+Figure 11: Overall COCO mAP (@[.5:.95]) for all experiments plotted against corresponding mAP@.50IOU and mAP@.75IOU. It is unsurprising that
+these numbers are correlated, but it is interesting that they are almost perfectly correlated so for these models, it is never the case that a model has strong
+performance at 50% IOU but weak performance at 75% IOU.
+Trimps-Soushen
+Table 4: Performance on the 2016 COCO test-challenge dataset. AP and AR refer to (mean) average precision and average recall respectively. Our model
+achieves a relative improvement of nearly 60% on small objects recall over the previous state-of-the-art COCO detector.
+Feature Extractor
+Output stride
+loss ratio
+Location loss function
+Resnet 101
+Resnet 101
+Inception Resnet (v2)
+Inception Resnet (v2)
+Inception Resnet (v2)
+SmoothL1 + IOU
+Table 5: Summary of single models that were automatically selected to be part of the diverse ensemble. Loss ratio refers to the multipliers α, β for
+location and classiﬁcation losses, respectively.
+Faster RCNN with Inception Resnet (v2)
+Hand selected Faster RCNN ensemble w/multicrop
+Diverse Faster RCNN ensemble w/multicrop
+Table 6: Effects of ensembling and multicrop inference. Numbers reported on COCO test-dev dataset. Second row (hand selected ensemble) consists of
+6 Faster RCNN models with 3 Resnet 101 (v1) and 3 Inception Resnet (v2) and the third row (diverse ensemble) is described in detail in Table 5.
+the last image.
+5. Conclusion
+We have performed an experimental comparison of some
+of the main aspects that inﬂuence the speed and accuracy
+of modern object detectors. We hope this will help practitioners choose an appropriate method when deploying object detection in the real world. We have also identiﬁed
+some new techniques for improving speed without sacri-
+ﬁcing much accuracy, such as using many fewer proposals
+than is usual for Faster R-CNN.
+Acknowledgements
+We would like to thank the following people for their advice and support throughout this project: Tom Duerig, Dumitru Erhan, Jitendra Malik, George Papandreou, Dominik Roblek, Chuck Rosenberg, Nathan Silberman, Abhinav Srivastava, Rahul Sukthankar, Christian Szegedy, Jasper
+Uijlings, Jay Yagnik, Xiangxin Zhu.

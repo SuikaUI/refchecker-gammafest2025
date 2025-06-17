@@ -1,0 +1,530 @@
+Scaled-YOLOv4: Scaling Cross Stage Partial Network
+Chien-Yao Wang
+Institute of Information Science
+Academia Sinica, Taiwan
+ 
+Alexey Bochkovskiy
+ 
+Hong-Yuan Mark Liao
+Institute of Information Science
+Academia Sinica, Taiwan
+ 
+We show that the YOLOv4 object detection neural network based on the CSP approach, scales both up and down
+and is applicable to small and large networks while maintaining optimal speed and accuracy. We propose a network
+scaling approach that modiﬁes not only the depth, width,
+resolution, but also structure of the network.
+YOLOv4large model achieves state-of-the-art results: 55.5% AP
+(73.4% AP50) for the MS COCO dataset at a speed of ∼16
+FPS on Tesla V100, while with the test time augmentation, YOLOv4-large achieves 56.0% AP (73.3 AP50). To
+the best of our knowledge, this is currently the highest accuracy on the COCO dataset among any published work.
+The YOLOv4-tiny model achieves 22.0% AP (42.0% AP50)
+at a speed of ∼443 FPS on RTX 2080Ti, while by using TensorRT, batch size = 4 and FP16-precision the YOLOv4-tiny
+achieves 1774 FPS.
+1. Introduction
+The deep learning-based object detection technique has
+many applications in our daily life. For example, medical image analysis, self-driving vehicles, business analytics,
+and face identiﬁcation all rely on object detection. The computing facilities required for the above applications maybe
+cloud computing facilities, general GPU, IoT clusters, or
+single embedded device. In order to design an effective object detector, model scaling technique is very important, because it can make object detector achieve high accuracy and
+real-time inference on various types of devices.
+The most common model scaling technique is to change
+the depth (number of convolutional layers in a CNN) and
+width (number of convolutional ﬁlters in a convolutional
+layer) of the backbone, and then train CNNs suitable for
+different devices. For example among the ResNet series, ResNet-152 and ResNet-101 are often used in cloud
+server GPUs, ResNet-50 and ResNet-34 are often used in
+personal computer GPUs, and ResNet-18 and ResNet-10
+can be used in low-end embedded systems. In , Cai et
+Figure 1: Comparison of the proposed YOLOv4 and other
+state-of-the-art object detectors.
+The dashed line means
+only latency of model inference, while the solid line include
+model inference and post-processing.
+al. try to develop techniques that can be applied to various device network architectures with only training once.
+They use techniques such as decoupling training and search
+and knowledge distillation to decouple and train several
+sub-nets, so that the entire network and sub-nets are capable of processing target tasks. Tan et al. proposed
+using NAS technique to perform compound scaling, including the treatment of width, depth, and resolution on
+EfﬁcientNet-B0. They use this initial network to search for
+the best CNN architecture for a given amount of computation and set it as EfﬁcientNet-B1, and then use linear scaleup technique to obtain architectures such as EfﬁcientNet-
+B2 to EfﬁcientNet-B7. Radosavovic et al. summarized
+and added constraints from the vast parameter search space
+AnyNet, and then designed RegNet. In RegNet, they found
+that the optimal depth of CNN is about 60. They also found
+when the bottleneck ratio is set to 1 and the width increase
+rate of cross-stage is set to 2.5 will receive the best performance. In addition, recently there are NAS and model
+ 
+scaling methods speciﬁcally proposed for object detection,
+such as SpineNet and EfﬁcientDet .
+Through analysis of state-of-the-art object detectors , we found that CSPDarknet53, which
+is the backbone of YOLOv4 , matches almost all optimal architecture features obtained by network architecture
+search technique. The depth of CSPDarknet53, bottleneck
+ratio, width growth ratio between stages are 65, 1, and 2,
+respectively. Therefore, we developed model scaling technique based on YOLOv4 and proposed scaled-YOLOv4.
+The proposed scaled-YOLOv4 turned out with excellent
+performance, as illustrated in Figure 1. The design procedure of scaled-YOLOv4 is as follows. First, we re-design
+YOLOv4 and propose YOLOv4-CSP, and then based on
+YOLOv4-CSP we developed scaled-YOLOv4. In the proposed scaled-YOLOv4, we discussed the upper and lower
+bounds of linear scaling up/down models, and respectively
+analyzed the issues that need to be paid attention to in
+model scaling for small models and large models. Thus,
+we are able to systematically develop YOLOv4-large and
+YOLOv4-tiny models.
+Scaled-YOLOv4 can achieve the
+best trade-off between speed and accuracy, and is able to
+perform real-time object detection on 16 FPS, 30 FPS, and
+60 FPS movies, as well as embedded systems.
+We summarize the contributions of this paper : (1) design a powerful model scaling method for small model,
+which can systematically balance the computation cost and
+memory bandwidth of a shallow CNN; (2) design a simple
+yet effective strategy for scaling a large object detector; (3)
+analyze the relations among all model scaling factors and
+then perform model scaling based on most advantageous
+group partitions; (4) experiments have conﬁrmed that the
+FPN structure is inherently a once-for-all structure; and (5)
+we make use of the above methods to develop YOLOv4-tiny
+and YOLO4v4-large.
+2. Related work
+2.1. Real-time object detection
+Object detectors is mainly divided into one-stage object
+detectors and two-stage object detectors . The output of one-stage object detector
+can be obtained after only one CNN operation. As for twostage object detector, it usually feeds the high score region
+proposals obtained from the ﬁrst-stage CNN to the secondstage CNN for ﬁnal prediction. The inference time of onestage object detectors and two-stage object detectors can
+be expressed as Tone = T1st and Ttwo = T1st + mT2nd,
+where m is the number of region proposals whose conﬁdence score is higher than a threshold.
+In other words,
+the inference time required for one-stage object detectors
+is constant, while the inference time required for two-stage
+object detectors is not ﬁxed. So if we need real-time object
+detectors, they are almost necessarily one-stage object detectors. Today’s popular one-stage object detectors mainly
+have two kinds: anchor-based and anchor-free
+ . Among all anchor-free approaches, CenterNet is very popular because it does not require complicated post-processing, such as Non-Maximum Suppression (NMS). At present, the more accurate real-time onestage object detectors are anchor-based EfﬁcientDet ,
+YOLOv4 , and PP-YOLO . In this paper, we developed our model scaling methods based on YOLOv4 .
+2.2. Model scaling
+Traditional model scaling method is to change the depth
+of a model, that is to add more convolutional layers. For
+example, the VGGNet designed by Simonyan et al.
+stacks additional convolutional layers in different stages,
+and also uses this concept to design VGG-11, VGG-13,
+VGG-16, and VGG-19 architectures. The subsequent methods generally follow the same methodology for model scaling. For the ResNet proposed by He et al., depth scaling can construct very deep networks, such as ResNet-50,
+ResNet-101, and ResNet-152. Later, Zagoruyko et al. 
+thought about the width of the network, and they changed
+the number of kernel of convolutional layer to realize scaling. They therefore design wide ResNet (WRN) , while
+maintaining the same accuracy. Although WRN has higher
+amount of parameters than ResNet, the inference speed is
+much faster. The subsequent DenseNet and ResNeXt
+ also designed a compound scaling version that puts
+depth and width into consideration. As for image pyramid
+inference, it is a common way to perform augmentation at
+run time. It takes an input image and makes a variety of different resolution scaling, and then input these distinct pyramid combinations into a trained CNN. Finally, the network
+will integrate the multiple sets of outputs as its ultimate outcome. Redmon et al. use the above concept to execute
+input image size scaling. They use higher input image resolution to perform ﬁne-tune on a trained Darknet53, and the
+purpose of executing this step is to get higher accuracy.
+In recent years, network architecture search (NAS) related research has been developed vigorously, and NAS-
+FPN has searched for the combination path of feature
+We can think of NAS-FPN as a model scaling technique which is mainly executed at the stage level.
+As for EfﬁcientNet , it uses compound scaling search
+based on depth, width, and input size. The main design
+concept of EfﬁcientDet is to disassemble the modules
+with different functions of object detector, and then perform scaling on the image size, width, #BiFPN layers, and
+#box/class layer. Another design that uses NAS concept is
+SpineNet , which is mainly aimed at the overall architecture of ﬁsh-shaped object detector for network architecture
+search. This design concept can ultimately produce a scale-
+permuted structure. Another network with NAS design is
+RegNet , which mainly ﬁxes the number of stage and
+input resolution, and integrates all parameters such as depth,
+width, bottleneck ratio and group width of each stage into
+depth, initial width, slope, quantize, bottleneck ratio, and
+group width. Finally, they use these six parameters to perform compound model scaling search. The above methods
+are all great work, but few of them analyze the relation between different parameters. In this paper, we will try to ﬁnd
+a method for synergistic compound scaling based on the design requirements of object detection.
+3. Principles of model scaling
+After performing model scaling for the proposed object
+detector, the next step is to deal with the quantitative factors
+that will change, including the number of parameters with
+qualitative factors. These factors include model inference
+time, average precision, etc. The qualitative factors will
+have different gain effects depending on the equipment or
+database used. We will analyze and design for quantitative
+factors in 3.1. As for 3.2 and 3.3, we will design qualitative
+factors related to tiny object detector running on low-end
+device and high-end GPUs respectively.
+3.1. General principle of model scaling
+When designing the efﬁcient model scaling methods,
+our main principle is that when the scale is up/down,
+the lower/higher the quantitative cost we want to increase/decrease, the better. In this section, we will show and
+analyze various general CNN models, and try to understand
+their quantitative costs when facing changes in (1) image
+size, (2) number of layers, and (3) number of channels. The
+CNNs we chose are ResNet, ResNext, and Darknet.
+For the k-layer CNNs with b base layer channels, the
+computations of ResNet layer is k∗[conv(1 × 1, b/4) →
+conv(3 × 3, b/4) →conv(1 × 1, b)], and that of ResNext
+layer is k∗[conv(1 × 1, b/2) →gconv(3 × 3/32, b/2) →
+conv(1 × 1, b)]. As for the Darknet layer, the amount of
+computation is k∗[conv(1 × 1, b/2) →conv(3 × 3, b)]. Let
+the scaling factors that can be used to adjust the image size,
+the number of layers, and the number of channels be α, β,
+and γ, respectively. When these scaling factors vary, the
+corresponding changes on FLOPs are summarized in Table
+Table 1: FLOPs of different computational layers with different model scalng factors.
+r = 17whkb2/16
+ResX layer
+x = 137whkb2/128
+Dark layer
+d = 5whkb2
+It can be seen from Table 1 that the scaling size, depth,
+and width cause increase in the computation cost. They respectively show square, linear, and square increase.
+The CSPNet proposed by Wang et al. can be applied
+to various CNN architectures, while reducing the amount
+of parameters and computations. In addition, it also improves accuracy and reduces inference time. We apply it to
+ResNet, ResNeXt, and Darknet and observe the changes in
+the amount of computations, as shown in Table 2.
+Table 2: FLOPs of different computational layers
+with/without CSP-ization.
+17whkb2/16
+whb2(3/4 + 13k/16)
+ResX layer
+137whkb2/128
+whb2(3/4 + 73k/128)
+Dark layer
+whb2(3/4 + 5k/2)
+From the ﬁgures shown in Table 2, we observe that after
+converting the above CNNs to CSPNet, the new architecture
+can effectively reduce the amount of computations (FLOPs)
+on ResNet, ResNeXt, and Darknet by 23.5%, 46.7%, and
+50.0%, respectively. Therefore, we use CSP-ized models as
+the best model for performing model scaling.
+3.2. Scaling Tiny Models for Low-End Devices
+For low-end devices, the inference speed of a designed
+model is not only affected by the amount of computation
+and model size, but more importantly, the limitation of peripheral hardware resources must be considered. Therefore,
+when performing tiny model scaling, we must also consider factors such as memory bandwidth, memory access
+cost (MACs), and DRAM trafﬁc. In order to take into account the above factors, our design must comply with the
+following principles:
+Make the order of computations less than O(whkb2):
+Lightweight models are different from large models in that
+their parameter utilization efﬁciency must be higher in order to achieve the required accuracy with a small amount
+of computations. When performing model scaling, we hope
+the order of computation can be as low as possible. In Table
+3, we analyze the network with efﬁcient parameter utilization, such as the computation load of DenseNet and OS-
+ANet , where g means growth rate.
+Table 3: FLOPs of Dense layer and OSA
+Dense layer
+whgbk + whg2k(k −1)/2
+whbg + whg2(k −1)
+For general CNNs, the relationship among g, b, and k
+listed in Table 3 is k << g < b.
+Therefore, the order of computation complexity of DenseNet is O(whgbk),
+and that of OSANet is O(max(whbg, whkg2)). The or-
+der of computation complexity of the above two is less than
+O(whkb2) of the ResNet series. Therefore, we design our
+tiny model with the help of OSANet, which has a smaller
+computation complexity.
+Minimize/balance size of feature map: In order to get the
+best trade-off in terms of computing speed, we propose a
+new concept, which is to perform gradient truncation between computational block of the CSPOSANet. If we apply the original CSPNet design to the DenseNet or ResNet
+architectures, because the jth layer output of these two architectures is the integration of the 1st to (j −1)th layer
+outputs, we must treat the entire computational block as a
+whole. Because the computational block of OSANet belongs to the PlainNet architecture, making CSPNet from
+any layer of a computational block can achieve the effect
+of gradient truncation. We use this feature to re-plan the b
+channels of the base layer and the kg channels generated
+by computational block, and split them into two paths with
+equal channel numbers, as shown in Table 4.
+Table 4: Number of channel of OSANet, CSPOSANet, and
+CSPOSANet with partial in computational block (PCB).
+partial in CB
+→(b + kg)/2
+(b + kg)/2
+→(b + kg)/2
+When the number of channel is b + kg, if one wants
+to split these channels into two paths, the best partition is
+to divide it into two equal parts, i.e. (b + kg)/2. When
+we actually consider the bandwidth τ of the hardware, if
+software optimization is not considered, the best value is
+ceil((b + kg)/2τ) × τ. The CSPOSANet we designed can
+dynamically adjust the channel allocation.
+Maintain the same number of channels after convolution: For evaluating the computation cost of low-end device, we must also consider power consumption, and the
+biggest factor affecting power consumption is memory access cost (MAC). Usually the MAC calculation method for
+a convolution operation is as follows:
+MAC = hw(Cin + Cout) + KCinCout
+where h, w, Cin, Cout, and K represent, respectively, the
+height and width of feature map, the channel number of
+input and output, and the kernel size of convolutional ﬁlter. By calculating geometric inequalities, we can derive
+the smallest MAC when Cin = Cout .
+Minimize Convolutional Input/Output (CIO): CIO 
+is an indicator that can measure the status of DRAM IO.
+Table 5 lists the CIO of OSA, CSP, and our designed
+CSPOSANet.
+Table 5: CIO of OSANet, CSPOSANet, and CSPOSANet with
+partial in CB
+bg + (k −1)g2 + (b + kg)2/2
+kg2 + (kg)2
+kg2 + (b + kg)2/4
+When kg > b/2, the proposed CSPOSANet can obtain
+the best CIO.
+3.3. Scaling Large Models for High-End GPUs
+Since we hope to improve the accuracy and maintain the
+real-time inference speed after scaling up the CNN model,
+we must ﬁnd the best combination among the many scaling
+factors of object detector when performing compound scaling. Usually, we can adjust the scaling factors of an object
+detector’s input, backbone, and neck. The potential scaling
+factors that can be adjusted are summarized as Table 6.
+Table 6: Model scaling factors of different parts of object
+detectors.
+Scaling Factor
+widthbackbone , depthbackbone, #stagebackbone
+widthneck, depthneck, #stageneck
+The biggest difference between image classiﬁcation and
+object detection is that the former only needs to identify the
+category of the largest component in an image, while the latter needs to predict the position and size of each object in an
+image. In one-stage object detector, the feature vector corresponding to each location is used to predict the category
+and size of an object at that location. The ability to better
+predict the size of an object basically depends on the receptive ﬁeld of the feature vector. In the CNN architecture, the
+thing that is most directly related to receptive ﬁeld is the
+stage, and the feature pyramid network (FPN) architecture
+tells us that higher stages are more suitable for predicting
+large objects. In Table 7, we illustrate the relations between
+receptive ﬁeld and several parameters.
+Table 7: Effect of receptive ﬁeld caused by different
+model scaling factors.
+Scaling factor
+Effect of receptive ﬁeld
+no effect.
+no effect.
+one more k × k conv layer, increases k −1.
+one more stage, receptive ﬁeld doubled.
+From Table 7, it is apparent that width scaling can be
+independently operated. When the input image size is increased, if one wants to have a better prediction effect for
+large objects, he/she must increase the depth or number of
+stages of the network. Among the parameters listed in Table
+7, the compound of {sizeinput, #stage} turns out with the
+best impact. Therefore, when performing scaling up, we
+ﬁrst perform compound scaling on sizeinput, #stage, and
+then according to real-time requirements, we further perform scaling on depth and width respectively.
+4. Scaled-YOLOv4
+In this section, we put our emphasis on designing scaled
+YOLOv4 for general GPUs, low-end GPUs, and high-end
+4.1. CSP-ized YOLOv4
+YOLOv4 is designed for real-time object detection on
+general GPU. In this sub-section, we re-design YOLOv4 to
+YOLOv4-CSP to get the best speed/accuracy trade-off.
+Backbone: In the design of CSPDarknet53, the computation of down-sampling convolution for cross-stage process
+is not included in a residual block. Therefore, we can deduce that the amount of computation of each CSPDarknet
+stage is whb2(9/4+3/4+5k/2). From the formula deduced
+above, we know that CSPDarknet stage will have a better computational advantage over Darknet stage only when
+k > 1 is satisﬁed. The number of residual layer owned by
+each stage in CSPDarknet53 is 1-2-8-8-4 respectively. In
+order to get a better speed/accuracy trade-off, we convert
+the ﬁrst CSP stage into original Darknet residual layer.
+Computaional blocks of reversed Dark layer
+(SPP) and reversed CSP dark layers (SPP).
+Neck: In order to effectively reduce the amount of computation, we CSP-ize the PAN architecture in YOLOv4.
+The computation list of a PAN architecture is illustrated in
+Figure 2(a). It mainly integrates the features coming from
+different feature pyramids, and then passes through two sets
+of reversed Darknet residual layer without shortcut connections. After CSP-ization, the architecture of the new computation list is shown in Figure 2(b). This new update effectively cuts down 40% of computation.
+SPP: The SPP module was originally inserted in the middle position of the ﬁrst computation list group of the neck.
+Therefore, we also inserted SPP module in the middle position of the ﬁrst computation list group of the CSPPAN.
+4.2. YOLOv4-tiny
+YOLOv4-tiny is designed for low-end GPU device, the
+design will follow principles mentioned in section 3.2.
+Figure 3: Computational block of YOLOv4-tiny.
+We will use the CSPOSANet with PCB architecture to
+form the backbone of YOLOv4. We set g = b/2 as the
+growth rate and make it grow to b/2 + kg = 2b at the end.
+Through calculation, we deduced k = 3, and its architecture
+is shown in Figure 3. As for the number of channels of
+each stage and the part of neck, we follow the design of
+YOLOv3-tiny.
+4.3. YOLOv4-large
+YOLOv4-large is designed for cloud GPU, the main purpose is to achieve high accuracy for object detection. We
+designed a fully CSP-ized model YOLOv4-P5 and scaling
+it up to YOLOv4-P6 and YOLOv4-P7.
+Figure 4 shows the structure of YOLOv4-P5, YOLOv4-
+P6, and YOLOv4-P7. We designed to perform compound
+scaling on sizeinput, #stage. We set the depth scale of each
+stage to 2dsi, and ds to . Finally,
+we further use inference time as constraint to perform additional width scaling. Our experiments show that YOLOv4-
+P6 can reach real-time performance at 30 FPS video when
+the width scaling factor is equal to 1. For YOLOv4-P7, it
+can reach real-time performance at 16 FPS video when the
+width scaling factor is equal to 1.25.
+5. Experiments
+We use MSCOCO 2017 object detection dataset to verify the proposed scaled-YOLOv4.
+We do not use ImageNet pre-trained models, and all scaled-YOLOv4 models
+are trained from scratch and the adopted tool is SGD optimizer. The time used for training YOLOv4-tiny is 600
+epochs, and that used for training YOLOv4-CSP is 300
+As for YOLOv4-large, we execute 300 epochs
+ﬁrst and then followed by using stronger data augmentation
+method to train 150 epochs. As for the Lagrangian multiplier of hyper-parameters, such as anchors of learning rate,
+the degree of different data augmentation methods, we use
+Figure 4: Architecture of YOLOv4-large, including YOLOv4-P5, YOLOv4-P6, and YOLOv4-P7. The dashed arrow means
+replace the corresponding CSPUp block by CSPSPP block.
+k-means and genetic algorithms to determine. All details
+related to hyper-parameters are elaborated in Appendix.
+5.1. Ablation study on CSP-ized model
+In this sub-section, we will CSP-ize different models
+and analyze the impact of CSP-ization on the amount of
+parameters, computations, throughput, and average precision. We use Darknet53 (D53) as backbone and choose
+FPN with SPP (FPNSPP) and PAN with SPP (PANSPP)
+as necks to design ablation studies. In Table 8 we list the
+APval results after CSP-izing different DNN models. We
+use LeakyReLU (Leaky) and Mish activation function respectively to compare the amount of used parameters, computations, and throughput. Experiments are all conducted
+on COCO minval dataset and the resulting APs are shown
+in the last column of Table 8.
+Table 8: Ablation study of CSP-ized models @608×608.
+From the data listed in Table 8, it can be seen that the
+CSP-ized models have greatly reduced the amount of parameters and computations by 32%, and brought improvements in both Batch 8 throughput and AP. If one wants to
+maintain the same frame rate, he/she can add more lay-
+Table 9: Ablation study of partial at different position in computational block.
+with/without ﬁne-tuning.
+ers or more advanced activation functions to the models
+after CSP-ization.
+From the ﬁgures shown in Table 8,
+we can see that both CD53s-CFPNSPP-Mish, and CD53s-
+CPANSPP-Leaky have the same batch 8 throughput with
+D53-FPNSPP-Leaky, but they respectively have 1% and
+1.6% AP improvement with lower computing resources.
+From the above improvement ﬁgures, we can see the huge
+advantages brought by model CSP-ization. Therefore, we
+decided to use CD53s-CPANSPP-Mish, which results in the
+highest AP in Table 8 as the backbone of YOLOv4-CSP.
+5.2. Ablation study on YOLOv4-tiny
+In this sub-section, we design an experiment to show
+how ﬂexible can be if one uses CSPNet with partial func-
+Table 11: Comparison of state-of-the-art object detectors.
+EfﬁcientDet-D0 
+EfﬁcientNet-B0 
+YOLOv4-CSP
+EfﬁcientDet-D1 
+EfﬁcientNet-B1 
+YOLOv4-CSP
+YOLOv3-SPP 
+YOLOv3-SPP ours
+PP-YOLO 
+R50-vd-DCN 
+YOLOv4 
+YOLOv4 ours
+EfﬁcientDet-D2 
+EfﬁcientNet-B2 
+RetinaNet 
+RetinaNet 
+EfﬁcientDet-D3 
+EfﬁcientNet-B3 
+SM-NAS: E2 
+EfﬁcientDet-D4 
+EfﬁcientNet-B4 
+SM-NAS: E3 
+RetinaNet 
+RDSNet 
+CenterMask 
+R101-FPN 
+EfﬁcientDet-D5 
+EfﬁcientNet-B5 
+R101-DCN 
+CenterMask 
+V99-FPN 
+EfﬁcientDet-D6 
+EfﬁcientNet-B6 
+RDSNet 
+RetinaNet 
+SM-NAS: E5 
+EfﬁcientDet-D7 
+EfﬁcientNet-B6 
+X-32x8d-101-DCN 
+X-64x4d-101-DCN 
+EfﬁcientDet-D7x 
+EfﬁcientNet-B7 
+tions in computational blocks. We also compare with CSP-
+Darknet53, in which we perform linear scaling down on
+width and depth. The results are shown in Table 9.
+From the ﬁgures shown in Table 9, we can see that the
+designed PCB technique can make the model more ﬂexible, because such a design can be adjusted according to actual needs. From the above results, we also conﬁrmed that
+linear scaling down does have its limitation. It is apparent that when under limited operating conditions, the residual addition of tinyCD53s becomes the bottleneck of inference speed, because its frame rate is much lower than the
+COSA architecture with the same amount of computations.
+Meanwhile, we also see that the proposed COSA can get a
+higher AP. Therefore, we ﬁnally chose COSA-2x2x which
+received the best speed/accuracy trade-off in our experiment
+as the YOLOv4-tiny architecture.
+5.3. Ablation study on YOLOv4-large
+In Table 10 we show the AP obtained by YOLOv4 models in training from scratch and ﬁne-tune stages.
+5.4. Scaled-YOLOv4 for object detection
+We compare with other real-time object detectors, and
+the results are shown in Table 11. The values marked in
+bold in the [AP, AP50, AP75, APS, APM, APL] items indicate that model is the best performer in the corresponding
+item. We can see that all scaled YOLOv4 models, including YOLOv4-CSP, YOLOv4-P5, YOLOv4-P6, YOLOv4-
+P7, are Pareto optimal on all indicators. When we compare YOLOv4-CSP with the same accuracy of EfﬁcientDet-
+D3 (47.5% vs 47.5%), the inference speed is 1.9 times.
+When YOLOv4-P5 is compared with EfﬁcientDet-D5 with
+the same accuracy (51.8% vs 51.5%), the inference speed
+is 2.9 times. The situation is similar to the comparisons between YOLOv4-P6 vs EfﬁcientDet-D7 (54.5% vs 53.7%)
+and YOLOv4-P7 vs EfﬁcientDet-D7x (55.5% vs 55.1%). In
+both cases, YOLOv4-P6 and YOLOv4-P7 are, respectively,
+3.7 times and 2.5 times faster in terms of inference speed.
+All scaled-YOLOv4 models reached state-of-the-art results.
+The results of test-time augmentation (TTA) experiments
+of YOLOv4-large models are shown in Table 12. YOLOv4-
+P5, YOLOv4-P6, and YOLOv4-P7 gets 1.1%, 0.7%, and
+0.5% higher AP, respectively, after TTA is applied.
+Table 12: Results of YOLOv4-large models
+with test-time augmentation (TTA).
+YOLOv4-P5 with TTA
+YOLOv4-P6 with TTA
+YOLOv4-P7 with TTA
+We then compare the performance of YOLOv4-tiny with
+that of other tiny object detectors, and the results are shown
+in Table 13. It is apparent that YOLOv4-tiny achieves the
+best performance in comparison with other tiny models.
+Table 13: Comparison of state-of-the-art tiny models.
+YOLOv4-tiny
+YOLOv4-tiny (3l)
+ThunderS146 
+CSPPeleeRef 
+YOLOv3-tiny 
+Finally, we put YOLOv4-tiny on different embedded
+GPUs for testing, including Xavier AGX, Xavier NX, Jetson TX2, Jetson NANO. We also use TensorRT FP32 (FP16
+if supported) for testing. All frame rates obtained by different models are listed in Table 14.
+It is apparent that
+YOLOv4-tiny can achieve real-time performance no matter which device is used. If we adopt FP16 and batch size 4
+to test Xavier AGX and Xavier NX, the frame rate can reach
+380 FPS and 199 FPS respectively. In addition, if one uses
+TensorRT FP16 to run YOLOv4-tiny on general GPU RTX
+2080ti, when the batch size respectively equals to 1 and 4,
+the respective frame rate can reach 773 FPS and 1774 FPS,
+which is extremely fast.
+Table 14: FPS of YOLOv4-tiny on embedded devices.
+5.5. Scaled-YOLOv4 as na¨ıve once-for-all model
+In this sub-section, we design experiments to show that
+an FPN-like architecture is a na¨ıve once-for-all model. Here
+we remove some stages of top-down path and detection
+branch of YOLOv4-P7.
+YOLOv4-P7\P7 and YOLOv4-
+P7\P7\P6 represent the model which has removed {P7}
+and {P7, P6} stages from the trained YOLOv4-P7. Figure 5 shows the AP difference between pruned models and
+original YOLOv4-P7 with different input resolution.
+Figure 5: YOLOv4-P7 as “once-for-all” model.
+We can ﬁnd that YOLOv4-P7 has the best AP at high
+resolution, while YOLOv4-P7\P7 and YOLOv4-P7\P7\P6
+have the best AP at middle and low resolution, respectively.
+This means that we can use sub-nets of FPN-like models to
+execute the object detection task well. Moreover, we can
+perform compound scale-down the model architectures and
+input size of an object detector to get the best performance.
+6. Conclusions
+We show that the YOLOv4 object detection neural network based on the CSP approach, scales both up and
+down and is applicable to small and large networks. So
+we achieve the highest accuracy 56.0% AP on test-dev
+COCO dataset for the model YOLOv4-large, extremely
+high speed 1774 FPS for the small model YOLOv4-tiny on
+RTX 2080Ti by using TensorRT-FP16, and optimal speed
+and accuracy for other YOLOv4 models.
+7. Acknowledgements
+The authors wish to thank National Center for Highperformance Computing (NCHC) for providing computational and storage resources.
+A large part of the code
+is borrowed from 
+ and https:
+//github.com/glenn-jocher.
+Thanks for their
+wonderful works.

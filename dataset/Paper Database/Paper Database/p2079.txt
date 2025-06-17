@@ -1,0 +1,558 @@
+MobileNetV2: Inverted Residuals and Linear Bottlenecks
+Mark Sandler
+Andrew Howard
+Menglong Zhu
+Andrey Zhmoginov
+Liang-Chieh Chen
+Google Inc.
+{sandler, howarda, menglong, azhmogin, lcchen}@google.com
+In this paper we describe a new mobile architecture,
+MobileNetV2, that improves the state of the art performance of mobile models on multiple tasks and benchmarks as well as across a spectrum of different model
+sizes. We also describe efﬁcient ways of applying these
+mobile models to object detection in a novel framework
+we call SSDLite.
+Additionally, we demonstrate how
+to build mobile semantic segmentation models through
+a reduced form of DeepLabv3 which we call Mobile
+DeepLabv3.
+is based on an inverted residual structure where
+the shortcut connections are between the thin bottleneck layers.
+The intermediate expansion layer uses
+lightweight depthwise convolutions to ﬁlter features as
+a source of non-linearity. Additionally, we ﬁnd that it is
+important to remove non-linearities in the narrow layers
+in order to maintain representational power. We demonstrate that this improves performance and provide an intuition that led to this design.
+Finally, our approach allows decoupling of the input/output domains from the expressiveness of the transformation, which provides a convenient framework for
+further analysis.
+We measure our performance on
+ImageNet classiﬁcation, COCO object detection ,
+VOC image segmentation . We evaluate the trade-offs
+between accuracy, and number of operations measured
+by multiply-adds (MAdd), as well as actual latency, and
+the number of parameters.
+1. Introduction
+Neural networks have revolutionized many areas of
+machine intelligence, enabling superhuman accuracy for
+challenging image recognition tasks. However, the drive
+to improve accuracy often comes at a cost: modern state
+of the art networks require high computational resources
+beyond the capabilities of many mobile and embedded
+applications.
+This paper introduces a new neural network architecture that is speciﬁcally tailored for mobile and resource
+constrained environments. Our network pushes the state
+of the art for mobile tailored computer vision models,
+by signiﬁcantly decreasing the number of operations and
+memory needed while retaining the same accuracy.
+Our main contribution is a novel layer module: the
+inverted residual with linear bottleneck.
+This module takes as an input a low-dimensional compressed
+representation which is ﬁrst expanded to high dimension and ﬁltered with a lightweight depthwise convolution. Features are subsequently projected back to a
+low-dimensional representation with a linear convolution. The ofﬁcial implementation is available as part of
+TensorFlow-Slim model library in .
+This module can be efﬁciently implemented using
+standard operations in any modern framework and allows our models to beat state of the art along multiple
+performance points using standard benchmarks.
+Furthermore, this convolutional module is particularly suitable for mobile designs, because it allows to signiﬁcantly reduce the memory footprint needed during inference by never fully materializing large intermediate
+tensors. This reduces the need for main memory access
+in many embedded hardware designs, that provide small
+amounts of very fast software controlled cache memory.
+2. Related Work
+Tuning deep neural architectures to strike an optimal
+balance between accuracy and performance has been
+an area of active research for the last several years.
+Both manual architecture search and improvements in
+training algorithms, carried out by numerous teams has
+lead to dramatic improvements over early designs such
+as AlexNet , VGGNet , GoogLeNet .
+ResNet . Recently there has been lots of progress
+in algorithmic architecture exploration included hyperparameter optimization as well as various
+ 
+methods of network pruning and
+connectivity learning . A substantial amount of
+work has also been dedicated to changing the connectivity structure of the internal convolutional blocks such as
+in ShufﬂeNet or introducing sparsity and others .
+Recently, , opened up a new direction of bringing optimization methods including genetic
+algorithms and reinforcement learning to architectural
+search. However one drawback is that the resulting networks end up very complex. In this paper, we pursue the
+goal of developing better intuition about how neural networks operate and use that to guide the simplest possible
+network design. Our approach should be seen as complimentary to the one described in and related work.
+In this vein our approach is similar to those taken by
+ and allows to further improve the performance,
+while providing a glimpse on its internal operation. Our
+network design is based on MobileNetV1 . It retains its simplicity and does not require any special operators while signiﬁcantly improves its accuracy, achieving state of the art on multiple image classiﬁcation and
+detection tasks for mobile applications.
+3. Preliminaries, discussion and intuition
+3.1. Depthwise Separable Convolutions
+Depthwise Separable Convolutions are a key building block for many efﬁcient neural network architectures
+ and we use them in the present work as well.
+The basic idea is to replace a full convolutional operator with a factorized version that splits convolution into
+two separate layers. The ﬁrst layer is called a depthwise
+convolution, it performs lightweight ﬁltering by applying a single convolutional ﬁlter per input channel. The
+second layer is a 1 × 1 convolution, called a pointwise
+convolution, which is responsible for building new features through computing linear combinations of the input channels.
+Standard convolution takes an hi × wi × di input tensor Li, and applies convolutional kernel K ∈
+Rk×k×di×dj to produce an hi × wi × dj output tensor Lj. Standard convolutional layers have the computational cost of hi · wi · di · dj · k · k.
+Depthwise separable convolutions are a drop-in replacement for standard convolutional layers.
+Empirically they work almost as well as regular convolutions
+but only cost:
+hi · wi · di(k2 + dj)
+which is the sum of the depthwise and 1 × 1 pointwise
+convolutions. Effectively depthwise separable convolution reduces computation compared to traditional layers
+by almost a factor of k21. MobileNetV2 uses k = 3
+(3 × 3 depthwise separable convolutions) so the computational cost is 8 to 9 times smaller than that of standard
+convolutions at only a small reduction in accuracy .
+3.2. Linear Bottlenecks
+Consider a deep neural network consisting of n layers
+Li each of which has an activation tensor of dimensions
+hi × wi × di. Throughout this section we will be discussing the basic properties of these activation tensors,
+which we will treat as containers of hi × wi “pixels”
+with di dimensions. Informally, for an input set of real
+images, we say that the set of layer activations (for any
+layer Li) forms a “manifold of interest”. It has been long
+assumed that manifolds of interest in neural networks
+could be embedded in low-dimensional subspaces. In
+other words, when we look at all individual d-channel
+pixels of a deep convolutional layer, the information
+encoded in those values actually lie in some manifold,
+which in turn is embeddable into a low-dimensional subspace2.
+At a ﬁrst glance, such a fact could then be captured
+and exploited by simply reducing the dimensionality of
+a layer thus reducing the dimensionality of the operating space.
+This has been successfully exploited by
+MobileNetV1 to effectively trade off between computation and accuracy via a width multiplier parameter,
+and has been incorporated into efﬁcient model designs
+of other networks as well . Following that intuition,
+the width multiplier approach allows one to reduce the
+dimensionality of the activation space until the manifold of interest spans this entire space. However, this
+intuition breaks down when we recall that deep convolutional neural networks actually have non-linear per coordinate transformations, such as ReLU. For example,
+ReLU applied to a line in 1D space produces a ’ray’,
+where as in Rn space, it generally results in a piece-wise
+linear curve with n-joints.
+It is easy to see that in general if a result of a layer
+transformation ReLU(Bx) has a non-zero volume S,
+the points mapped to interior S are obtained via a linear transformation B of the input, thus indicating that
+the part of the input space corresponding to the full dimensional output, is limited to a linear transformation.
+In other words, deep networks only have the power of
+a linear classiﬁer on the non-zero volume part of the
+1more precisely, by a factor k2dj/(k2 + dj)
+2Note that dimensionality of the manifold differs from the dimensionality of a subspace that could be embedded via a linear transformation.
+Output/dim=2
+Output/dim=3
+Output/dim=5
+Output/dim=15
+Output/dim=30
+transformations
+low-dimensional manifolds embedded in higher-dimensional
+spaces. In these examples the initial spiral is embedded into
+an n-dimensional space using random matrix T followed by
+ReLU, and then projected back to the 2D space using T −1.
+In examples above n = 2, 3 result in information loss where
+certain points of the manifold collapse into each other, while
+for n = 15 to 30 the transformation is highly non-convex.
+(a) Regular
+(b) Separable
+(c) Separable with linear
+bottleneck
+(d) Bottleneck with expansion layer
+Evolution of separable convolution blocks. The
+diagonally hatched texture indicates layers that do not contain
+non-linearities. The last (lightly colored) layer indicates the
+beginning of the next block. Note: 2d and 2c are equivalent
+blocks when stacked. Best viewed in color.
+output domain. We refer to supplemental material for
+a more formal statement.
+On the other hand, when ReLU collapses the channel, it inevitably loses information in that channel. However if we have lots of channels, and there is a a structure
+in the activation manifold that information might still be
+preserved in the other channels. In supplemental materials, we show that if the input manifold can be embedded into a signiﬁcantly lower-dimensional subspace
+of the activation space then the ReLU transformation
+preserves the information while introducing the needed
+complexity into the set of expressible functions.
+To summarize, we have highlighted two properties
+that are indicative of the requirement that the manifold
+of interest should lie in a low-dimensional subspace of
+the higher-dimensional activation space:
+1. If the manifold of interest remains non-zero volume after ReLU transformation, it corresponds to
+a linear transformation.
+(a) Residual block
+(b) Inverted residual block
+Figure 3: The difference between residual block 
+and inverted residual. Diagonally hatched layers do not
+use non-linearities. We use thickness of each block to
+indicate its relative number of channels. Note how classical residuals connects the layers with high number of
+channels, whereas the inverted residuals connect the bottlenecks. Best viewed in color.
+2. ReLU is capable of preserving complete information about the input manifold, but only if the input
+manifold lies in a low-dimensional subspace of the
+input space.
+These two insights provide us with an empirical hint
+for optimizing existing neural architectures: assuming
+the manifold of interest is low-dimensional we can capture this by inserting linear bottleneck layers into the
+convolutional blocks. Experimental evidence suggests
+that using linear layers is crucial as it prevents nonlinearities from destroying too much information.
+Section 6, we show empirically that using non-linear
+layers in bottlenecks indeed hurts the performance by
+several percent, further validating our hypothesis3. We
+note that similar reports where non-linearity was helped
+were reported in where non-linearity was removed
+from the input of the traditional residual block and that
+lead to improved performance on CIFAR dataset.
+For the remainder of this paper we will be utilizing
+bottleneck convolutions. We will refer to the ratio between the size of the input bottleneck and the inner size
+as the expansion ratio.
+3.3. Inverted residuals
+The bottleneck blocks appear similar to residual
+block where each block contains an input followed
+by several bottlenecks then followed by expansion .
+However, inspired by the intuition that the bottlenecks
+actually contain all the necessary information, while an
+expansion layer acts merely as an implementation detail
+that accompanies a non-linear transformation of the tensor, we use shortcuts directly between the bottlenecks.
+3We note that in the presence of shortcuts the information loss is
+actually less strong.
+Figure 3 provides a schematic visualization of the difference in the designs. The motivation for inserting shortcuts is similar to that of classical residual connections:
+we want to improve the ability of a gradient to propagate
+across multiplier layers. However, the inverted design is
+considerably more memory efﬁcient (see Section 5 for
+details), as well as works slightly better in our experiments.
+Running time and parameter count for bottleneck
+convolution
+The basic implementation structure is illustrated in Table 1. For a block of size h × w, expansion factor t and kernel size k with d′ input channels and d′′ output channels, the total number of multiply add required is h · w · d′ · t(d′ + k2 + d′′). Compared with (1) this expression has an extra term, as indeed we have an extra 1 × 1 convolution, however the
+nature of our networks allows us to utilize much smaller
+input and output dimensions. In Table 3 we compare the
+needed sizes for each resolution between MobileNetV1,
+MobileNetV2 and ShufﬂeNet.
+3.4. Information ﬂow interpretation
+One interesting property of our architecture is that it
+provides a natural separation between the input/output
+domains of the building blocks (bottleneck layers), and
+the layer transformation – that is a non-linear function
+that converts input to the output. The former can be seen
+as the capacity of the network at each layer, whereas the
+latter as the expressiveness. This is in contrast with traditional convolutional blocks, both regular and separable, where both expressiveness and capacity are tangled
+together and are functions of the output layer depth.
+In particular, in our case, when inner layer depth
+is 0 the underlying convolution is the identity function
+thanks to the shortcut connection. When the expansion
+ratio is smaller than 1, this is a classical residual convolutional block . However, for our purposes we
+show that expansion ratio greater than 1 is the most useful.
+This interpretation allows us to study the expressiveness of the network separately from its capacity and we
+believe that further exploration of this separation is warranted to provide a better understanding of the network
+properties.
+4. Model Architecture
+Now we describe our architecture in detail. As discussed in the previous section the basic building block
+is a bottleneck depth-separable convolution with residuals. The detailed structure of this block is shown in
+1x1 conv2d , ReLU6
+h × w × (tk)
+h × w × tk
+3x3 dwise s=s, ReLU6
+linear 1x1 conv2d
+Table 1: Bottleneck residual block transforming from k
+to k′ channels, with stride s, and expansion factor t.
+Table 1. The architecture of MobileNetV2 contains the
+initial fully convolution layer with 32 ﬁlters, followed
+by 19 residual bottleneck layers described in the Table 2. We use ReLU6 as the non-linearity because of
+its robustness when used with low-precision computation . We always use kernel size 3 × 3 as is standard
+for modern networks, and utilize dropout and batch normalization during training.
+With the exception of the ﬁrst layer, we use constant
+expansion rate throughout the network. In our experiments we ﬁnd that expansion rates between 5 and 10 result in nearly identical performance curves, with smaller
+networks being better off with slightly smaller expansion rates and larger networks having slightly better performance with larger expansion rates.
+For all our main experiments we use expansion factor
+of 6 applied to the size of the input tensor. For example,
+for a bottleneck layer that takes 64-channel input tensor
+and produces a tensor with 128 channels, the intermediate expansion layer is then 64 · 6 = 384 channels.
+Trade-off hyper parameters
+As in we tailor our
+architecture to different performance points, by using
+the input image resolution and width multiplier as tunable hyper parameters, that can be adjusted depending
+on desired accuracy/performance trade-offs.
+Our primary network (width multiplier 1, 224 × 224), has a
+computational cost of 300 million multiply-adds and
+uses 3.4 million parameters.
+We explore the performance trade offs, for input resolutions from 96 to 224,
+and width multipliers of 0.35 to 1.4. The network computational cost ranges from 7 multiply adds to 585M
+MAdds, while the model size vary between 1.7M and
+6.9M parameters.
+One minor implementation difference, with is
+that for multipliers less than one, we apply width multiplier to all layers except the very last convolutional layer.
+This improves performance for smaller models.
+bottleneck
+bottleneck
+bottleneck
+bottleneck
+bottleneck
+bottleneck
+bottleneck
+conv2d 1x1
+avgpool 7x7
+1 × 1 × 1280
+conv2d 1x1
+Table 2: MobileNetV2 : Each line describes a sequence
+of 1 or more identical (modulo stride) layers, repeated
+n times. All layers in the same sequence have the same
+number c of output channels. The ﬁrst layer of each
+sequence has a stride s and all others use stride 1. All
+spatial convolutions use 3 × 3 kernels. The expansion
+factor t is always applied to the input size as described
+in Table 1.
+MobileNetV1
+MobileNetV2
+The max number of channels/memory (in
+Kb) that needs to be materialized at each spatial resolution for different architectures.
+We assume 16-bit
+ﬂoats for activations. For ShufﬂeNet, we use 2x, g =
+3 that matches the performance of MobileNetV1 and
+MobileNetV2. For the ﬁrst layer of MobileNetV2 and
+ShufﬂeNet we can employ the trick described in Section 5 to reduce memory requirement.
+Even though
+ShufﬂeNet employs bottlenecks elsewhere, the nonbottleneck tensors still need to be materialized due to the
+presence of shortcuts between the non-bottleneck tensors.
+5. Implementation Notes
+5.1. Memory efﬁcient inference
+The inverted residual bottleneck layers allow a particularly memory efﬁcient implementation which is very
+important for mobile applications.
+A standard efﬁ-
+(a) NasNet 
+Dwise 3x3,
+stride=s, Relu6
+conv 1x1, Relu6
+(b) MobileNet 
+(c) ShufﬂeNet 
+Conv 1x1, Relu6
+Dwise 3x3, Relu6
+conv 1x1, Linear
+Conv 1x1, Relu6
+Dwise 3x3,
+stride=2, Relu6
+conv 1x1, Linear
+Stride=1 block
+Stride=2 block
+(d) Mobilenet V2
+Figure 4: Comparison of convolutional blocks for different architectures. ShufﬂeNet uses Group Convolutions and shufﬂing, it also uses conventional residual approach where inner blocks are narrower than output. ShufﬂeNet and NasNet illustrations are from respective papers.
+cient implementation of inference that uses for instance
+TensorFlow or Caffe , builds a directed acyclic
+compute hypergraph G, consisting of edges representing the operations and nodes representing tensors of intermediate computation. The computation is scheduled
+in order to minimize the total number of tensors that
+needs to be stored in memory. In the most general case,
+it searches over all plausible computation orders Σ(G)
+and picks the one that minimizes
+π∈Σ(G) max
+A∈R(i,π,G)
++ size(πi).
+where R(i, π, G) is the list of intermediate tensors that
+are connected to any of πi . . . πn nodes, |A| represents
+the size of the tensor A and size(i) is the total amount
+of memory needed for internal storage during operation
+For graphs that have only trivial parallel structure
+(such as residual connection), there is only one nontrivial feasible computation order, and thus the total
+amount and a bound on the memory needed for inference on compute graph G can be simpliﬁed:
+M(G) = max
+|B| + |op|
+Or to restate, the amount of memory is simply the maximum total size of combined inputs and outputs across
+all operations. In what follows we show that if we treat
+a bottleneck residual block as a single operation (and
+treat inner convolution as a disposable tensor), the total
+amount of memory would be dominated by the size of
+bottleneck tensors, rather than the size of tensors that are
+internal to bottleneck (and much larger).
+Bottleneck Residual Block
+A bottleneck block operator F(x) shown in Figure 3b can be expressed as a
+composition of three operators F(x) = [A ◦N ◦B]x,
+where A is a linear transformation A : Rs×s×k →
+Rs×s×n, N is a non-linear per-channel transformation:
+N : Rs×s×n →Rs′×s′×n, and B is again a linear
+transformation to the output domain: B : Rs′×s′×n →
+Rs′×s′×k′.
+For our networks N = ReLU6 ◦dwise ◦ReLU6 ,
+but the results apply to any per-channel transformation.
+Suppose the size of the input domain is |x| and the size
+of the output domain is |y|, then the memory required
+to compute F(X) can be as low as |s2k| + |s′2k′| +
+O(max(s2, s′2)).
+The algorithm is based on the fact that the inner tensor I can be represented as concatenation of t tensors, of
+size n/t each and our function can then be represented
+(Ai ◦N ◦Bi)(x)
+by accumulating the sum, we only require one intermediate block of size n/t to be kept in memory at all times.
+Using n = t we end up having to keep only a single
+channel of the intermediate representation at all times.
+The two constraints that enabled us to use this trick is
+(a) the fact that the inner transformation (which includes
+non-linearity and depthwise) is per-channel, and (b) the
+consecutive non-per-channel operators have signiﬁcant
+ratio of the input size to the output. For most of the traditional neural networks, such trick would not produce a
+signiﬁcant improvement.
+We note that, the number of multiply-adds operators needed to compute F(X) using t-way split is independent of t, however in existing implementations we
+ﬁnd that replacing one matrix multiplication with several smaller ones hurts runtime performance due to in-
+Multiply-Adds, Millions
+Accuracy, Top 1, %
+MobileNetV1
+ShuffleNet
+Performance curve of MobileNetV2 vs
+MobileNetV1, ShufﬂeNet, NAS. For our networks we
+use multipliers 0.35, 0.5, 0.75, 1.0 for all resolutions,
+and additional 1.4 for for 224. Best viewed in color.
+Step, millions
+Top 1 Accuracy
+Linear botleneck
+Relu6 in bottleneck
+(a) Impact of non-linearity in
+the bottleneck layer.
+Step, millions
+Top 1 Accuracy
+Shortcut between bottlenecks
+Shortcut between expansions
+No residual
+(b) Impact of variations in
+residual blocks.
+Figure 6: The impact of non-linearities and various
+types of shortcut (residual) connections.
+creased cache misses. We ﬁnd that this approach is the
+most helpful to be used with t being a small constant
+between 2 and 5. It signiﬁcantly reduces the memory
+requirement, but still allows one to utilize most of the ef-
+ﬁciencies gained by using highly optimized matrix multiplication and convolution operators provided by deep
+learning frameworks. It remains to be seen if special
+framework level optimization may lead to further runtime improvements.
+6. Experiments
+6.1. ImageNet Classiﬁcation
+TensorFlow .
+We use the standard RMSPropOptimizer with both decay and momentum set to 0.9.
+We use batch normalization after every layer, and the
+standard weight decay is set to 0.00004.
+MobileNetV1 setup we use initial learning rate of
+0.045, and learning rate decay rate of 0.98 per epoch.
+We use 16 GPU asynchronous workers, and a batch size
+MobileNetV1,
+ShufﬂeNet and NASNet-A models.
+The statistics of a few selected models is shown in
+Table 4 with the full performance graph shown in
+6.2. Object Detection
+We evaluate and compare the performance of
+MobileNetV2 and MobileNetV1 as feature extractors
+ for object detection with a modiﬁed version of the
+Single Shot Detector (SSD) on COCO dataset .
+We also compare to YOLOv2 and original SSD
+(with VGG-16 as base network) as baselines. We do
+not compare performance with other architectures such
+as Faster-RCNN and RFCN since our focus is
+on mobile/real-time models.
+In this paper, we introduce a mobile
+friendly variant of regular SSD. We replace all the regular convolutions with separable convolutions (depthwise
+followed by 1 × 1 projection) in SSD prediction layers. This design is in line with the overall design of
+MobileNets and is seen to be much more computationally efﬁcient. We call this modiﬁed version SSDLite.
+Compared to regular SSD, SSDLite dramatically reduces both parameter count and computational cost as
+shown in Table 5.
+For MobileNetV1, we follow the setup in . For
+MobileNetV2, the ﬁrst layer of SSDLite is attached to
+the expansion of layer 15 (with output stride of 16). The
+second and the rest of SSDLite layers are attached on top
+of the last layer (with output stride of 32). This setup is
+consistent with MobileNetV1 as all layers are attached
+to the feature map of the same output strides.
+MobileNetV1
+ShufﬂeNet (1.5)
+ShufﬂeNet (x2)
+MobileNetV2
+MobileNetV2 (1.4)
+Table 4: Performance on ImageNet, comparison for different networks. As is common practice for ops, we
+count the total number of Multiply-Adds. In the last
+column we report running time in milliseconds (ms) for
+a single large core of the Google Pixel 1 phone (using
+TF-Lite). We do not report ShufﬂeNet numbers as efﬁcient group convolutions and shufﬂing are not yet supported.
+Comparison of the size and the computational cost between SSD and SSDLite conﬁgured with
+MobileNetV2 and making predictions for 80 classes.
+SSD300 
+SSD512 
+YOLOv2 
+MNet V1 + SSDLite
+MNet V2 + SSDLite
+Table 6: Performance comparison of MobileNetV2 +
+SSDLite and other realtime detectors on the COCO
+dataset object detection task. MobileNetV2 + SSDLite
+achieves competitive accuracy with signiﬁcantly fewer
+parameters and smaller computational complexity. All
+models are trained on trainval35k and evaluated on
+test-dev. SSD/YOLOv2 numbers are from . The
+running time is reported for the large core of the Google
+Pixel 1 phone, using an internal version of the TF-Lite
+Both MobileNet models are trained and evaluated with Open Source TensorFlow Object Detection
+API . The input resolution of both models is 320 ×
+320. We benchmark and compare both mAP (COCO
+challenge metrics), number of parameters and number
+of Multiply-Adds. The results are shown in Table 6.
+MobileNetV2 SSDLite is not only the most efﬁcient
+model, but also the most accurate of the three.
+Notably, MobileNetV2 SSDLite is 20× more efﬁcient and
+10× smaller while still outperforms YOLOv2 on COCO
+6.3. Semantic Segmentation
+In this section, we compare MobileNetV1 and
+MobileNetV2 models used as feature extractors with
+DeepLabv3 for the task of mobile semantic segmentation. DeepLabv3 adopts atrous convolution , a powerful tool to explicitly control the resolution of computed feature maps, and builds ﬁve parallel heads including (a) Atrous Spatial Pyramid Pooling
+module (ASPP) containing three 3 × 3 convolutions with different atrous rates, (b) 1 × 1 convolution
+head, and (c) Image-level features . We denote by
+output stride the ratio of input image spatial resolution
+to ﬁnal output resolution, which is controlled by applying the atrous convolution properly. For semantic segmentation, we usually employ output stride = 16 or 8
+for denser feature maps. We conduct the experiments
+on the PASCAL VOC 2012 dataset , with extra annotated images from and evaluation metric mIOU.
+To build a mobile model, we experimented with three
+design variations: (1) different feature extractors, (2)
+simplifying the DeepLabv3 heads for faster computation, and (3) different inference strategies for boosting the performance.
+Our results are summarized in
+We have observed that:
+(a) the inference
+strategies, including multi-scale inputs and adding leftright ﬂipped images, signiﬁcantly increase the MAdds
+and thus are not suitable for on-device applications,
+(b) using output stride = 16 is more efﬁcient than
+output stride = 8, (c) MobileNetV1 is already a powerful feature extractor and only requires about 4.9 −5.7
+times fewer MAdds than ResNet-101 (e.g., mIOU:
+78.56 vs 82.70, and MAdds: 941.9B vs 4870.6B), (d)
+it is more efﬁcient to build DeepLabv3 heads on top of
+the second last feature map of MobileNetV2 than on the
+original last-layer feature map, since the second to last
+feature map contains 320 channels instead of 1280, and
+by doing so, we attain similar performance, but require
+about 2.5 times fewer operations than the MobileNetV1
+counterparts, and (e) DeepLabv3 heads are computationally expensive and removing the ASPP module signiﬁcantly reduces the MAdds with only a slight performance degradation. In the end of the Table 7, we identify
+a potential candidate for on-device applications (in bold
+face), which attains 75.32% mIOU and only requires
+2.75B MAdds.
+6.4. Ablation study
+Inverted residual connections.
+The importance of
+residual connection has been studied extensively . The new result reported in this paper is that
+the shortcut connecting bottleneck perform better than
+shortcuts connecting the expanded layers (see Figure 6b
+for comparison).
+Importance of linear bottlenecks. The linear bottleneck models are strictly less powerful than models with
+non-linearities, because the activations can always operate in linear regime with appropriate changes to biases and scaling. However our experiments shown in
+Figure 6a indicate that linear bottlenecks improve performance, providing support that non-linearity destroys
+information in low-dimensional space.
+ResNet-101
+Table 7: MobileNet + DeepLabv3 inference strategy
+on the PASCAL VOC 2012 validation set.
+V2*: Second last feature map is used for DeepLabv3
+heads, which includes (1) Atrous Spatial Pyramid Pooling (ASPP) module, and (2) 1 × 1 convolution as well
+as image-pooling feature. OS: output stride that controls the output resolution of the segmentation map. MF:
+Multi-scale and left-right ﬂipped inputs during test. All
+of the models have been pretrained on COCO. The potential candidate for on-device applications is shown in
+bold face. PASCAL images have dimension 512 × 512
+and atrous convolution allows us to control output feature resolution without increasing the number of parameters.
+7. Conclusions and future work
+We described a very simple network architecture that
+allowed us to build a family of highly efﬁcient mobile
+Our basic building unit, has several properties that make it particularly suitable for mobile applications. It allows very memory-efﬁcient inference and
+relies utilize standard operations present in all neural
+frameworks.
+For the ImageNet dataset, our architecture improves
+the state of the art for wide range of performance points.
+For object detection task, our network outperforms
+state-of-art realtime detectors on COCO dataset both in
+terms of accuracy and model complexity. Notably, our
+architecture combined with the SSDLite detection module is 20× less computation and 10× less parameters
+than YOLOv2.
+On the theoretical side: the proposed convolutional
+block has a unique property that allows to separate the
+network expressiveness (encoded by expansion layers)
+from its capacity (encoded by bottleneck inputs). Exploring this is an important direction for future research.
+Acknowledgments
+We would like to thank Matt
+Streeter and Sergey Ioffe for their helpful feedback and
+discussion.

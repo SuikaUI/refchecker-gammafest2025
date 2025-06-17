@@ -1,0 +1,496 @@
+Arbitrary Style Transfer in Real-time with Adaptive Instance Normalization
+Serge Belongie
+Department of Computer Science & Cornell Tech, Cornell University
+{xh258,sjb344}@cornell.edu
+Gatys et al. recently introduced a neural algorithm that
+renders a content image in the style of another image,
+achieving so-called style transfer. However, their framework requires a slow iterative optimization process, which
+limits its practical application. Fast approximations with
+feed-forward neural networks have been proposed to speed
+up neural style transfer. Unfortunately, the speed improvement comes at a cost: the network is usually tied to a ﬁxed
+set of styles and cannot adapt to arbitrary new styles. In this
+paper, we present a simple yet effective approach that for the
+ﬁrst time enables arbitrary style transfer in real-time. At the
+heart of our method is a novel adaptive instance normalization (AdaIN) layer that aligns the mean and variance of the
+content features with those of the style features. Our method
+achieves speed comparable to the fastest existing approach,
+without the restriction to a pre-deﬁned set of styles. In addition, our approach allows ﬂexible user controls such as
+content-style trade-off, style interpolation, color & spatial
+controls, all using a single feed-forward neural network.
+1. Introduction
+The seminal work of Gatys et al. showed that deep
+neural networks (DNNs) encode not only the content but
+also the style information of an image. Moreover, the image style and content are somewhat separable: it is possible
+to change the style of an image while preserving its content. The style transfer method of is ﬂexible enough to
+combine content and style of arbitrary images. However, it
+relies on an optimization process that is prohibitively slow.
+Signiﬁcant effort has been devoted to accelerating neural
+style transfer. attempted to train feed-forward
+neural networks that perform stylization with a single forward pass. A major limitation of most feed-forward methods is that each network is restricted to a single style. There
+are some recent works addressing this problem, but they are
+either still limited to a ﬁnite set of styles , or
+much slower than the single-style transfer methods .
+In this work, we present the ﬁrst neural style transfer
+algorithm that resolves this fundamental ﬂexibility-speed
+dilemma. Our approach can transfer arbitrary new styles
+in real-time, combining the ﬂexibility of the optimizationbased framework and the speed similar to the fastest
+feed-forward approaches . Our method is inspired
+by the instance normalization (IN) layer, which
+is surprisingly effective in feed-forward style transfer. To
+explain the success of instance normalization, we propose
+a new interpretation that instance normalization performs
+style normalization by normalizing feature statistics, which
+have been found to carry the style information of an image . Motivated by our interpretation, we introduce a simple extension to IN, namely adaptive instance
+normalization (AdaIN). Given a content input and a style
+input, AdaIN simply adjusts the mean and variance of the
+content input to match those of the style input. Through
+experiments, we ﬁnd AdaIN effectively combines the content of the former and the style latter by transferring feature
+statistics. A decoder network is then learned to generate the
+ﬁnal stylized image by inverting the AdaIN output back to
+the image space. Our method is nearly three orders of magnitude faster than , without sacriﬁcing the ﬂexibility of
+transferring inputs to arbitrary new styles. Furthermore, our
+approach provides abundant user controls at runtime, without any modiﬁcation to the training process.
+2. Related Work
+Style transfer. The problem of style transfer has its origin
+from non-photo-realistic rendering , and is closely related to texture synthesis and transfer . Some
+early approaches include histogram matching on linear ﬁlter responses and non-parametric sampling .
+These methods typically rely on low-level statistics and often fail to capture semantic structures. Gatys et al. for
+the ﬁrst time demonstrated impressive style transfer results
+by matching feature statistics in convolutional layers of a
+DNN. Recently, several improvements to have been
+proposed. Li and Wand introduced a framework based
+on markov random ﬁeld (MRF) in the deep feature space to
+enforce local patterns. Gatys et al. proposed ways to
+control the color preservation, the spatial location, and the
+scale of style transfer. Ruder et al. improved the quality
+ 
+of video style transfer by imposing temporal constraints.
+The framework of Gatys et al. is based on a slow
+optimization process that iteratively updates the image to
+minimize a content loss and a style loss computed by a loss
+network. It can take minutes to converge even with modern GPUs. On-device processing in mobile applications is
+therefore too slow to be practical. A common workaround
+is to replace the optimization process with a feed-forward
+neural network that is trained to minimize the same objective . These feed-forward style transfer approaches are about three orders of magnitude faster than
+the optimization-based alternative, opening the door to realtime applications. Wang et al. enhanced the granularity
+of feed-forward style transfer with a multi-resolution architecture. Ulyanov et al. proposed ways to improve the
+quality and diversity of the generated samples. However,
+the above feed-forward methods are limited in the sense that
+each network is tied to a ﬁxed style. To address this problem, Dumoulin et al. introduced a single network that
+is able to encode 32 styles and their interpolations. Concurrent to our work, Li et al. proposed a feed-forward
+architecture that can synthesize up to 300 textures and transfer 16 styles. Still, the two methods above cannot adapt to
+arbitrary styles that are not observed during training.
+Very recently, Chen and Schmidt introduced a feedforward method that can transfer arbitrary styles thanks to
+a style swap layer. Given feature activations of the content
+and style images, the style swap layer replaces the content
+features with the closest-matching style features in a patchby-patch manner. Nevertheless, their style swap layer creates a new computational bottleneck: more than 95% of the
+computation is spent on the style swap for 512 × 512 input
+images. Our approach also permits arbitrary style transfer,
+while being 1-2 orders of magnitude faster than .
+Another central problem in style transfer is which style
+loss function to use. The original framework of Gatys et
+al. matches styles by matching the second-order statistics between feature activations, captured by the Gram matrix.
+Other effective loss functions have been proposed,
+such as MRF loss , adversarial loss , histogram
+loss , CORAL loss , MMD loss , and distance
+between channel-wise mean and variance . Note that all
+the above loss functions aim to match some feature statistics
+between the style image and the synthesized image.
+Deep generative image modeling. There are several alternative frameworks for image generation, including variational auto-encoders , auto-regressive models , and
+generative adversarial networks (GANs) . Remarkably,
+GANs have achieved the most impressive visual quality.
+Various improvements to the GAN framework have been
+proposed, such as conditional generation , multistage processing , and better training objectives . GANs have also been applied to style transfer and
+cross-domain image generation .
+3. Background
+3.1. Batch Normalization
+The seminal work of Ioffe and Szegedy introduced
+a batch normalization (BN) layer that signiﬁcantly ease the
+training of feed-forward networks by normalizing feature
+statistics.
+BN layers are originally designed to accelerate training of discriminative networks, but have also been
+found effective in generative image modeling . Given
+an input batch x ∈RN×C×H×W , BN normalizes the mean
+and standard deviation for each individual feature channel:
+where γ, β ∈RC are afﬁne parameters learned from data;
+µ(x), σ(x) ∈RC are the mean and standard deviation,
+computed across batch size and spatial dimensions independently for each feature channel:
+(xnchw −µc(x))2 + ϵ
+BN uses mini-batch statistics during training and replace
+them with popular statistics during inference, introducing
+discrepancy between training and inference. Batch renormalization was recently proposed to address this issue
+by gradually using popular statistics during training. As
+another interesting application of BN, Li et al. found
+that BN can alleviate domain shifts by recomputing popular
+statistics in the target domain. Recently, several alternative
+normalization schemes have been proposed to extend BN’s
+effectiveness to recurrent architectures .
+3.2. Instance Normalization
+In the original feed-forward stylization method , the
+style transfer network contains a BN layer after each convolutional layer. Surprisingly, Ulyanov et al. found
+that signiﬁcant improvement could be achieved simply by
+replacing BN layers with IN layers:
+Different from BN layers, here µ(x) and σ(x) are computed across spatial dimensions independently for each
+channel and each sample:
+Style Loss (×105)
+Batch Norm
+Instance Norm
+(a) Trained with original images.
+Style Loss (×105)
+Batch Norm
+Instance Norm
+(b) Trained with contrast normalized images.
+Style Loss (×105)
+Batch Norm
+Instance Norm
+(c) Trained with style normalized images.
+Figure 1. To understand the reason for IN’s effectiveness in style transfer, we train an IN model and a BN model with (a) original images
+in MS-COCO , (b) contrast normalized images, and (c) style normalized images using a pre-trained style transfer network . The
+improvement brought by IN remains signiﬁcant even when all training images are normalized to the same contrast, but are much smaller
+when all images are (approximately) normalized to the same style. Our results suggest that IN performs a kind of style normalization.
+(xnchw −µnc(x))2 + ϵ
+Another difference is that IN layers are applied at test
+time unchanged, whereas BN layers usually replace minibatch statistics with population statistics.
+3.3. Conditional Instance Normalization
+Instead of learning a single set of afﬁne parameters γ
+and β, Dumoulin et al. proposed a conditional instance
+normalization (CIN) layer that learns a different set of parameters γs and βs for each style s:
+CIN(x; s) = γs
+During training, a style image together with its index
+s are randomly chosen from a ﬁxed set of styles s ∈
+{1, 2, ..., S} (S = 32 in their experiments).
+The content image is then processed by a style transfer network
+in which the corresponding γs and βs are used in the CIN
+layers. Surprisingly, the network can generate images in
+completely different styles by using the same convolutional
+parameters but different afﬁne parameters in IN layers.
+Compared with a network without normalization layers,
+a network with CIN layers requires 2FS additional parameters, where F is the total number of feature maps in the
+network . Since the number of additional parameters
+scales linearly with the number of styles, it is challenging to
+extend their method to model a large number of styles (e.g.,
+tens of thousands). Also, their approach cannot adapt to
+arbitrary new styles without re-training the network.
+4. Interpreting Instance Normalization
+Despite the great success of (conditional) instance normalization, the reason why they work particularly well for
+style transfer remains elusive. Ulyanov et al. attribute
+the success of IN to its invariance to the contrast of the content image. However, IN takes place in the feature space,
+therefore it should have more profound impacts than a simple contrast normalization in the pixel space. Perhaps even
+more surprising is the fact that the afﬁne parameters in IN
+can completely change the style of the output image.
+It has been known that the convolutional feature statistics
+of a DNN can capture the style of an image .
+While Gatys et al. use the second-order statistics as
+their optimization objective, Li et al. recently showed
+that matching many other statistics, including channel-wise
+mean and variance, are also effective for style transfer. Motivated by these observations, we argue that instance normalization performs a form of style normalization by normalizing feature statistics, namely the mean and variance.
+Although DNN serves as a image descriptor in , we
+believe that the feature statistics of a generator network can
+also control the style of the generated image.
+We run the code of improved texture networks to
+perform single-style transfer, with IN or BN layers.
+expected, the model with IN converges faster than the BN
+model (Fig. 1 (a)). To test the explanation in , we then
+normalize all the training images to the same contrast by
+performing histogram equalization on the luminance channel.
+As shown in Fig. 1 (b), IN remains effective, suggesting the explanation in to be incomplete. To verify our hypothesis, we normalize all the training images to
+the same style (different from the target style) using a pretrained style transfer network provided by . According
+to Fig. 1 (c), the improvement brought by IN become much
+smaller when images are already style normalized. The remaining gap can explained by the fact that the style normalization with is not perfect. Also, models with BN
+trained on style normalized images can converge as fast as
+models with IN trained on the original images. Our results
+indicate that IN does perform a kind of style normalization.
+Since BN normalizes the feature statistics of a batch of
+samples instead of a single sample, it can be intuitively
+understood as normalizing a batch of samples to be centered around a single style. Each single sample, however,
+may still have different styles. This is undesirable when we
+want to transfer all images to the same style, as is the case
+in the original feed-forward style transfer algorithm .
+Although the convolutional layers might learn to compensate the intra-batch style difference, it poses additional challenges for training. On the other hand, IN can normalize the
+style of each individual sample to the target style. Training
+is facilitated because the rest of the network can focus on
+content manipulation while discarding the original style information. The reason behind the success of CIN also becomes clear: different afﬁne parameters can normalize the
+feature statistics to different values, thereby normalizing the
+output image to different styles.
+5. Adaptive Instance Normalization
+If IN normalizes the input to a single style speciﬁed by
+the afﬁne parameters, is it possible to adapt it to arbitrarily
+given styles by using adaptive afﬁne transformations? Here,
+we propose a simple extension to IN, which we call adaptive
+instance normalization (AdaIN). AdaIN receives a content
+input x and a style input y, and simply aligns the channelwise mean and variance of x to match those of y. Unlike
+BN, IN or CIN, AdaIN has no learnable afﬁne parameters.
+Instead, it adaptively computes the afﬁne parameters from
+the style input:
+AdaIN(x, y) = σ(y)
+in which we simply scale the normalized content input
+with σ(y), and shift it with µ(y). Similar to IN, these statistics are computed across spatial locations.
+Intuitively, let us consider a feature channel that detects
+brushstrokes of a certain style. A style image with this kind
+of strokes will produce a high average activation for this
+feature. The output produced by AdaIN will have the same
+high average activation for this feature, while preserving the
+spatial structure of the content image. The brushstroke feature can be inverted to the image space with a feed-forward
+decoder, similar to . The variance of this feature channel can encoder more subtle style information, which is also
+transferred to the AdaIN output and the ﬁnal output image.
+In short, AdaIN performs style transfer in the feature space by transferring feature statistics, speciﬁcally the
+channel-wise mean and variance. Our AdaIN layer plays
+a similar role as the style swap layer proposed in .
+While the style swap operation is very time-consuming and
+memory-consuming, our AdaIN layer is as simple as an IN
+layer, adding almost no computational cost.
+Style Transfer Network
+Figure 2. An overview of our style transfer algorithm. We use the
+ﬁrst few layers of a ﬁxed VGG-19 network to encode the content
+and style images. An AdaIN layer is used to perform style transfer
+in the feature space. A decoder is learned to invert the AdaIN
+output to the image spaces. We use the same VGG encoder to
+compute a content loss Lc (Equ. 12) and a style loss Ls (Equ. 13).
+6. Experimental Setup
+Fig. 2 shows an overview of our style transfer network based on the proposed AdaIN layer. Code and pretrained models (in Torch 7 ) are available at: https:
+//github.com/xunhuang1995/AdaIN-style
+6.1. Architecture
+Our style transfer network T takes a content image c and
+an arbitrary style image s as inputs, and synthesizes an output image that recombines the content of the former and the
+style latter. We adopt a simple encoder-decoder architecture, in which the encoder f is ﬁxed to the ﬁrst few layers (up to relu4 1) of a pre-trained VGG-19 . After
+encoding the content and style images in feature space, we
+feed both feature maps to an AdaIN layer that aligns the
+mean and variance of the content feature maps to those of
+the style feature maps, producing the target feature maps t:
+t = AdaIN(f(c), f(s))
+A randomly initialized decoder g is trained to map t back
+to the image space, generating the stylized image T(c, s):
+T(c, s) = g(t)
+The decoder mostly mirrors the encoder, with all pooling
+layers replaced by nearest up-sampling to reduce checkerboard effects. We use reﬂection padding in both f and g
+to avoid border artifacts. Another important architectural
+choice is whether the decoder should use instance, batch, or
+no normalization layers. As discussed in Sec. 4, IN normalizes each sample to a single style while BN normalizes a
+batch of samples to be centered around a single style. Both
+are undesirable when we want the decoder to generate images in vastly different styles. Thus, we do not use normalization layers in the decoder. In Sec. 7.1 we will show that
+IN/BN layers in the decoder indeed hurt performance.
+6.2. Training
+We train our network using MS-COCO as content
+images and a dataset of paintings mostly collected from
+WikiArt as style images, following the setting of .
+Each dataset contains roughly 80, 000 training examples.
+We use the adam optimizer and a batch size of 8
+content-style image pairs. During training, we ﬁrst resize
+the smallest dimension of both images to 512 while preserving the aspect ratio, then randomly crop regions of size
+256 × 256. Since our network is fully convolutional, it can
+be applied to images of any size during testing.
+Similar to , we use the pre-trained VGG-
+19 to compute the loss function to train the decoder:
+L = Lc + λLs
+which is a weighted combination of the content loss Lc
+and the style loss Ls with the style loss weight λ. The
+content loss is the Euclidean distance between the target
+features and the features of the output image. We use the
+AdaIN output t as the content target, instead of the commonly used feature responses of the content image. We ﬁnd
+this leads to slightly faster convergence and also aligns with
+our goal of inverting the AdaIN output t.
+Lc = ∥f(g(t)) −t∥2
+Since our AdaIN layer only transfers the mean and standard deviation of the style features, our style loss only
+matches these statistics. Although we ﬁnd the commonly
+used Gram matrix loss can produce similar results, we
+match the IN statistics because it is conceptually cleaner.
+This style loss has also been explored by Li et al. .
+∥µ(φi(g(t))) −µ(φi(s))∥2
+∥σ(φi(g(t))) −σ(φi(s))∥2
+where each φi denotes a layer in VGG-19 used to compute the style loss. In our experiments we use relu1 1,
+relu2 1, relu3 1, relu4 1 layers with equal weights.
+7. Results
+7.1. Comparison with other methods
+In this subsection, we compare our approach with three
+types of style transfer methods: 1) the ﬂexible but slow
+optimization-based method , 2) the fast feed-forward
+method restricted to a single style , and 3) the ﬂexible
+patch-based method of medium speed . If not mentioned
+otherwise, the results of compared methods are obtained by
+running their code with the default conﬁgurations. 1 For
+1We run 500 iterations of using Johnson’s public implementation:
+ 
+(a) Style Loss
+Gatys et al.
+Ulyanov et al.
+Content Image
+(b) Content Loss
+Figure 3. Quantitative comparison of different methods in terms of
+style and content loss. Numbers are averaged over 10 style images
+and 50 content images randomly chosen from our test set.
+ , we use a pre-trained inverse network provided by the
+authors. All the test images are of size 512 × 512.
+Qualitative Examples. In Fig. 4 we show example style
+transfer results generated by compared methods. Note that
+all the test style images are never observed during the training of our model, while the results of are obtained by
+ﬁtting one network to each test style. Even so, the quality of our stylized images is quite competitive with 
+and for many images (e.g., row 1, 2, 3). In some other
+cases (e.g., row 5) our method is slightly behind the quality of and .
+This is not unexpected, as we believe there is a three-way trade-off between speed, ﬂexibility, and quality. Compared with , our method appears
+to transfer the style more faithfully for most compared images. The last example clearly illustrates a major limitation of , which attempts to match each content patch with
+the closest-matching style patch. However, if most content
+patches are matched to a few style patches that are not representative of the target style, the style transfer would fail.
+We thus argue that matching global feature statistics is a
+more general solution, although in some cases (e.g., row 3)
+the method of can also produce appealing results.
+Quantitative evaluations.
+Does our algorithm trade off
+some quality for higher speed and ﬂexibility, and if so by
+how much? To answer this question quantitatively, we compare our approach with the optimization-based method 
+and the fast single-style transfer method in terms of
+the content and style loss. Because our method uses a style
+loss based on IN statistics, we also modify the loss function
+in and accordingly for a fair comparison (their results in Fig. 4 are still obtained with the default Gram matrix
+loss). The content loss shown here is the same as in .
+The numbers reported are averaged over 10 style images
+and 50 content images randomly chosen from the test set of
+the WikiArt dataset and MS-COCO .
+As shown in Fig. 3, the average content and style loss of
+our synthesized images are slightly higher but comparable
+to the single-style transfer method of Ulyanov et al. . In
+particular, both our method and obtain a style loss similar to that of between 50 and 100 iterations of optimiza-
+Chen and Schmidt
+Ulyanov et al.
+Gatys et al.
+Figure 4. Example style transfer results. All the tested content and style images are never observed by our network during training.
+tion. This demonstrates the strong generalization ability of
+our approach, considering that our network has never seen
+the test styles during training while each network of is
+speciﬁcally trained on a test style. Also, note that our style
+loss is much smaller than that of the original content image.
+Speed analysis. Most of our computation is spent on content encoding, style encoding, and decoding, each roughly
+taking one third of the time. In some application scenarios such as video processing, the style image needs to be
+encoded only once and AdaIN can use the stored style
+statistics to process all subsequent images. In some other
+cases (e.g., transferring the same content to different styles),
+the computation spent on content encoding can be shared.
+In Tab. 1 we compare the speed of our method with previous ones . Excluding the time for style encoding, our algorithm runs at 56 and 15 FPS for 256 × 256
+and 512 × 512 images respectively, making it possible to
+process arbitrary user-uploaded styles in real-time. Among
+algorithms applicable to arbitrary styles, our method is
+nearly 3 orders of magnitude faster than and 1-2 orders of magnitude faster than . The speed improvement
+over is particularly signiﬁcant for images of higher resolution, since the style swap layer in does not scale well
+to high resolution style images. Moreover, our approach
+achieves comparable speed to feed-forward methods limited
+to a few styles . The slightly longer processing time
+of our method is mainly due to our larger VGG-based network, instead of methodological limitations. With a more
+efﬁcient architecture, our speed can be further improved.
+Time (256px) Time (512px) # Styles
+Gatys et al.
+14.17 (14.19) 46.75 (46.79)
+Chen and Schmidt 0.171 (0.407) 3.214 (4.144)
+Ulyanov et al.
+0.011 (N/A)
+0.038 (N/A)
+Dumoulin et al.
+0.011 (N/A)
+0.038 (N/A)
+0.018 (0.027) 0.065 (0.098)
+Table 1. Speed comparison (in seconds) for 256 × 256 and 512 ×
+512 images. Our approach achieves comparable speed to methods
+limited to a small number styles , while being much faster
+than other existing algorithms applicable to arbitrary styles . We show the processing time both excluding and including (in
+parenthesis) the style encoding procedure. Results are obtained
+with a Pascal Titan X GPU and averaged over 100 images.
+7.2. Additional experiments.
+In this subsection, we conduct experiments to justify our
+important architectural choices. We denote our approach
+described in Sec. 6 as Enc-AdaIN-Dec. We experiment with
+a model named Enc-Concat-Dec that replaces AdaIN with
+concatenation, which is a natural baseline strategy to combine information from the content and style images. In addition, we run models with BN/IN layers in the decoder,
+denoted as Enc-AdaIN-BNDec and Enc-AdaIN-INDec respectively. Other training settings are kept the same.
+In Fig. 5 and 6, we show examples and training curves of
+the compared methods. In the image generated by the Enc-
+Concat-Dec baseline (Fig. 5 (d)), the object contours of the
+style image can be clearly observed, suggesting that the network fails to disentangle the style information from the content of the style image. This is also consistent with Fig. 6,
+where Enc-Concat-Dec can reach low style loss but fail to
+decrease the content loss. Models with BN/IN layers also
+obtain qualitatively worse results and consistently higher
+losses. The results with IN layers are especially poor. This
+once again veriﬁes our claim that IN layers tend to normalize the output to a single style and thus should be avoided
+when we want to generate images in different styles.
+7.3. Runtime controls
+To further highlight the ﬂexibility of our method, we
+show that our style transfer network allows users to control the degree of stylization, interpolate between different
+styles, transfer styles while preserving colors, and use different styles in different spatial regions. Note that all these
+controls are only applied at runtime using the same network,
+without any modiﬁcation to the training procedure.
+Content-style trade-off. The degree of style transfer can
+be controlled during training by adjusting the style weight
+λ in Eqa. 11. In addition, our method allows content-style
+trade-off at test time by interpolating between feature maps
+that are fed to the decoder. Note that this is equivalent to
+(b) Content
+(c) Enc-AdaIN-Dec
+(d) Enc-Concat-Dec
+(e) Enc-AdaIN-BNDec (f) Enc-AdaIN-INDec
+Figure 5. Comparison with baselines. AdaIN is much more effective than concatenation in fusing the content and style information.
+Also, it is important not to use BN or IN layers in the decoder.
+10000 15000 20000 25000 30000
+Enc-AdaIN-Dec (Style)
+Enc-AdaIN-Dec (Content)
+Enc-Concat-Dec (Style)
+Enc-Concat-Dec (Content)
+Enc-AdaIN-BNDec (Style)
+Enc-AdaIN-BNDec (Content)
+Enc-AdaIN-INDec (Style)
+Enc-AdaIN-INDec (Content)
+Figure 6. Training curves of style and content loss.
+interpolating between the afﬁne parameters of AdaIN.
+T(c, s, α) = g((1 −α)f(c) + αAdaIN(f(c), f(s))) (14)
+The network tries to faithfully reconstruct the content
+image when α = 0, and to synthesize the most stylized
+image when α = 1. As shown in Fig. 7, a smooth transition between content-similarity and style-similarity can be
+observed by changing α from 0 to 1.
+Style interpolation.
+To interpolate between a set of
+K style images s1, s2, ..., sK with corresponding weights
+w1, w2, ..., wK such that PK
+k=1 wk = 1, we similarly interpolate between feature maps (results shown in Fig. 8):
+T(c, s1,2,...K, w1,2,...K) = g(
+wkAdaIN(f(c), f(sk)))
+Spatial and color control. Gatys et al. recently introduced user controls over color information and spatial locations of style transfer, which can be easily incorporated into
+our framework. To preserve the color of the content image,
+we ﬁrst match the color distribution of the style image to
+Figure 7. Content-style trade-off. At runtime, we can control the balance between content and style by changing the weight α in Equ. 14.
+Figure 8. Style interpolation. By feeding the decoder with a convex combination of feature maps transferred to different styles via
+AdaIN (Equ. 15), we can interpolate between arbitrary new styles.
+that of the content image (similar to ), then perform a
+normal style transfer using the color-aligned style image as
+the style input. Examples results are shown in Fig. 9.
+In Fig. 10 we demonstrate that our method can transfer different regions of the content image to different styles.
+This is achieved by performing AdaIN separately to different regions in the content feature maps using statistics from
+different style inputs, similar to but in a completely
+feed-forward manner. While our decoder is only trained on
+inputs with homogeneous styles, it generalizes naturally to
+inputs in which different regions have different styles.
+8. Discussion and Conclusion
+In this paper, we present a simple adaptive instance normalization (AdaIN) layer that for the ﬁrst time enables arbitrary style transfer in real-time. Beyond the fascinating
+applications, we believe this work also sheds light on our
+understanding of deep image representations in general.
+It is interesting to consider the conceptual differences between our approach and previous neural style transfer methods based on feature statistics. Gatys et al. employ an
+optimization process to manipulate pixel values to match
+feature statistics. The optimization process is replaced by
+feed-forward neural networks in . Still, the net-
+Figure 9. Color control. Left: content and style images. Right:
+color-preserved style transfer result.
+Figure 10. Spatial control. Left: content image. Middle: two style
+images with corresponding masks. Right: style transfer result.
+work is trained to modify pixel values to indirectly match
+feature statistics. We adopt a very different approach that
+directly aligns statistics in the feature space in one shot, then
+inverts the features back to the pixel space.
+Given the simplicity of our approach, we believe there is
+still substantial room for improvement. In future works we
+plan to explore more advanced network architectures such
+as the residual architecture or an architecture with additional skip connections from the encoder . We also plan
+to investigate more complicated training schemes like the
+incremental training . Moreover, our AdaIN layer only
+aligns the most basic feature statistics (mean and variance).
+It is possible that replacing AdaIN with correlation alignment or histogram matching could further improve
+quality by transferring higher-order statistics. Another interesting direction is to apply AdaIN to texture synthesis.
+Acknowledgments
+We would like to thank Andreas Veit for helpful discussions. This work was supported in part by a Google Focused Research Award, AWS Cloud Credits for Research
+and a Facebook equipment donation.
+Figure 11. More examples of style transfer. Each row shares the same style while each column represents the same content. As before, the
+network has never seen the test style and content images.

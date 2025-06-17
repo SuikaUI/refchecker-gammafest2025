@@ -1,0 +1,1100 @@
+AI2: Safety and Robustness Certiﬁcation of Neural
+Networks with Abstract Interpretation
+Timon Gehr, Matthew Mirman, Dana Drachsler-Cohen, Petar Tsankov, Swarat Chaudhuri∗, Martin Vechev
+Department of Computer Science
+ETH Zurich, Switzerland
+Abstract—We present AI2, the ﬁrst sound and scalable analyzer for deep neural networks. Based on overapproximation,
+AI2 can automatically prove safety properties (e.g., robustness)
+of realistic neural networks (e.g., convolutional neural networks).
+The key insight behind AI2 is to phrase reasoning about safety
+and robustness of neural networks in terms of classic abstract
+interpretation, enabling us to leverage decades of advances in
+that area. Concretely, we introduce abstract transformers that
+capture the behavior of fully connected and convolutional neural
+network layers with rectiﬁed linear unit activations (ReLU), as
+well as max pooling layers. This allows us to handle real-world
+neural networks, which are often built out of those types of layers.
+We present a complete implementation of AI2 together with
+an extensive evaluation on 20 neural networks. Our results
+demonstrate that: (i) AI2 is precise enough to prove useful
+speciﬁcations (e.g., robustness), (ii) AI2 can be used to certify
+the effectiveness of state-of-the-art defenses for neural networks,
+(iii) AI2 is signiﬁcantly faster than existing analyzers based on
+symbolic analysis, which often take hours to verify simple fully
+connected networks, and (iv) AI2 can handle deep convolutional
+networks, which are beyond the reach of existing methods.
+Index Terms—Reliable Machine Learning, Robustness, Neural
+Networks, Abstract Interpretation
+I. INTRODUCTION
+Recent years have shown a wide adoption of deep neural
+networks in safety-critical applications, including self-driving
+cars , malware detection , and aircraft collision avoidance detection . This adoption can be attributed to the
+near-human accuracy obtained by these models , .
+Despite their success, a fundamental challenge remains:
+to ensure that machine learning systems, and deep neural
+networks in particular, behave as intended. This challenge
+has become critical in light of recent research showing
+that even highly accurate neural networks are vulnerable
+to adversarial examples. Adversarial examples are typically
+obtained by slightly perturbing an input that is correctly
+classiﬁed by the network, such that the network misclassiﬁes
+the perturbed input. Various kinds of perturbations have been
+shown to successfully generate adversarial examples (e.g., ,
+ , , , , , , , , , ). Fig. 1
+illustrates two attacks, FGSM and brightening, against a digit
+classiﬁer. For each attack, Fig. 1 shows an input in the Original
+column, the perturbed input in the Perturbed column, and the
+pixels that were changed in the Diff column. Brightened pixels
+∗Rice University, work done while at ETH Zurich.
+FGSM , ϵ = 0.3
+Brightening, δ = 0.085
+Fig. 1: Attacks applied to MNIST images .
+are marked in yellow and darkened pixels are marked in purple. The FGSM attack perturbs an image by adding to it
+a particular noise vector multiplied by a small number ϵ (in
+Fig. 1, ϵ = 0.3). The brightening attack (e.g., ) perturbs
+an image by changing all pixels above the threshold 1 −δ to
+the brightest possible value (in Fig. 1, δ = 0.085).
+Adversarial examples can be especially problematic when
+safety-critical systems rely on neural networks. For instance,
+it has been shown that attacks can be executed physically
+(e.g., , ) and against neural networks accessible only as
+a black box (e.g., , , ). To mitigate these issues,
+recent research has focused on reasoning about neural network
+robustness, and in particular on local robustness. Local robustness (or robustness, for short) requires that all samples in the
+neighborhood of a given input are classiﬁed with the same
+label . Many works have focused on designing defenses
+that increase robustness by using modiﬁed procedures for
+training the network (e.g., , , , , ). Others
+have developed approaches that can show non-robustness by
+underapproximating neural network behaviors or methods
+that decide robustness of small fully connected feedforward
+networks . However, no existing sound analyzer handles
+convolutional networks, one of the most popular architectures.
+Key Challenge: Scalability and Precision. The main challenge facing sound analysis of neural networks is scaling to
+large classiﬁers while maintaining a precision that sufﬁces
+to prove useful properties. The analyzer must consider all
+possible outputs of the network over a prohibitively large set
+of inputs, processed by a vast number of intermediate neurons.
+For instance, consider the image of the digit 8 in Fig. 1 and
+suppose we would like to prove that no matter how we brighten
+the value of pixels with intensity above 1−0.085, the network
+will still classify the image as 8 (in this example we have
+84 such pixels, shown in yellow). Assuming 64-bit ﬂoating
+2018 IEEE Symposium on Security and Privacy
+© 2018, Timon Gehr. Under license to IEEE.
+DOI 10.1109/SP.2018.00058
+Brighten(0.085,
+Convolutional#
+Max Pooling#
+Fully Connected#
+Fig. 2: A high-level illustration of how AI2 checks that all
+perturbed inputs are classiﬁed the same way. AI2 ﬁrst creates
+an abstract element A1 capturing all perturbed images. (Here,
+we use a 2-bounded set of zonotopes.) It then propagates A1
+through the abstract transformer of each layer, obtaining new
+shapes. Finally, it veriﬁes that all points in A4 correspond to
+outputs with the same classiﬁcation.
+point numbers are used to express pixel intensity, we obtain
+more than 101154 possible perturbed images. Thus, proving
+the property by running a network exhaustively on all possible
+input images and checking if all of them are classiﬁed as 8 is
+infeasible. To avoid this state space explosion, current methods
+(e.g., , , ) symbolically encode the network as
+a logical formula and then check robustness properties with
+a constraint solver. However, such solutions do not scale to
+larger (e.g., convolutional) networks, which usually involve
+many intermediate computations.
+Key Concept: Abstract Interpretation for AI.
+insight of our work is to address the above challenge by leveraging the classic framework of abstract interpretation (e.g., ,
+ ), a theory which dictates how to obtain sound, computable,
+and precise ﬁnite approximations of potentially inﬁnite sets of
+behaviors. Concretely, we leverage numerical abstract domains
+– a particularly good match, as AI systems tend to heavily
+manipulate numerical quantities. By showing how to apply
+abstract interpretation to reason about AI safety, we enable one
+to leverage decades of research and any future advancements
+in that area (e.g., in numerical domains ). With abstract
+interpretation, a neural network computation is overapproximated using an abstract domain. An abstract domain consists
+of logical formulas that capture certain shapes (e.g., zonotopes,
+a restricted form of polyhedra). For example, in Fig. 2, the
+green zonotope A1 overapproximates the set of blue points
+(each point represents an image). Of course, sometimes, due
+to abstraction, a shape may also contain points that will not
+occur in any concrete execution (e.g., the red points in A2).
+The AI2 Analyzer.
+Based on this insight, we developed
+a system called AI2 (Abstract Interpretation for Artiﬁcial
+Intelligence)1. AI2 is the ﬁrst scalable analyzer that handles common network layer types, including fully connected
+and convolutional layers with rectiﬁed linear unit activations
+(ReLU) and max pooling layers.
+To illustrate the operation of AI2, consider the example in
+1AI2 is available at: 
+Fig. 2, where we have a neural network, an image of the
+digit 8 and a set of perturbations: brightening with parameter
+0.085. Our goal is to prove that the neural network classiﬁes
+all perturbed images as 8. AI2 takes the image of the digit
+8 and the perturbation type and creates an abstract element
+A1 that captures all perturbed images. In particular, we can
+capture the entire set of brightening perturbations exactly with
+a single zonotope. However, in general, this step may result in
+an abstract element that contains additional inputs (that is, red
+points). In the second step, A1 is automatically propagated
+through the layers of the network. Since layers work on
+concrete values and not abstract elements, this propagation
+requires us to deﬁne abstract layers (marked with #) that
+compute the effects of the layers on abstract elements. The
+abstract layers are commonly called the abstract transformers
+of the layers. Deﬁning sound and precise, yet scalable abstract
+transformers is key to the success of an analysis based on
+abstract interpretation. We deﬁne abstract transformers for all
+three layer types shown in Fig. 2.
+At the end of the analysis, the abstract output A4 is
+an overapproximation of all possible concrete outputs. This
+enables AI2 to verify safety properties such as robustness
+(e.g., are all images classiﬁed as 8?) directly on A4. In fact,
+with a single abstract run, AI2 was able to prove that a
+convolutional neural network classiﬁes all of the considered
+perturbed images as 8.
+We evaluated AI2 on important tasks such as verifying
+robustness and comparing neural networks defenses. For example, for the perturbed image of the digit 0 in Fig. 1, we
+showed that while a non-defended neural network classiﬁed
+the FGSM perturbation with ϵ = 0.3 as 9, this attack is
+provably eliminated when using a neural network trained with
+the defense of . In fact, AI2 proved that the FGSM attack
+is unable to generate adversarial examples from this image for
+any ϵ between 0 and 0.3.
+Main Contributions. Our main contributions are:
+• A sound and scalable method for analysis of deep neural
+networks based on abstract interpretation (Section IV).
+• AI2, an end-to-end analyzer, extensively evaluated on
+feed-forward and convolutional networks (computing
+with 53 000 neurons), far exceeding capabilities of current
+systems (Section VI).
+• An application of AI2 to evaluate provable robustness of
+neural network defenses (Section VII).
+II. REPRESENTING NEURAL NETWORKS AS
+CONDITIONAL AFFINE TRANSFORMATIONS
+In this section, we provide background on feedforward and
+convolutional neural networks and show how to transform
+them into a representation amenable to abstract interpretation.
+This representation helps us simplify the construction and
+description of our analyzer, which we discuss in later sections.
+We use the following notation: for a vector x ∈Rn, xi denotes
+its ith entry, and for a matrix W ∈Rn×m, Wi denotes its ith
+row and Wi,j denotes the entry in its ith row and jth column.
+case E1 : f1(x), . . . , case Ek : fk(x)
+E ∧E | xi ≥xj | xi ≥0 | xi < 0
+Fig. 3: Deﬁnition of CAT functions.
+CAT Functions.
+We express the neural network as a composition of conditional afﬁne transformations (CAT), which
+are afﬁne transformations guarded by logical constraints. The
+class of CAT functions, shown in Fig. 3, consists of functions
+f : Rm →Rn for m, n ∈N and is deﬁned recursively. Any
+afﬁne transformation f(x) = W · x + b is a CAT function,
+for a matrix W and a vector b. Given sequences of conditions
+E1, . . . , Ek and CAT functions f1, . . . , fk, we write:
+f(x) = case E1 : f1(x), . . . , case Ek : fk(x).
+This is also a CAT function, which returnsx fi(x) for the
+ﬁrst Ei satisﬁed by x. The conditions are conjunctions of
+constraints of the form xi ≥xj, xi ≥0 and xi < 0. Finally,
+any composition of CAT functions is a CAT function. We often
+write f ′′ ◦f ′ to denote the CAT function f(x) = f ′′(f ′(x)).
+Layers. Neural networks are often organized as a sequence
+of layers, such that the output of one layer is the input of the
+next layer. Layers consist of neurons, performing the same
+function but with different parameters. The output of a layer
+is formed by stacking the outputs of the neurons into a vector
+or three-dimensional array. We will deﬁne the functionality in
+terms of entire layers instead of in terms of individual neurons.
+Reshaping of Inputs.
+Layers often take three-dimensional
+inputs (e.g., colored images). Such inputs are transformed into
+vectors by reshaping. A three-dimensional array x ∈Rm×n×r
+can be reshaped to xv ∈Rm·n·r in a canonical way, ﬁrst by
+depth, then by column, ﬁnally by row. That is, given x:
+xv = (x1,1,1 . . . x1,1,r x1,2,1 . . . x1,2,r . . . xm,n,1 . . . xm,n,r)T .
+Activation Function.
+Typically, layers in a neural network
+perform a linear transformation followed by a non-linear
+activation function. We focus on the commonly used rectiﬁed
+linear unit (ReLU) activation function, which for x ∈R is
+deﬁned as ReLU(x) = max(0, x), and for a vector x ∈Rm
+as ReLU(x)=(ReLU(x1), . . . , ReLU(xm)).
+ReLU to CAT. We can express the ReLU activation function
+as ReLU = ReLUn ◦. . . ◦ReLU1 where ReLUi processes the
+ith entry of the input x and is given by:
+ReLUi(x) = case (xi ≥0): x,
+case (xi < 0): Ii←0 · x.
+Ii←0 is the identity matrix with the ith row replaced by zeros.
+Fully Connected (FC) Layer.
+An FC layer takes a vector
+of size m (the m outputs of the previous layer), and passes
+it to n neurons, each computing a function based on the
+neuron’s weights and bias, one weight for each component
+of the input. Formally, an FC layer with n neurons is a
+function FCW,b : Rm →Rn parameterized by a weight matrix
+W ∈Rn×m and a bias b ∈Rn. For x ∈Rm, we have:
+FCW,b(x) = ReLU(W · x + b).
+Fig. 4a shows an FC layer computation for x = (2, 3, 1).
+Convolutional Layer.
+A convolutional layer is deﬁned by
+a series of t ﬁlters F p,q = (F p,q
+, .., F p,q
+), parameterized by
+the same p and q, where p ≤m and q ≤n. A ﬁlter F p,q
+is a function parameterized by a three-dimensional array of
+weights W ∈Rp×q×r and a bias b ∈R. A ﬁlter takes a
+three-dimensional array and returns a two-dimensional array:
+: Rm×n×r →R(m−p+1)×(n−q+1).
+The entries of the output y for a given input x are given by:
+yi,j = ReLU(
+Wi′,j′,k′ ·x(i+i′−1),(j+j′−1),k′ +b).
+Intuitively, this matrix is computed by sliding the ﬁlter along
+the height and width of the input three-dimensional array, each
+time reading a slice of size p×q×r, computing its dot product
+with W (resulting in a real number), adding b, and applying
+ReLU. The function ConvF , corresponding to a convolutional
+layer with t ﬁlters, has the following type:
+ConvF : Rm×n×r →R(m−p+1)×(n−q+1)×t.
+As expected, the function ConvF returns a three-dimensional
+array of depth t, which stacks the outputs produced by each
+ﬁlter. Fig. 4b illustrates a computation of a convolutional layer
+with a single ﬁlter. For example:
+y1,1,1 = ReLU((1 · 0 + 0 · 4 + (−1) · (−1) + 2 · 0) + 1) = 2.
+Here, the input is a three-dimensional array in R4×4×1. As
+the input depth is 1, the depth of the ﬁlter’s weights is also 1.
+The output depth is 1 because the layer has one ﬁlter.
+Convolutional Layer to CAT.
+For a convolutional layer
+ConvF , we deﬁne a matrix W F whose entries are those of the
+weight matrices for each ﬁlter (replicated to simulate sliding),
+and a bias b
+F consisting of copies of the ﬁlters’ biases. We
+then treat the convolutional layer ConvF like the equivalent
+F . We provide formal deﬁnitions of W F and b
+Appendix A. Here, we provide an intuitive illustration of the
+translation on the example in Fig. 4b. Consider the ﬁrst entry
+y1,1 = 2 of y in Fig. 4b:
+y1,1=ReLU(W1,1·x1,1+W1,2·x1,2+W2,1·x2,1+W2,2·x2,2+b).
+When x is reshaped to a vector xv, the four entries
+x1,1, x1,2, x2,1 and x2,2 will be found in xv
+respectively. Similarly, when y is reshaped to yv, the entry
+y1,1 will be found in yv
+1. Thus, to obtain yv
+1 = y1,1, we deﬁne
+the ﬁrst row in W F such that its 1st, 2nd, 5th, and 6th entries
+are W1,1, W1,2, W2,1 and W2,2. The other entries are zeros.
++ -1 ) = 3
+ReLU( 1 -1 0
+(a) Fully connected layer FCW,b
+(b) Convolutional layer Conv(W,b) (one ﬁlter)
+2 -4 ) = 2
+max( 3 -2 0
+max( 2 -3 -1 5 ) = 5
+(c) Max pooling layer MaxPool2,2
+Fig. 4: One example computation for each of the three layer types supported by AI2.
+We also deﬁne the ﬁrst entry of the bias to be b. For similar
+reasons, to obtain yv
+2 = y1,2, we deﬁne the second row in W F
+such that its 2nd, 3rd, 6th, and 7th entries are W1,1, W1,2, W2,1
+and W2,2 (also b2 = b). By following this transformation, we
+obtain the matrix W F ∈R9 × R16 and the bias b
+1 0 0 0 −1
+To aid understanding, we show the entries from W that appear
+in the resulting matrix W F in bold.
+Max Pooling (MP) Layer.
+An MP layer takes a threedimensional array x ∈Rm×n×r and reduces the height m of
+x by a factor of p and the width n of x by a factor of q (for p
+and q dividing m and n). Depth is kept as-is. Neurons take as
+input disjoint subrectangles of x of size p × q and return the
+maximal value in their subrectangle. Formally, the MP layer
+is a function MaxPoolp,q : Rm×n×r →R
+q ×r that for an
+input x returns the three-dimensional array y given by:
+yi,j,k = max({xi′,j′,k |
+p · (i −1) < i′ ≤p · i
+q · (j −1) < j′ ≤q · j}).
+Fig. 4c illustrates the max pooling computation for p = 2,
+q = 2 and r = 1. For example, here we have:
+y1,1,1 = max({x1,1,1, x1,2,1, x2,1,1, x2,2,1}) = 2.
+Max Pooling to CAT. Let MaxPool′
+p,q : Rm·n·r →R
+be the function that is obtained from MaxPoolp,q by reshaping
+its input and output: MaxPool′
+p,q(xv) = MaxPoolp,q(x)v. To
+represent max pooling as a CAT function, we deﬁne a series
+of CAT functions whose composition is MaxPool′
+q ·r ◦. . . ◦f1 ◦f MP.
+Fig. 5: The operation of the transformed max pooling layer.
+The ﬁrst function is f MP(xv) = W MP · xv, which reorders
+its input vector xv to a vector xMP in which the values
+of each max pooling subrectangle of x are adjacent. The
+remaining functions execute standard max pooling. Concretely,
+the function fi ∈{f1, . . . , f m
+q ·r} executes max pooling
+on the ith subrectangle by selecting the maximal value and
+removing the other values. We provide formal deﬁnitions of
+the CAT functions f MP and fi in Appendix A. Here, we
+illustrate them on the example from Fig. 4c, where r = 1.
+The CAT computation for this example is shown in Fig. 5.
+The computation begins from the input vector xv, which is
+the reshaping of x from Fig. 4c. The values of the ﬁrst 2 × 2
+subrectangle in x (namely, 0, 1, 2 and −4) are separated in
+xv by values from another subrectangle (3 and −2). To make
+them contiguous, we reorder xv using a permutation matrix
+W MP, yielding xMP. In our example, W MP is:
+1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+0 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0
+0 0 0 0 0 1 0 0 0 0 0 0 0 0 0 0
+0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0
+0 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0
+0 0 0 0 0 0 1 0 0 0 0 0 0 0 0 0
+0 0 0 0 0 0 0 1 0 0 0 0 0 0 0 0
+0 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0
+0 0 0 0 0 0 0 0 0 1 0 0 0 0 0 0
+0 0 0 0 0 0 0 0 0 0 0 0 1 0 0 0
+0 0 0 0 0 0 0 0 0 0 0 0 0 1 0 0
+0 0 0 0 0 0 0 0 0 0 1 0 0 0 0 0
+0 0 0 0 0 0 0 0 0 0 0 1 0 0 0 0
+0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 0
+0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1
+One entry in each row of W MP is 1, all other entries are zeros.
+If row i has entry j set to 1, then the jth value of xv is moved
+to the ith entry of xMP. For example, we placed a one in the
+ﬁfth column of the third row of W MP to move the value xv
+to entry 3 of the output vector.
+Next, for each i ∈{1, . . . , m
+q }, the function fi takes
+as input a vector whose values at the indices between i and
+i + p · q −1 are those of the ith subrectangle of ¯x in Fig. 4c.
+It then replaces those p · q values by their maximum:
+fi(x) = (x1, . . ., xi−1, xk, xi+p·q, . . . , xm·n−(p·q−1)·(i−1)),
+where the index k ∈{i, . . . , i + p · q −1} is such that
+xk is maximal. For k given, fi can be written as a CAT
+function: fi(x) = W (i,k) · x, where the rows of the matrix
+W (i,k) ∈R(m·n−(p·q−1)·i)×(m·n−(p·q−1)·(i−1)) are given by
+the following sequence of standard basis vectors:
+e1, . . . , ei−1, ek, ei+p·q, . . . , em·n−(p·q−1)·(i−1).
+For example, in Fig. 5, f1(xMP) = W (1,3) · xMP deletes 0, 1
+and −4. Then it moves the value 2 to the ﬁrst component,
+and the values at indices 5, . . . , 16 to components 2, . . . , 13.
+Overall, W (1,3) is given by:
+0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0
+0 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0
+0 0 0 0 0 1 0 0 0 0 0 0 0 0 0 0
+0 0 0 0 0 0 1 0 0 0 0 0 0 0 0 0
+0 0 0 0 0 0 0 1 0 0 0 0 0 0 0 0
+0 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0
+0 0 0 0 0 0 0 0 0 1 0 0 0 0 0 0
+0 0 0 0 0 0 0 0 0 0 1 0 0 0 0 0
+0 0 0 0 0 0 0 0 0 0 0 1 0 0 0 0
+0 0 0 0 0 0 0 0 0 0 0 0 1 0 0 0
+0 0 0 0 0 0 0 0 0 0 0 0 0 1 0 0
+0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 0
+0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1
+As, in general, k is not known in advance, we need to write
+fi as a CAT function with a different case for each possible
+index k of the maximal value in x. For example, in Fig. 5:
+case (x1 ≥x2) ∧(x1 ≥x3) ∧(x1 ≥x4): W (1,1) · x,
+case (x2 ≥x1) ∧(x2 ≥x3) ∧(x2 ≥x4): W (1,2) · x,
+case (x3 ≥x1) ∧(x3 ≥x2) ∧(x3 ≥x4): W (1,3) · x,
+case (x4 ≥x1) ∧(x4 ≥x2) ∧(x4 ≥x3): W (1,4) · x.
+In our example, the vector xMP in Fig. 5 satisﬁes the third
+condition, and therefore f1(xMP) = W (1,3) · xMP. Taking into
+account all four subrectangles, we obtain:
+2,2 = f4 ◦f3 ◦f2 ◦f1 ◦f MP.
+In summary, each function fi replaces p·q components of their
+input by the maximum value among them, suitably moving
+other values. For xv in Fig. 5:
+2,2(xv) = W (4,7) ·W (3,6) ·W (2,2) ·W (1,3) ·W MP ·xv.
+Network Architectures. Two popular architectures of neural
+networks are fully connected feedforward (FNN) and convolutional (CNN). An FNN is a sequence of fully connected
+layers, while a CNN consists of all previously described
+layer types: convolutional, max pooling, and fully connected.
+Fig. 6: (a) Abstracting four points with a polyhedron (gray),
+zonotope (green), and box (blue). (b) The points and abstractions resulting from the afﬁne transformer.
+III. BACKGROUND: ABSTRACT INTERPRETATION
+We now provide a short introduction to Abstract Interpretation (AI). AI enables one to prove program properties on a
+set of inputs without actually running the program. Formally,
+given a function f : Rm →Rn, a set of inputs X ⊆Rm,
+and a property C ⊆Rn, the goal is to determine whether the
+property holds, that is, whether ∀x ∈X. f(x) ∈C.
+Fig. 6 shows a CAT function f : R2 →R2 that is deﬁned
+· x and four input points for the function f,
+given as X = {(0, 1), (1, 1), (1, 3), (2, 2)}. Let the property be
+C = {(y1, y2) ∈R2 | y1 ≥−2}, which holds in this example.
+To reason about all inputs simultaneously, we lift the deﬁnition
+of f to be over a set of inputs X rather than a single input:
+Tf : P(Rm) →P(Rn),
+Tf(X) = {f(x) | x ∈X}.
+The function Tf is called the concrete transformer of f.
+With Tf, our goal is to determine whether Tf(X) ⊆C for
+a given input set X. Because the set X can be very large
+(or inﬁnite), we cannot enumerate all points in X to compute Tf(X). Instead, AI overapproximates sets with abstract
+elements (drawn from some abstract domain A) and then
+deﬁnes a function, called an abstract transformer of f, which
+works with these abstract elements and overapproximates the
+effect of Tf. Then, the property C can be checked on the
+resulting abstract element returned by the abstract transformer.
+Naturally, because AI employs overapproximation, it is sound,
+but may be imprecise (i.e., may fail to prove the property when
+it holds). Next, we explain the ingredients of AI in more detail.
+Abstract Domains.
+Abstract domains consist of shapes
+expressible as a set of logical constraints. A few popular
+numerical abstract domains are: Box (i.e., Interval), Zonotope,
+and Polyhedra. These domains provide different precision
+versus scalability trade-offs (e.g., Box’s abstract transformers
+are signiﬁcantly faster than Polyhedra’s abstract transformers,
+but polyhedra are signiﬁcantly more precise than boxes). The
+Box domain consists of boxes, captured by a set of constraints
+of the form a ≤xi ≤b, for a, b ∈R∪{−∞, +∞} and a ≤b.
+A box B contains all points which satisfy all constraints in B.
+In our example, X can be abstracted by the following box:
+B = {0 ≤x1 ≤2, 1 ≤x2 ≤3}.
+Note that B is not very precise since it includes 9 integer
+points (along with other points), whereas X has only 4 points.
+The Zonotope domain consists of zonotopes. A zonotope is a center-symmetric convex closed polyhedron Z ⊆Rn
+that can be represented as an afﬁne function:
+z : [a1, b1] × [a2, b2] × · · · × [am, bm] →Rn.
+In other words, z has the form z(ϵ) = M · ϵ + b where ϵ is a
+vector of error terms satisfying interval constraints ϵi ∈[ai, bi]
+for 1 ≤i ≤m. The bias vector b captures the center of the
+zonotope, while the matrix M captures the boundaries of the
+zonotope around b. A zonotope z represents all vectors in the
+image of z (i.e., z[[a1,1 ] × · · · × [am, bm]]). In our example,
+X can be abstracted by the zonotope z : [−1, 1]3 →R2:
+z(ϵ1, ϵ2, ϵ3) = (1 + 0.5 · ϵ1 + 0.5 · ϵ2, 2 + 0.5 · ϵ1 + 0.5 · ϵ3).
+Zonotope is a more precise domain than Box: for our example,
+z includes only 7 integer points.
+The Polyhedra domain consists of convex closed polyhedra, where a polyhedron is captured by a set of linear
+constraints of the form A · x ≤b, for some matrix A and a
+vector b. A polyhedron C contains all points which satisfy the
+constraints in C. In our example, X can be abstracted by the
+following polyhedron:
+C = {x2 ≤2 · x1 + 1, x2 ≤4 −x1, x2 ≥1, x2 ≥x1}.
+Polyhedra is a more precise domain than Zonotope: for our
+example, C includes only 5 integer points.
+To conclude, abstract elements (from an abstract domain)
+represent large, potentially inﬁnite sets. There are various
+abstract domains, providing different levels of precision and
+scalability.
+Abstract Transformers. To compute the effect of a function
+on an abstract element, AI uses the concept of an abstract transformer. Given the (lifted) concrete transformer
+Tf : P(Rm) →P(Rn) of a function f : Rm →Rn, an abstract
+transformer of Tf is a function over abstract domains, denoted
+f : Am →An. The superscripts denote the number of
+components of the represented vectors. For example, elements
+in Am represent sets of vectors of dimension m. This also
+determines which variables can appear in the constraints
+associated with an abstract element. For example, elements
+in Am constrain the values of the variables x1, . . . , xm.
+Abstract transformers have to be sound. To deﬁne soundness, we introduce two functions: the abstraction function α
+and the concretization function γ. An abstraction function
+αm : P(Rm) →Am maps a set of vectors to an abstract
+element in Am that overapproximates it. For example, in the
+Box domain:
+α2({(0, 1), (1, 1), (1, 3), (2, 2)}) = {0 ≤x1 ≤2, 1 ≤x2 ≤3}.
+A concretization function γm : Am
+→P(Rm) does the
+opposite: it maps an abstract element to the set of concrete
+vectors that it represents. For example, for Box:
+γ2({0 ≤x1 ≤2, 1 ≤x2 ≤3}) = {(0, 1), (0, 2), (0, 3),
+(1, 1), (1, 2), (1, 3),
+(2, 1), (2, 2), (2, 3), . . .}.
+This only shows the 9 vectors with integer components. We
+can now deﬁne soundness. An abstract transformer T #
+sound if for all a ∈Am, we have Tf(γm(a)) ⊆γn(T #
+where Tf is the concrete transformer. That is, an abstract
+transformer has to overapproximate the effect of a concrete
+transformer. For example, the transformers illustrated in Fig. 6
+are sound. For instance, if we apply the Box transformer on the
+box in Fig. 6a, it will produce the box in Fig. 6b. The box in
+Fig. 6b includes all points that f could compute in principle
+when given any point included in the concretization of the
+box in Fig. 6a. Analogous properties hold for the Zonotope
+and Polyhedra transformers. It is also important that abstract
+transformers are precise. That is, the abstract output should
+include as few points as possible. For example, as we can
+see in Fig. 6b, the output produced by the Box transformer
+is less precise (it is larger) than the output produced by the
+Zonotope transformer, which in turn is less precise than the
+output produced by the Polyhedra transformer.
+Property Veriﬁcation. After obtaining the (abstract) output,
+we can check various properties of interest on the result. In
+general, an abstract output a = T #
+f (X) proves a property
+Tf(X) ⊆C if γn(a) ⊆C. If the abstract output proves a
+property, we know that the property holds for all possible
+concrete values. However, the property may hold even if it
+cannot be proven with a given abstract domain. For example, in
+Fig. 6b, for all concrete points, the property C = {(y1, y2) ∈
+R2 | y1 ≥−2} holds. However, with the Box domain, the
+abstract output violates C, which means that the Box domain
+is not precise enough to prove the property. In contrast, the
+Zonotope and Polyhedra domains are precise enough to prove
+the property.
+In summary, to apply AI successfully, we need to: (a) ﬁnd a
+suitable abstract domain, and (b) deﬁne abstract transformers
+that are sound and as precise as possible. In the next section,
+we introduce abstract transformers for neural networks that
+are parameterized by the numerical abstract domain. This
+means that we can explore the precision-scalability trade-off
+by plugging in different abstract domains.
+IV. AI2: AI FOR NEURAL NETWORKS
+In this section we present AI2, an abstract interpretation
+framework for sound analysis of neural networks. We begin by
+deﬁning abstract transformers for the different kinds of neural
+network layers. Using these transformers, we then show how
+to prove robustness properties of neural networks.
+A. Abstract Interpretation for CAT Functions
+In this section, we show how to overapproximate CAT
+functions with AI. We illustrate the method on the example in
+z1⊓(x1 ≥0)
+z1⊓(x1 <0)
+Fig. 7: Illustration of how AI2 overapproximates neural network states. Blue circles show the concrete values, while green
+zonotopes show the abstract elements. The gray box shows the steps in one application of the ReLU transformer (ReLU1).
+Fig. 7, which shows a simple network that manipulates twodimensional vectors using a single fully connected layer of the
+form f(x) = ReLU2
+. Recall that
+case (xi ≥0): x,
+case (xi < 0): Ii←0 · x,
+where Ii←0 is the identity matrix with the ith row replaced
+by the zero vector. We overapproximate the network behavior
+on an abstract input. The input can be obtained directly (see
+Sec. IV-B) or by abstracting a set of concrete inputs to an
+abstract element (using the abstraction function α). For our
+example, we use the concrete inputs (the blue points) from
+Fig 6. Those concrete inputs are abstracted to the green
+zonotope z0 : [−1, 1]3 →R2, given as:
+z0(ϵ1, ϵ2, ϵ3) = (1 + 0.5 · ϵ1 + 0.5 · ϵ2, 2 + 0.5 · ϵ1 + 0.5 · ϵ3).
+Due to abstraction, more (spurious) points may be added. In
+this example, except the blue points, the entire area of the
+zonotope is spurious. We then apply abstract transformers
+to the abstract input. Note that, if a function f can be
+written as f = f ′′ ◦f ′, the concrete transformer for f is
+Tf = Tf ′′ ◦Tf ′. Similarly, given abstract transformers T #
+f ′′, an abstract transformer for f is T #
+f ′ . When
+a neural network N = f ′
+ℓ◦· · · ◦f ′
+1 is a composition of
+multiple CAT functions f ′
+i of the shape f ′
+i(x) = W · x + b or
+fi(x) = case E1 : f1(x), . . . , case Ek : fk(x), we only have
+to deﬁne abstract transformers for these two kinds of functions.
+We then obtain the abstract transformer T #
+ℓ◦· · · ◦T #
+Abstracting Afﬁne Functions. To abstract functions of the
+form f(x) = W · x + b, we assume that the underlying abstract domain supports the operator Aff that overapproximates
+such functions. We note that for Zonotope and Polyhedra,
+this operation is supported and exact. Fig. 7 demonstrates
+Aff as the ﬁrst step taken for overapproximating the effect
+of the fully connected layer. Here, the resulting zonotope
+z1 : [−1, 1]3 →R2 is:
+z1(ϵ1, ϵ2, ϵ3) =
+(2 · (1 + 0.5 · ϵ1 + 0.5 · ϵ2) −(2 + 0.5 · ϵ1 + 0.5 · ϵ3),
+2 + 0.5 · ϵ1 + 0.5 · ϵ3) =
+(0.5 · ϵ1 + ϵ2 −0.5 · ϵ3, 2 + 0.5 · ϵ1 + 0.5 · ϵ3).
+Abstracting Case Functions.
+To abstract functions of the
+form f(x) = case E1 : f1(x), . . . , case Ek : fk(x), we ﬁrst
+split the abstract element a into the different cases (each
+deﬁned by one of the expressions Ei), resulting in k abstract
+elements a1, . . . , ak. We then compute the result of T #
+for each ai. Finally, we unify the results to a single abstract
+element. To split and unify, we assume two standard operators
+for abstract domains: (1) meet with a conjunction of linear
+constraints and (2) join. The meet (⊓) operator is an abstract
+transformer for set intersection: for an inequality expression
+E from Fig. 3, γn(a) ∩{x ∈Rn | x |= E} ⊆γn(a ⊓E).
+The join (⊔) operator is an abstract transformer for set union:
+γn(a1) ∪γn(a2) ⊆γn(a1 ⊔a2). We further assume that
+the abstract domain contains an element ⊥, which satisﬁes
+γn(⊥) = {}, ⊥⊓E = ⊥and a ⊔⊥= a for a ∈A.
+For our example in Fig. 7, abstract interpretation continues
+on z1 using the meet and join operators. To compute the effect
+of ReLU1, z1 is split into two zonotopes z2 = z1 ⊓(x1 ≥0)
+and z3 = z1 ⊓(x1 < 0). One way to compute a meet between
+a zonotope and a linear constraint is to modify the intervals
+of the error terms (see ). In our example, the resulting
+zonotopes are z2 : [−1, 1] × × [−1, 1] →R2 such that
+z2(ϵ) = z1(ϵ) and z3 : [−1, 1] × [−1, 0] × [−1, 1] →R2 such
+that z3(ϵ) = z1(ϵ) for ¯ϵ common to their respective domains.
+Note that both z2 and z3 contain small spurious areas, because
+the intersections of the respective linear constraints with z1 are
+not zonotopes. Therefore, they cannot be captured exactly by
+the domain. Here, the meet operator ⊓overapproximates set
+intersection ∩to get a sound, but not perfectly precise, result.
+Then, the two cases of ReLU1 are processed separately. We
+apply the abstract transformer of f1(x) = x to z2 and we
+apply the abstract transformer of f2(x) = I0←0 · x to z3. The
+resulting zonotopes are z4 = z2 and z5 : [−1, 1]2 →R2 such
+that z5(ϵ1, ϵ3) = (0, 2+0.5·ϵ1+0.5·ϵ3). These are then joined
+to obtain a single zonotope z6. Since z5 is contained in z4,
+we get z6 = z4 (of course, this need not always be the case).
+Then, z6 is passed to ReLU2. Because z6⊓(x1 < 0) = ⊥, this
+results in z7 = z6. Finally, γ2(z7) is our overapproximation of
+the network outputs for our initial set of points. The abstract
+element z7 is a ﬁnite representation of this inﬁnite set.
+For f(x) = W · x + b, T #
+f (a) = Aff(a, W, b).
+For f(x) = case E1 : f1(x), . . . , case Ek : fk(y),
+For f(x) = f2(f1(x)), T #
+f (a) = T #
+Fig. 8: Abstract transformers for CAT functions.
+In summary, we deﬁne abstract transformers for every kind
+of CAT function (summarized in Fig. 8). These deﬁnitions
+are general and are compatible with any abstract domain A
+which has a minimum element ⊥and supports (1) a meet
+operator between an abstract element and a conjunction of
+linear constraints, (2) a join operator between two abstract
+elements, and (3) an afﬁne transformer. We assume that
+the operations are sound. We note that these operations are
+standard or deﬁnable with standard operations. By deﬁnition
+of the abstract transformers, we get soundness:
+Theorem 1. For any CAT function f with transformer
+Tf : P(Rm) →P(Rn) and any abstract input a ∈Am,
+Tf(γm(a)) ⊆γn(T #
+Theorem 1 is the key to sound neural network analysis with
+our abstract transformers, as we explain in the next section.
+B. Neural Network Analysis with AI
+In this section, we explain how to leverage AI with our abstract transformers to prove properties of neural networks. We
+focus on robustness properties below, however, the framework
+can be applied to reason about any safety property.
+For robustness, we aim to determine if for a (possibly unbounded) set of inputs, the outputs of a neural network satisfy
+a given condition. A robustness property for a neural network
+N : Rm →Rn is a pair (X, C) ∈P(Rm)×P(Rn) consisting
+of a robustness region X and a robustness condition C. We
+say that the neural network N satisﬁes a robustness property
+(X, C) if N(x) ∈C for all x ∈X.
+Local Robustness.
+This is a property (X, CL) where X is
+a robustness region and CL contains the outputs that describe
+the same label L:
+ arg max
+i∈{1,...,n}
+For example, Fig. 7 shows a neural network and a robustness
+property (X, C2) for X = {(0, 1), (1, 1), (1, 3), (2, 2)} and
+C2 = {y | arg max(y1, y2) = 2}. In this example, (X, C2)
+holds. Typically, we will want to check that there is some
+label L for which (X, CL) holds.
+We now explain how our abstract transformers can be used
+to prove a given robustness property (X, C).
+Robustness Proofs using AI. Assume we are given a neural
+network N : Rm →Rn, a robustness property (X, C) and
+an abstract domain A (supporting ⊔, ⊓with a conjunction of
+linear constraints, Aff, and ⊥) with an abstraction function α
+and a concretization function γ. Further assume that N can
+be written as a CAT function. Denote by T #
+N the abstract
+transformer of N, as deﬁned in Fig. 8. Then, the following
+condition is sufﬁcient to prove that N satisﬁes (X, C):
+N (αm(X))) ⊆C.
+This follows from Theorem 1 and the properties of α and γ.
+Note that there may be abstract domains A that are not precise
+enough to prove that N satisﬁes (X, C), even if N in fact
+satisﬁes (X, C). On the other hand, if we are able to show
+that some abstract domain A proves that N satisﬁes (X, C),
+we know that it holds.
+Proving Containment. To prove the property (X, C) given
+the result a = T #
+N (αm(X)) of abstract interpretation, we
+need to be able to show γn(a) ⊆C. There is a general
+method if C is given by a CNF formula 
+j li,j where
+all literals li,j are linear constraints: we show that the negated
+j ¬li,j is inconsistent with the abstract element
+a by checking that a ⊓
+= ⊥for all i.
+For our example in Fig. 7, the goal is to check that all inputs
+are classiﬁed as 2. We can represent C using the formula
+y2 ≥y1. Its negation is y2 < y1, and it sufﬁces to show that
+no point in the concretization of the abstract output satisﬁes
+this negated constraint. As indeed z7 ⊓(y2 < y1) = ⊥, the
+property is successfully veriﬁed. However, note that we would
+not be able to prove some other true properties, such as y1 ≥0.
+This property holds for all concrete outputs, but some points
+in the concretization of the output z7 do not satisfy it.
+V. IMPLEMENTATION OF AI2
+The AI2 framework is implemented in the D programming
+language and supports any neural network composed of fully
+connected, convolutional, and max pooling layers.
+Properties. AI2 supports properties (X, C) where X is speci-
+ﬁed by a zonotope and C by a conjunction of linear constraints
+over the output vector’s components. In our experiments, we
+illustrate the speciﬁcation of local robustness properties where
+the region X is deﬁned by a box or a line, both of which are
+precisely captured by a zonotope.
+Abstract Domains. The AI2 system is fully integrated with
+all abstract domains supported by Apron , a popular
+library for numerical abstract domains, including: Box ,
+Zonotope , and Polyhedra .
+Bounded Powerset. We also implemented bounded powerset
+domains (disjunctive abstractions , ), which can be
+instantiated with any of the above abstract domains. An abstract element in the powerset domain P(A) of an underlying
+abstract domain A is a set of abstract elements from A, concretizing to the union of the concretizations of the individual
+elements (i.e., γ(A) = 
+a∈A γ(a) for A ∈P(A)).
+The powerset domain can implement a precise join operator
+using standard set union (potentially pruning redundant elements). However, since the increased precision can become
+prohibitively costly if many join operations are performed,
+the bounded powerset domain limits the number of abstract
+elements in a set to N (for some constant N).
+We implemented bounded powerset domains on top of standard powerset domains using a greedy heuristic that repeatedly
+replaces two abstract elements in a set by their join, until the
+number of abstract elements in the set is below the bound N.
+For joining, AI2 heuristically selects two abstract elements that
+minimize the distance between the centers of their bounding
+boxes. In our experiments, we denote by ZonotopeN or
+ZN the bounded powerset domain with bound N ≥2 and
+underlying abstract domain Zonotope.
+VI. EVALUATION OF AI2
+In this section, we present our empirical evaluation of AI2.
+Before discussing the results in detail, we summarize our three
+most important ﬁndings:
+• AI2 can prove useful robustness properties for convolutional networks with 53 000 neurons and large fully
+connected feedforward networks with 1 800 neurons.
+• AI2 beneﬁts from more precise abstract domains: Zonotope enables AI2 to prove substantially more properties
+over Box. Further, ZonotopeN, with N ≥2, can prove
+stronger robustness properties than Zonotope alone.
+• AI2 scales better than the SMT-based Reluplex : AI2
+is able to verify robustness properties on large networks
+with ≥1200 neurons within few minutes, while Reluplex
+takes hours to verify the same properties.
+In the following, we ﬁrst describe our experimental setup.
+Then, we present and discuss our results.
+A. Experimental Setup
+We now describe the datasets, neural networks, and robustness properties used in our experiments.
+We used two popular datasets: MNIST and
+CIFAR-10 (referred to as CIFAR from now on). MNIST
+consists of 60 000 grayscale images of handwritten digits,
+whose resolution is 28 × 28 pixels. The images show white
+digits on a black background.
+CIFAR consists of 60 000 colored photographs with 3 color
+channels, whose resolution is 32 × 32 pixels. The images are
+partitioned into 10 different classes (e.g., airplane or bird).
+Each photograph has a different background (unlike MNIST).
+Neural Networks.
+We trained convolutional and fully connected feedforward networks on both datasets. All networks
+were trained using accelerated gradient descent with at least
+50 epochs of batch size 128. The training completed when
+each network had a test set accuracy of at least 0.9.
+For the convolutional networks, we used the LeNet architecture , which consists of the following sequence
+of layers: 2 convolutional, 1 max pooling, 2 convolutional, 1 max pooling, and 3 fully connected layers. We
+write np×q to denote a convolutional layer with n ﬁlters
+of size p × q, and m to denote a fully connected layer
+with m neurons. The hidden layers of the MNIST network are 83×3, 83×3, 143×3, 143×3, 50, 50, 10, and those of the
+CIFAR network are 243×3, 243×3, 323×3, 323×3, 100, 100, 10.
+The max pooling layers of both networks have a size of 2×2.
+We trained our networks using an open-source implementation .
+We used 7 different architectures of fully connected feedforward networks (FNNs). We write l × n to denote the FNN
+architecture with l layers, each consisting of n neurons. Note
+that this determines the network’s size; e.g., a 4 × 50 network
+has 200 neurons. For each dataset, MNIST and CIFAR, we
+trained FNNs with the following architectures: 3×20, 6×20,
+3 × 50, 3 × 100, 6 × 100, 6 × 200, and 9 × 200.
+Robustness Properties.
+In our experiments, we consider
+local robustness properties (X, CL) where the region X captures changes to lighting conditions. This type of property is
+inspired by the work of , where adversarial examples were
+found by brightening the pixels of an image.
+Formally, we consider robustness regions Sx,δ that are
+parameterized by an input x ∈Rm and a robustness bound
+δ ∈ . The robustness region is deﬁned as:
+Sx,δ = {x′ ∈Rm | ∀i ∈[1, m]. 1−δ ≤xi ≤x′
+For example, the robustness region for x = (0.6, 0.85, 0.9)
+and bound δ = 0.2 is given by the set:
+{(0.6, x, x′) ∈R3 | x ∈[0.85, 1], x′ ∈[0.9, 1]}.
+Note that increasing the bound δ increases the region’s size.
+In our experiments, we used AI2 to check whether all inputs
+in a given region Sx,δ are classiﬁed to the label assigned to x.
+We consider 6 different robustness bounds δ, which are drawn
+from the set Δ = {0.001, 0.005, 0.025, 0.045, 0.065, 0.085}.
+We remark that our robustness properties are stronger than
+those considered in . This is because, in a given robustness
+region Sx,δ, each pixel of the image x is brightened independently of the other pixels. We remark that this is useful to
+capture scenarios where only part of the image is brightened
+(e.g., due to shadowing).
+Other perturbations.
+Note that AI2 is not limited to certifying robustness against such brightening perturbations. In
+general, AI2 can be used whenever the set of perturbed
+inputs can be overapproximated with a set of zonotopes in
+a precise way (i.e., without adding too many inputs that do
+not capture actual perturbations to the robustness region). For
+example, the inputs perturbed by an ℓ∞attack are captured
+exactly by a single zonotope. Further, rotations and translations
+have low-dimensional parameter spaces, and therefore can be
+overapproximated by a set of zonotopes in a precise way.
+Benchmarks.
+We selected 10 images from each dataset.
+Then, we speciﬁed a robustness property for each image and
+each robustness bound in Δ, resulting in 60 properties per
+dataset. We ran AI2 to check whether each neural network
+satisﬁes the robustness properties for the respective dataset.
+We compared the results using different abstract domains,
+Veriﬁed robustness
+Veriﬁed robustness
+Fig. 9: Veriﬁed properties by AI2 on the MNIST and CIFAR convolutional networks for each bound δ ∈Δ (x-axis).
+including Box, Zonotope, and ZonotopeN with N ranging
+between 2 and 128.
+We ran all experiments on an Ubuntu 16.04.3 LTS server
+with two Intel Xeon E5-2690 processors and 512GB of
+memory. To compare AI2 to existing solutions, we also ran
+the FNN benchmarks with Reluplex . We did not run
+convolutional benchmarks with Reluplex as it currently does
+not support convolutional networks.
+B. Discussion of Results
+In the following, we ﬁrst present our results for convolutional networks. Then, we present experiments with different
+abstract domains and discuss how the domain’s precision
+affects AI2’s ability to verify robustness. We also plot AI2’s
+running times for different abstract domains to investigate
+the trade-off between precision and scalability. Finally, we
+compare AI2 to Reluplex.
+Proving Robustness of Convolutional Networks. We start
+with our results for convolutional networks. AI2 terminated
+within 1.5 minutes when verifying properties on the MNIST
+network and within 1 hour when verifying the CIFAR network.
+In Fig. 9, we show the fraction of robustness properties
+veriﬁed by AI2 for each robustness bound. We plot separate
+bars for Box and Zonotope to illustrate the effect of the
+domain’s precision on AI2’s ability to verify robustness.
+For both networks, AI2 veriﬁed all robustness properties for
+the smallest bound 0.001 and it veriﬁed at least one property
+for the largest bound 0.085. This demonstrates that AI2 can
+verify properties of convolutional networks with rather wide
+robustness regions. Further, the number of veriﬁed properties
+converges to zero as the robustness bound increases. This
+is expected, as larger robustness regions are more likely to
+contain adversarial examples.
+In Fig. 9a, we observe that Zonotope proves signiﬁcantly
+more properties than Box. For example, Box fails to prove
+any robustness properties with bounds at least 0.025, while
+Zonotope proves 80% of the properties with bounds 0.025
+and 0.045. This indicates that Box is often imprecise and fails
+to prove properties that the network satisﬁes.
+Similarly, Fig. 9b shows that Zonotope proves more robustness properties than Box also for the CIFAR convolutional network. The difference between these two domains is, however,
+less signiﬁcant than that observed for the MNIST network. For
+example, both Box and Zonotope prove the same properties
+for bounds 0.065 and 0.085.
+Precision of Different Abstract Domains. Next, we demonstrate that more precise abstract domains enable AI2 to prove
+stronger robustness properties. In this experiment, we consider
+our 9 × 200 MNIST and CIFAR networks, which are our
+largest fully connected feedforward networks. We evaluate the
+Box, Zonotope, and the ZonotopeN domains for exponentially
+increasing bounds of N between 2 and 64. We do not report
+results for the Polyhedra domain, which takes several days to
+terminate for our smallest networks.
+In Fig. 10, we show the fraction of veriﬁed robustness
+properties as a function of the abstract domain used by AI2.
+We plot a separate line for each robustness bound. All runs of
+AI2 in this experiment completed within 1 hour.
+The graphs show that Zonotope proves more robustness
+properties than Box. For the MNIST network, Box proves 11
+out of all 60 robustness properties (across all 6 bounds), failing
+to prove any robustness properties with bounds above 0.005.
+In contrast, Zonotope proves 43 out of the 60 properties and
+proves at least 50% of the properties across the 6 robustness
+bounds. For the CIFAR network, Box proves 25 out of the 60
+properties while Zonotope proves 35.
+Veriﬁed robustness
+Veriﬁed robustness
+Fig. 10: Veriﬁed properties as a function of the abstract domain used by AI2 for the 9 × 200 network. Each point represents
+the fraction of robustness properties for a given bound (as speciﬁed in the legend) veriﬁed by a given abstract domain (x-axis).
+Time (seconds)
+Fig. 11: Average running time of AI2 when proving robustness
+properties on MNIST networks as a function of the abstract
+domain used by AI2 (x-axis). Axes are scaled logarithmically.
+The data also demonstrates that bounded sets of zonotopes
+further improve AI2’s ability to prove robustness properties.
+For the MNIST network, Zonotope64 proves more robustness
+properties than Zonotope for all 4 bounds for which Zonotope
+fails to prove at least one property (i.e., for bounds δ ≥0.025).
+For the CIFAR network, Zonotope64 proves more properties
+than Zonotope for 4 out of the 5 the bounds. The only
+exception is the bound 0.085, where Zonotope64 and Zonotope
+prove the same set of properties.
+Trade-off between Precision and Scalability.
+In Fig. 11,
+we plot the running time of AI2 as a function of the abstract
+domain. Each point in the graph represents the average running
+time of AI2 when proving a robustness property for a given
+MNIST network (as indicated in the legend). We use a log-log
+plot to better visualize the trade-off in time.
+The data shows that AI2 can efﬁciently verify robustness
+of large networks. AI2 terminates within a few minutes for
+all MNIST FNNs and all considered domains. Further, we
+observe that AI2 takes less than 10 seconds on average to
+verify a property with the Zonotope domain.
+As expected, the graph demonstrates that more precise
+domains increase AI2’s running time. More importantly, AI2’s
+running time is polynomial in the bound N of ZonotopeN,
+which allows one to adjust AI2’s precision by increasing N.
+Comparison to Reluplex. The current state-of-the-art system
+for verifying properties of neural networks is Reluplex .
+Reluplex supports FNNs with ReLU activation functions, and
+its analysis is sound and complete. Reluplex would eventually
+either verify a given property or return a counterexample.
+To compare the performance of Reluplex and AI2, we ran
+both systems on all MNIST FNN benchmarks. We ran AI2
+using Zonotope and Zonotope64. For both Reluplex and AI2,
+we set a 1 hour timeout for verifying a single property.
+Fig. 12 presents our results: Fig. 12a plots the average
+running time of Reluplex and AI2 and Fig. 12b shows the
+fraction of robustness properties veriﬁed by the systems. The
+data shows that Reluplex can analyze FNNs with at most 600
+neurons efﬁciently, typically within a few minutes. Overall,
+both system veriﬁed roughly the same set of properties.
+However, Reluplex crashed during veriﬁcation of some of the
+properties. This explains why AI2 was able to prove slightly
+3x100 6x100 6x200 9x200
+Time (seconds)
+Zonotope64
+3x100 6x100 6x200 9x200
+Veriﬁed robustness
+Fig. 12: Comparing the performance of AI2 to Reluplex. Each point is an average of the results for all 60 robustness properties
+for the MNIST networks. Each point in (a) represents the average time to completion, regardless of the result of the computation.
+While not shown, the result of the computation could be a failure to verify, timeout, crash, or discovery of a counterexample.
+Each point in (b) represents the fraction of the 60 robustness properties that were veriﬁed.
+more properties than Reluplex on the smaller FNNs.
+For large networks with more than 600 neurons, the running
+time of Reluplex increases signiﬁcantly and its analysis often
+times out. In contrast, AI2 analyzes the large networks within
+a few minutes and veriﬁes substantially more robustness
+properties than Reluplex. For example, Zonotope64 proves
+57 out of the 60 properties on the 6 × 200 network, while
+Reluplex proves 3. Further, Zonotope64 proves 45 out of the
+60 properties on the largest 9 × 200 network, while Reluplex
+proves none. We remark that while Reluplex did not verify
+any property on the largest 9 × 200 network, it did disprove
+some of the properties and returned counterexamples.
+We also ran Reluplex without a predeﬁned timeout to
+investigate how long it would take to verify properties on the
+large networks. To this end, we ran Reluplex on properties that
+AI2 successfully veriﬁed. We observed that Reluplex often
+took more than 24 hours to terminate. Overall, our results
+indicate that Reluplex does not scale to larger FNNs whereas
+AI2 succeeds on these networks.
+VII. COMPARING DEFENSES WITH AI2
+In this section, we illustrate a practical application of AI2:
+evaluating and comparing neural network defenses. A defense
+is an algorithm whose goal is to reduce the effectiveness of
+a certain attack against a speciﬁc network, for example, by
+retraining the network with an altered loss function. Since the
+discovery of adversarial examples, many works have suggested different kinds of defenses to mitigate this phenomenon
+(e.g., , , ). A natural metric to compare defenses
+is the average “size” of the robustness region on some test set.
+Intuitively, the greater this size is, the more robust the defense.
+We compared three state-of-the-art defenses:
+• GSS extends the loss with a regularization term
+encoding the fast gradient sign method (FGSM) attack.
+• Ensemble is similar to GSS, but includes regularization terms from attacks on other models.
+• MMSTV adds, during training, a perturbation layer
+before the input layer which applies the FGSMk attack.
+FGSMk is a multi-step variant of FGSM, also known as
+projected gradient descent.
+All these defenses attempt to reduce the effectiveness of the
+FGSM attack . This attack consists of taking a network N
+and an input x and computing a vector ρN,x in the input space
+along which an adversarial example is likely to be found. An
+adversarial input a is then generated by taking a step ϵ along
+this vector: a = x + ϵ · ρN,x.
+We deﬁne a new kind of robustness region, called line, that
+captures resilience with respect to the FGSM attack. The line
+robustness region captures all points from x to x + δ · ρN,x
+for some robustness bound δ:
+LN,x,δ = {x + ϵ · ρN,x | ϵ ∈[0, δ]}.
+This robustness region is a zonotope and can thus be precisely
+captured by AI2.
+We compared the three state-of-the-art defenses on the
+MNIST convolutional network described in Section VI; we
+call this the Original network. We trained the Original network
+with each of the defenses, which resulted in 3 additional
+networks: GSS, Ensemble, and MMSTV. We used 40 epochs
+for GSS, 12 epochs for Ensemble, and 10 000 training steps
+for MMSTV using their published frameworks.
+Robustness bound δ
+Fig. 13: Box-and-whisker plot of the veriﬁed bounds for the
+Original, GSS, Ensemble, and MMSTV networks. The boxes
+represent the δ for the middle 50% of the images, whereas
+the whiskers represent the minimum and maximum δ. The
+inner-lines are the averages.
+We conducted 20 experiments. In each experiment, we
+randomly selected an image x and computed ρN,x. Then, for
+each network, our goal was to ﬁnd the largest bound δ for
+which AI2 proves the region LN,x,δ robust. To approximate
+the largest robustness bound, we ran binary search to depth 6
+and ran AI2 with the Zonotope domain for each candidate
+bound δ. We refer to the largest robustness bound veriﬁed by
+AI2 as the veriﬁed bound.
+The average veriﬁed bounds for the Original, GSS, Ensemble, and MMSTV networks are 0.026, 0.031, 0.042, and 0.209,
+respectively. Fig. 13 shows a box-and-whisker plot which
+demonstrates the distribution of the veriﬁed bounds for the
+four networks. The bottom and top of each whisker show the
+minimum and maximum veriﬁed bounds discovered during
+the 20 experiments. The bottom and top of each whisker’s
+box show the ﬁrst and third quartiles of the veriﬁed bounds.
+Our results indicate that MMSTV provides a signiﬁcant
+increase in provable robustness against the FGSM attack.
+In all 20 experiments, the veriﬁed bound for the MMSTV
+network was larger than those found for the Original, GSS,
+and Ensemble networks. We observe that GSS and Ensemble
+defend the network in a way that makes it only slightly more
+provably robust, consistent with observations that these styles
+of defense are insufﬁcient , .
+VIII. RELATED WORK
+In this section, we survey the works closely related to ours.
+Adversarial Examples. showed that neural networks are
+vulnerable to small perturbations on inputs. Since then, many
+works have focused on constructing adversarial examples.
+For example, showed how to ﬁnd adversarial examples
+without starting from a test point, generated adversarial
+examples using random perturbations, demonstrated that
+even intermediate layers are not robust, and generated
+adversarial examples for malware classiﬁcation. Other works
+presented ways to construct adversarial examples during the
+training phase, thereby increasing the network robustness (see
+ , , , , , ). formalized the notion of
+robustness in neural networks and deﬁned metrics to evaluate
+the robustness of a neural network. illustrated how to
+systematically generate adversarial examples that cover all
+neurons in the network.
+Neural Network Analysis. Many works have studied the robustness of networks. presented an abstraction-reﬁnement
+approach for FNNs. However, this was shown successful for a
+network with only 6 neurons. introduced a bounded model
+checking technique to verify safety of a neural network for
+the Cart Pole system. showed a veriﬁcation framework,
+based on an SMT solver, which veriﬁed the robustness with
+respect to a certain set of functions that can manipulate the
+input and are minimal (a notion which they deﬁne). However,
+it is unclear how one can obtain such a set. extended the
+simplex algorithm to verify properties of FNNs with ReLU.
+Robustness Analysis of Programs. Many works deal with
+robustness analysis of programs (e.g., , , , ).
+ considered a deﬁnition of robustness that is similar to
+the one in our work, and used a combination of abstract
+interpretation and SMT-based methods to prove robustness of
+programs. The programs considered in this literature tend to
+be small but have complex constructs such as loops and array
+operations. In contrast, neural networks (which are our focus)
+are closer to circuits, in that they lack high-level language
+features but are potentially massive in size.
+IX. CONCLUSION AND FUTURE WORK
+We presented AI2, the ﬁrst system able to certify convolutional and large fully connected networks. The key insight
+behind AI2 is to phrase the problem of analyzing neural
+networks in the classic framework of abstract interpretation.
+To this end, we deﬁned abstract transformers that capture the
+behavior of common neural network layers and presented a
+bounded powerset domain that enables a trade-off between
+precision and scalability. Our experimental results showed that
+AI2 can effectively handle neural networks that are beyond the
+reach of existing methods.
+We believe AI2 and the approach behind it is a promising
+step towards ensuring the safety and robustness of AI systems.
+Currently, we are extending AI2 with additional abstract transformers to support more neural network features. We are also
+building a library for modeling common perturbations, such as
+rotations, smoothing, and erosion. We believe these extensions
+would further improve AI2’s applicability and foster future
+research in AI safety.

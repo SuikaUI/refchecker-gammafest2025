@@ -1,0 +1,1071 @@
+HopSkipJumpAttack: A Query-Efﬁcient
+Decision-Based Attack
+Jianbo Chen∗
+Michael I. Jordan∗
+Martin J. Wainwright∗,†
+University of California, Berkeley∗
+Voleon Group†
+{jianbochen@, jordan@cs., wainwrig@}berkeley.edu
+Abstract—The goal of a decision-based adversarial attack on a
+trained model is to generate adversarial examples based solely
+on observing output labels returned by the targeted model. We
+develop HopSkipJumpAttack, a family of algorithms based on
+a novel estimate of the gradient direction using binary information at the decision boundary. The proposed family includes
+both untargeted and targeted attacks optimized for ℓ2 and ℓ∞
+similarity metrics respectively. Theoretical analysis is provided
+for the proposed algorithms and the gradient direction estimate.
+Experiments show HopSkipJumpAttack requires signiﬁcantly
+fewer model queries than several state-of-the-art decision-based
+adversarial attacks. It also achieves competitive performance in
+attacking several widely-used defense mechanisms.
+I. INTRODUCTION
+Although deep neural networks have achieved state-of-the-art
+performance on a variety of tasks, they have been shown to
+be vulnerable to adversarial examples—that is, maliciously
+perturbed examples that are almost identical to original samples in human perception, but cause models to make incorrect decisions . The vulnerability of neural networks
+to adversarial examples implies a security risk in applications with real-world consequences, such as self-driving cars,
+robotics, ﬁnancial services, and criminal justice; in addition,
+it highlights fundamental differences between human learning
+and existing machine-based systems. The study of adversarial
+examples is thus necessary to identify the limitation of current
+machine learning algorithms, provide a metric for robustness,
+investigate the potential risk, and suggest ways to improve the
+robustness of models.
+Recent years have witnessed a ﬂurry of research on the design
+of new algorithms for generating adversarial examples .
+Adversarial examples can be categorized according to at least
+three different criteria: the similarity metric, the attack goal,
+and the threat model. Commonly used similarity metrics are
+ℓp-distances between adversarial and original examples with
+p ∈{0, 2, ∞}. The goal of attack is either untargeted or
+targeted. The goal of an untargeted attack is to perturb the
+input so as to cause any type of misclassiﬁcation, whereas the
+goal of a targeted attack is to alter the decision of the model to
+a pre-speciﬁc target class. Changing the loss function allows
+for switching between two types of attacks .
+Perhaps the most important criterion in practice is the threat
+Figure 1: An illustration of accessible components of the target
+model for each of the three threat models. A white-box threat
+model assumes access to the whole model; a score-based threat
+model assumes access to the output layer; a decision-based
+threat model assumes access to the predicted label alone.
+model, of which there are two primary types: white-box and
+black-box. In the white-box setting, an attacker has complete
+access to the model, including its structure and weights. Under
+this setting, the generation of adversarial examples is often
+formulated as an optimization problem, which is solved either
+via treating misclassiﬁcation loss as a regularization or
+via tackling the dual as a constrained optimization problem
+ . In the black-box setting, an attacker can only
+access outputs of the target model. Based on whether one has
+access to the full probability or the label of a given input,
+black-box attacks are further divided into score-based and
+decision-based. See Figure 1 for an illustration of accessible
+components of the target model for each of the three threat
+models. Chen et al. and Ilyas et al. introduced
+score-based methods using zeroth-order gradient estimation to
+craft adversarial examples.
+The most practical threat model is that in which an attacker
+has access to decisions alone. A widely studied type of the
+decision-based attack is transfer-based attack. Liu et al. 
+showed that adversarial examples generated on an ensemble
+of deep neural networks from a white-box attack can be
+transferred to an unseen neural network. Papernot et al.
+ proposed to train a substitute model by querying
+the target model. However, transfer-based attack often requires a carefully-designed substitute model, or even access
+to part of the training data. Moreover, they can be defended
+against via training on a data set augmented by adversarial
+examples from multiple static pre-trained models .
+2020 IEEE Symposium on Security and Privacy
+© 2020, Jianbo Chen. Under license to IEEE.
+DOI 10.1109/SP40000.2020.00045
+recent work, Brendel et al. proposed Boundary Attack,
+which generates adversarial examples via rejection sampling.
+While relying neither on training data nor on the assumption
+of transferability, this attack method achieves comparable
+performance with state-of-the-art white-box attacks such as
+C&W attack . One limitation of Boundary Attack, however,
+is that it was formulated only for ℓ2-distance. Moreover, it
+requires a relatively large number of model queries, rendering
+it impractical for real-world applications.
+It is more realistic to evaluate the vulnerability of a machine
+learning system under the decision-based attack with a limited
+budget of model queries. Online image classiﬁcation platforms
+often set a limit on the allowed number of queries within
+a certain time period. For example, the cloud vision API
+from Google currently allow 1,800 requests per minute. Query
+inefﬁciency thus leads to clock-time inefﬁciency and prevents
+an attacker from carrying out large-scale attacks. A system
+may also be set to recognize the behavior of feeding a large
+number of similar queries within a small amount of time as
+a fraud, which will automatically ﬁlter out query-inefﬁcient
+decision-based attacks. Last but not least, a smaller query
+budget directly implies less cost in evaluation and research.
+Query-efﬁcient algorithms help save the cost of evaluating the
+robustness of public platforms, which incur a cost for each
+query made by the attacker. It also helps facilitate research
+in adversarial vulnerability, as such a decision-based attack
+which does not require access to model details may be used
+as a simple and efﬁcient ﬁrst step in evaluating new defense
+mechanisms, as we will see in Section V-B and Appendix C.
+In this paper, we study decision-based attacks under an optimization framework, and propose a novel family of algorithms
+for generating both targeted and untargeted adversarial examples that are optimized for minimum distance with respect to
+either the ℓ2-distance or ℓ∞distance. The family of algorithms
+is iterative in nature, with each iteration involving three steps:
+estimation of the gradient direction, step-size search via geometric progression, and Boundary search via a binary search.
+Theoretical analysis has been carried out for the optimization
+framework and the gradient direction estimate, which not
+only provides insights for choosing hyperparamters, but also
+motivating essential steps in the proposed algorithms.
+refer to the algorithm as HopSkipJumpAttack1. In summary,
+our contributions are the following:
+• We propose a novel unbiased estimate of gradient direction
+at the decision boundary based solely on access to model
+decisions, and propose ways to control the error from
+deviation from the boundary.
+• We design a family of algorithms, HopSkipJumpAttack,
+based on the proposed estimate and our analysis, which
+is hyperparameter-free, query-efﬁcient and equipped with a
+1A hop, skip, and a jump originally referred to an exercise or game
+involving these movements dating from the early 1700s, but by the mid-1800s
+it was also being used ﬁguratively for the short distance so covered.
+convergence analysis.
+• We demonstrate the superior efﬁciency of our algorithm
+over several state-of-the-art decision-based attacks through
+extensive experiments.
+• Through the evaluation of several defense mechanisms such
+as defensive distillation, region-based classiﬁcation, adversarial training and input binarization, we suggest our attack
+can be used as a simple and efﬁcient ﬁrst step for researchers
+to evaluate new defense mechanisms.
+In Section II, we describe previous work on
+decision-based adversarial attacks and their relationship to our
+algorithm. We also discuss the connection of our algorithm
+to zeroth-order optimization. In Section III, we propose and
+analyze a novel iterative algorithm which requires access to
+the gradient information. Each step carries out a gradient
+update from the boundary, and then projects back to the
+boundary again. In Section IV, we introduce a novel asymptotically unbiased gradient-direction estimate at the boundary,
+and a binary-search procedure to approach the boundary. We
+also discuss how to control errors with deviation from the
+boundary. The analysis motivates a decision-based algorithm,
+HopSkipJumpAttack (Algorithm 2). Experimental results are
+provided in Section V. We conclude in Section VI with a
+discussion of future work.
+II. RELATED WORK
+A. Decision-based attacks
+Most related to our work is the Boundary Attack method
+introduced by Brendel et al. . Boundary Attack is an
+iterative algorithm based on rejective sampling, initialized
+at an image that lies in the target class. At each step, a
+perturbation is sampled from a proposal distribution, which
+reduces the distance of the perturbed image towards the
+original input. If the perturbed image still lies in the target
+class, the perturbation is kept. Otherwise, the perturbation is
+dropped. Boundary Attack achieves performance comparable
+to state-of-the-art white-box attacks on deep neural networks
+for image classiﬁcation. The key obstacle to its practical
+application is, however, the demand for a large number of
+model queries. In practice, the required number of model
+queries for crafting an adversarial example directly determines
+the level of the threat imposed by a decision-based attack.
+One source of inefﬁciency in Boundary Attack is the rejection
+of perturbations which deviate from the target class. In our
+algorithm, the perturbations are used for estimation of a
+gradient direction.
+Several other decision-based attacks have been proposed to
+improve efﬁciency. Brunner et al. introduced Biased
+Boundary Attack, which biases the sampling procedure by
+combining low-frequency random noise with the gradient
+from a substitute model. Biased Boundary Attack is able to
+signiﬁcantly reduce the number of model queries. However,
+it relies on the transferability between the substitute model
+and the target model, as with other transfer-based attacks.
+Our algorithm does not rely on the additional assumption of
+transferability. Instead, it achieves a signiﬁcant improvement
+over Boundary Attack through the exploitation of discarded
+information into the gradient-direction estimation. Ilyas et al.
+ proposed Limited attack in the label-only setting, which
+directly performs projected gradient descent by estimating
+gradients based on novel proxy scores. Cheng et al. 
+introduced Opt attack, which transforms the original problem to a continuous version, and solves the new problem
+via randomized zeroth-order gradient update. Our algorithm
+approaches the original problem directly via a novel gradientdirection estimate, leading to improved query efﬁciency over
+both Limited Attack and Opt Attack. The majority of model
+queries in HopSkipJumpAttack come in mini-batches, which
+also leads to improved clock-time efﬁciency over Boundary
+B. Zeroth-order optimization
+Zeroth-order optimization refers to the problem of optimizing
+a function f based only on access to function values f(x),
+as opposed to gradient values ∇f(x). Such problems have
+been extensively studied in the convex optimization and bandit
+literatures. Flaxman et al. studied one-point randomized
+estimate of gradient for bandit convex optimization. Agarwal
+et al. and Nesterov and Spokoiny demonstrated that
+faster convergence can be achieved by using two function
+evaluations for estimating the gradient. Duchi et al. 
+established optimal rates of convex zeroth-order optimization
+via mirror descent with two-point gradient estimates. Zerothorder algorithms have been applied to the generation of adversarial examples under the score-based threat model .
+Subsequent work proposed and analyzed an algorithm
+based on variance-reduced stochastic gradient estimates.
+We formulate decision-based attack as an optimization problem. A core component of our proposed algorithm is a
+gradient-direction estimate, the design of which is motivated by zeroth-order optimization. However, the problem
+of decision-based attack is more challenging than zerothorder optimization, essentially because we only have binary
+information from output labels of the target model, rather than
+function values.
+III. AN OPTIMIZATION FRAMEWORK
+In this section, we describe an optimization framework for
+ﬁnding adversarial instances for an m-ary classiﬁcation model
+of the following type. The ﬁrst component is a discriminant
+function F : Rd →Rm that accepts an input x ∈ d and
+produces an output y ∈Δm := {y ∈ m | m
+c=1 yc = 1}.
+The output vector y = (F1(x), . . . , Fm(x)) can be viewed as
+a probability distribution over the label set [m] = {1, . . . , m}.
+Based on the function F, the classiﬁer C : Rd →[m] assigns
+input x to the class with maximum probability—that is,
+C(x) := arg max
+c∈[m] Fc(x).
+We study adversaries of both the untargeted and targeted
+varieties. Given some input x⋆, the goal of an untargeted attack
+is to change the original classiﬁer decision c⋆:= C(x⋆) to
+any c ∈[m]\{c⋆}, whereas the goal of a targeted attack is
+to change the decision to some pre-speciﬁed c† ∈[m]\{c⋆}.
+Formally, if we deﬁne the function Sx⋆: Rd →R via
+Sx⋆(x′) :=
+c̸=c⋆Fc(x′) −Fc⋆(x′)
+(Untargeted)
+Fc†(x′) −max
+c̸=c† Fc(x′)
+(Targeted)
+then a perturbed image x′ is a successful attack if and
+only if Sx⋆(x′) > 0. The boundary between successful and
+unsuccessful perturbed images is
+bd(Sx⋆) :=
+z ∈ d | Sx⋆(z) = 0
+As an indicator of successful perturbation, we introduce the
+Boolean-valued function φx⋆: d →{−1, 1} via
+φx⋆(x′) := sign (Sx⋆(x′)) =
+if Sx⋆(x′) > 0,
+otherwise.
+This function is accessible in the decision-based setting, as it
+can be computed by querying the classiﬁer C alone. The goal
+of an adversarial attack is to generate a perturbed sample x′
+such that φx⋆(x′) = 1, while keeping x′ close to the original
+sample x⋆. This can be formulated as the optimization problem
+x′ d(x′, x⋆)
+φx⋆(x′) = 1,
+where d is a distance function that quantiﬁes similarity.
+Standard choices of d studied in past work include
+the usual ℓp-norms, for p ∈{0, 2, ∞}.
+A. An iterative algorithm for ℓ2 distance
+Consider the case of the optimization problem (2) with the
+ℓ2-norm d(x, x⋆) = ∥x −x⋆∥2. We ﬁrst specify an iterative
+algorithm that is given access to the gradient ∇Sx⋆. Given an
+initial vector x0 such that Sx⋆(x0) > 0 and a stepsize sequence
+{ξt}t≥0, it performs the update
+xt+1 = αtx⋆+ (1 −αt)
+∥∇Sx⋆(xt)∥2
+where ξt is a positive step size. Here the line search parameter
+αt ∈ is chosen such that Sx⋆(xt+1) = 0—that is, so that
+the next iterate xt+1 lies on the boundary. The motivation for
+this choice is that our gradient-direction estimate in Section IV
+is only valid near the boundary.
+We now analyze this algorithm with the assumption that we
+have access to the gradient of Sx⋆in the setting of binary classiﬁcation. Assume that the function Sx⋆is twice differentiable
+with a locally Lipschitz gradient, meaning that there exists
+L > 0 such that for all x, y ∈{z : ∥z −x⋆∥2 ≤∥x0 −x⋆∥2},
+∥∇Sx⋆(x) −∇Sx⋆(y)∥2 ≤L∥x −y∥2,
+In addition, we assume the gradient is bounded away from
+zero on the boundary: there exists a positive ˜C > 0 such that
+∥∇Sx⋆(z)∥> ˜C for any z ∈bd(Sx⋆).
+We analyze the behavior of the updates (3) in terms of the
+angular measure
+r(xt, x⋆) := cos ∠(xt −x⋆, ∇Sx⋆(xt))
+xt −x⋆, ∇Sx⋆(xt)
+∥xt −x⋆∥2∥∇Sx⋆(xt)∥2
+corresponding to the cosine of the angle between xt −x⋆and
+the gradient ∇Sx⋆(xt). Note that the condition r(x, x⋆) = 1
+holds if and only if x is a stationary point of the optimization (2). The following theorem guarantees that, with a suitable
+step size, the updates converge to such a stationary point:
+Theorem 1. Under the previously stated conditions on Sx⋆,
+suppose that we compute the updates (3) with step size
+ξt = ∥xt −x⋆∥2t−q for some q ∈
+. Then there is a
+universal constant c such that
+0 ≤1 −r(xt, x⋆) ≤c tq−1
+for t = 1, 2, . . ..
+In particular, the algorithm converges to a stationary point of
+problem (2).
+Theorem 1 suggests a scheme for choosing the step size
+in the algorithm that we present in the next section. An
+experimental evaluation of the proposed scheme is carried
+out in Appendix B. The proof of the theorem is constructed
+by establishing the relationship between the objective value
+d(xt, x⋆) and r(xt, x⋆), with a second-order Taylor approximation to the boundary. See Appendix A-A for details.
+B. Extension to ℓ∞-distance
+We now describe how to extend these updates so as to
+minimize the ℓ∞-distance. Consider the ℓ2-projection of a
+point x onto the sphere of radius αt centered at x⋆:
+x⋆,αt(x) :=
+∥y−x⋆∥2≤αt
+∥y −x∥2 = αtx⋆+ (1 −αt)x. (6)
+In terms of this operator, our ℓ2-based update (3) can be
+rewritten in the equivalent form
+∥∇Sx⋆(xt)∥2
+This perspective allows us to extend the algorithm to other
+ℓp-norms for p ̸= 2. For instance, in the case p = ∞, we can
+deﬁne the ℓ∞-projection operator Π∞
+x⋆,α. It performs a perpixel clip within a neighborhood of x⋆, such that the ith entry
+x⋆,α(x) is
+x⋆,α(x)i := max {min{x⋆
+i + c} , xi −c},
+where c := α∥x −x⋆∥∞. We propose the ℓ∞-version of our
+algorithm by carrying out the following update iteratively:
+xt + ξtsign(∇Sx⋆(xt))
+where αt is chosen such that Sx⋆(xt+1) = 0, and “sign”
+returns the element-wise sign of a vector. We use the sign
+of the gradient for faster convergence in practice, similar to
+previous work .
+IV. A DECISION-BASED ALGORITHM BASED ON A NOVEL
+GRADIENT ESTIMATE
+We now extend our procedures to the decision-based setting,
+in which we have access only to the Boolean-valued function
+φx⋆(x) = sign(Sx⋆(x))—that is, the method cannot observe
+the underlying discriminant function F or its gradient. In this
+section, we introduce a gradient-direction estimate based on
+φx⋆when xt ∈bd(Sx⋆) (so that Sx⋆(xt) = 0 by deﬁnition).
+We proceed to discuss how to approach the boundary. Then
+we discuss how to control the error of our estimate with a
+deviation from the boundary. We will summarize the analysis
+with a decision-based algorithm.
+A. At the boundary
+Given an iterate xt ∈bd(Sx⋆) we propose to approximate
+the direction of the gradient ∇Sx⋆(xt) via the Monte Carlo
+∇S(xt, δ) := 1
+φx⋆(xt + δub)ub,
+where {ub}B
+b=1 are i.i.d. draws from the uniform distribution
+over the d-dimensional sphere, and δ is small positive parameter. (The dependence of this estimator on the ﬁxed centering
+point x⋆is omitted for notational simplicity.)
+The perturbation parameter δ is necessary, but introduces a
+form of bias in the estimate. Our ﬁrst result controls this
+bias, and shows that 
+∇S(xt, δ) is asymptotically unbiased as
+Theorem 2. For a boundary point xt, suppose that Sx⋆has
+L-Lipschitz gradients in a neighborhood of xt. Then the cosine
+of the angle between 
+∇S(xt, δ) and ∇Sx⋆(xt) is bounded as
+∇S(xt, δ)], ∇Sx⋆(xt)
+8∥∇S(xt)∥2
+In particular, we have
+∇S(xt, δ)], ∇Sx⋆(xt)
+showing that the estimate is asymptotically unbiased as an
+estimate of direction.
+We remark that Theorem 2 only establishes the asymptotic
+behavior of the proposed estiamte at the boundary. This also
+motivates the boundary search step in our algorithm to be
+discussed in Seciton IV-B. The proof of Theorem 2 starts
+from dividing the unit sphere into three components: the upper
+cap along the direction of gradient, the lower cap opposite to
+the direction of gradient, and the annulus in between. The
+error from the annulus can be bounded when δ is small. See
+Appendix A-B for the proof of this theorem. As will be seen
+in the sequel, the size of perturbation δ should be chosen
+proportionally to d−1; see Section IV-C for details.
+B. Approaching the boundary
+The proposed estimate (9) is only valid at the boundary. We
+now describe how we approach the boundary via a binary
+search. Let ˜xt denote the updated sample before the operator
+x,αt is applied:
+˜xt := xt + ξtvt(xt, δt), such that
+vt(xt, δt) =
+∇S(xt, δt)/∥
+∇S(xt, δt)∥2, if p = 2,
+∇S(xt, δt)), if p = ∞,
+∇S will be introduced later in equation (16), as a
+variance-reduced version of 
+∇S, and δt is the size of perturbation at the t-th step.
+We hope ˜xt is at the opposite side of the boundary to x
+so that the binary search can be carried out. Therefore, we
+initialize at ˜x0 at the target side with φx⋆(˜x0) = 1, and set
+x,α0(˜x0), where α0 is chosen via a binary search
+between 0 and 1 to approach the boundary, stopped at x0 lying
+on the target side with φx⋆(x0) = 1. At the t-th iteration, we
+start at xt lying at the target side φx⋆(xt) = 1. The step size
+is initialized as
+ξt := ∥xt −x⋆∥p/
+as suggested by Theorem 1 in the ℓ2 case, and is decreased by
+half until φx⋆(˜xt) = 1, which we call geometric progression of
+ξt. Having found an appropriate ˜xt, we choose the projection
+radius αt via a binary search between 0 and 1 to approach
+the boundary, which stops at xt+1 with φx⋆(xt+1) = 1. See
+Algorithm 1 for the complete binary search, where the binary
+search threshold θ is set to be some small constant.
+Figure 2: Intuitive explanation of HopSkipJumpAttack. (a)
+Perform a binary search to ﬁnd the boundary, and then update
+˜xt →xt. (b) Estimate the gradient at the boundary point xt.
+(c) Geometric progression and then update xt →˜xt+1. (d)
+Perform a binary search, and then update ˜xt+1 →xt+1.
+Algorithm 1 Bin-Search
+Require: Samples x′, x, with a binary function φ, such that
+φ(x′) = 1, φ(x) = 0, threshold θ, constraint ℓp.
+Ensure: A sample x′′ near the boundary.
+Set αl = 0 and αu = 1.
+while |αl −αu| > θ do
+Set αm ←αl+αu
+if φ(Πx,αm(x′)) = 1 then
+Set αu ←αm.
+Set αl ←αm.
+Output x′′ = Πx,αu(x′).
+C. Controlling errors of deviations from the boundary
+Binary search never places xt+1 exactly onto the boundary.
+We analyze the error of the gradient-direction estimate, and
+propose two approaches for reducing the error.
+a) Appropriate choice of the size of random perturbation:
+First, the size of random perturbation δt for estimating the
+gradient direction is chosen as a function of image size d and
+the binary search threshold θ. This is different from numerical
+differentiation, where the optimal choice of δt is at the scale of
+round-off errors (e.g., ). Below we characterize the error
+incurred by a large δt as a function of distance between ˜xt
+and the boundary, and derive the appropriate choice of ξt and
+δt. In fact, with a Taylor approximation of Sx⋆at xt, we have
+Sx⋆(xt + δtu) = Sx⋆(xt) + δt
+∇Sx⋆(xt), u
+At the boundary Sx⋆(xt) = 0, the error of gradient approximation scales at O(δ2
+t ), which is minimized by reducing δt to
+the scale of rooted round-off error. However, the outcome xt
+of a ﬁnite-step binary search lies close to, but not exactly on
+the boundary.
+When δt is small enough such that second-order terms can
+be omitted, the ﬁrst-order Taylor approximation implies that
+φx⋆(xt+δtu) = −1 if and only if xt+δtu lies on the spherical
+cap C, with
+∥∇Sx⋆(xt)∥2
+∥∇Sx⋆(xt)∥2
+On the other hand, the probability mass of u concentrates on
+the equator in a high-dimensional sphere, which is characterized by the following inequality :
+P(u ∈C) ≤2
+2 }, where c =
+d −2Sx⋆(xt)
+δt∥∇Sx⋆(xt)∥2
+A Taylor expansion of xt at x′
+∂(xt) yields
+Sx⋆(xt) = ∇Sx⋆(x′
+t)T (xt −x′
+t) + O(∥xt −x′
+= ∇Sx⋆(xt)T (xt −x′
+t) + O(∥xt −x′
+By the Cauchy-Schwarz inequality and the deﬁnition of ℓ2projection, we have
+|∇Sx⋆(xt)T (xt −x′
+≤∥∇Sx⋆(xt)∥2∥xt −Π2
+∥∇Sx⋆(xt)∥2θ∥˜xt−1 −x⋆∥p, if p = 2,
+∥∇Sx⋆(xt)∥2θ∥˜xt−1 −x⋆∥p
+d, if p = ∞.
+This yields
+c = O(dqθ∥˜xt−1 −x⋆∥p
+where q = 1 −(1/p) is the dual exponent. In order to avoid
+a loss of accuracy from concentration of measure, we let
+δt = dqθ∥˜xt−1 −x⋆∥2. To make the approximation error
+independent of dimension d, we set θ at the scale of d−q−1,
+so that δt is proportional to d−1, as suggested by Theorem 2.
+This leads to a logarithmic dependence on dimension for the
+number of model queries. In practice, we set
+θ = d−q−1; δt = d−1∥˜xt−1 −x⋆∥p.
+b) A baseline for variance reduction in gradient-direction
+estimation: Another source of error comes from the variance
+of the estimate, where we characterize variance of a random
+∈Rd by the trace of its covariance operator:
+Var(v) := d
+i=1 Var(vi). When xt deviates from the boundary
+and δt is not exactly zero, there is an uneven distribution of
+perturbed samples at the two sides of the boundary:
+|E[φx⋆(xt + δtu)]| > 0,
+as we can see from Equation (14). To attempt to control the
+variance, we introduce a baseline φx⋆into the estimate:
+φx⋆(xt + δub),
+which yields the following estimate:
+∇S(xt, δ) :=
+(φx⋆(xt + δub) −φx⋆)ub.
+Algorithm 2 HopSkipJumpAttack
+Require: Classiﬁer C, a sample x, constraint ℓp, initial batch
+size B0, iterations T.
+Ensure: Perturbed image xt.
+Set θ (Equation (15)).
+Initialize at ˜x0 with φx⋆(˜x0) = 1.
+Compute d0 = ∥˜x0 −x⋆∥p.
+for t in 1, 2, . . . , T −1 do
+(Boundary search)
+xt = BIN-SEARCH(˜xt−1, x, θ, φx⋆, p)
+(Gradient-direction estimation)
+Sample Bt = B0
+t unit vectors u1, . . . , uBt.
+Set δt (Equation (15)).
+Compute vt(xt, δt) (Equation (12)).
+(Step size search)
+Initialize step size ξt = ∥xt −x⋆∥p/
+while φx⋆(xt + εtvt) = 0 do
+Set ˜xt = xt + ξtvt.
+Compute dt = ∥˜xt −x⋆∥p.
+Output xt = BIN-SEARCH(˜xt−1, x, θ, φx⋆, p).
+It can be easily observed that this estimate is equal to the
+previous estimate in expectation, and thus still asymptotically
+unbiased at the boundary: When xt ∈bd(Sx⋆), we have
+∇S(xt, δ)], ∇Sx⋆(xt)
+8∥∇S(xt)∥2
+∇S(xt, δ)], ∇Sx⋆(xt)
+Moreover, the introduction of the baseline reduces the variance
+when E[φx⋆(xt + δu)] deviates from zero. In particular, the
+following theorem shows that whenever |E[φx⋆(xt + δu)]| =
+2 ), the introduction of a baseline reduces the variance.
+Theorem 3. Deﬁning σ2 := Var(φx⋆(xt + δu)u) as the
+variance of one-point estimate, we have
+∇S(xt, δ)) < Var(
+∇S(xt, δ))(1 −ψ),
+2BE[φx⋆(xt + δu)]2 −1
+See Appendix A-C for the proof. We also present an experimental evaluation of our gradient-direction estimate when the
+sample deviates from the boundary in Appendix B, where
+we show our proposed choice of δt and the introduction of
+baseline yield a performance gain in estimating gradient.
+D. HopSkipJumpAttack
+We now combine the above analysis into an iterative algorithm,
+HopSkipJumpAttack. It is initialized with a sample in the
+Table I: Median distance at various model queries. The smaller median distance at a given model query is bold-faced. BA and
+HSJA stand for Boundary Attack and HopSkipJumpAttack respectively.
+Model Queries
+Untargeted
+Untargeted
+Untargeted
+Untargeted
+Untargeted
+Untargeted
+Untargeted
+Untargeted
+Untargeted
+Untargeted
+Untargeted
+Untargeted
+target class for untargeted attack, and with a sample blended
+with uniform noise that is misclassiﬁed for targeted attack.
+Each iteration of the algorithm has three components. First,
+the iterate from the last iteration is pushed towards the boundary via a binary search (Algorithm 1). Second, the gradient
+direction is estimated via Equation (16). Third, the updating
+step size along the gradient direction is initialized as Equation (13) based on Theorem 1, and is decreased via geometric
+progression until perturbation becomes successful. The next
+iteration starts with projecting the perturbed sample back to
+the boundary again. The complete procedure is summarized
+in Algorithm 2. Figure 2 provides an intuitive visualization
+of the three steps in ℓ2. For all experiments, we initialize the
+batch size at 100 and increase it with
+t linearly, so that
+the variance of the estimate reduces with t. When the input
+domain is bounded in practice, a clip is performed at each step
+by default.
+V. EXPERIMENTS
+In this section, we carry out experimental analysis of
+HopSkipJumpAttack. We compare the efﬁciency of Hop-
+SkipJumpAttack with several previously proposed decisionbased attacks on image classiﬁcation tasks. In addition, we
+evaluate the robustness of three defense mechanisms under
+our attack method. All experiments were carried out on a Tesla
+K80 GPU, with code available online.2 Our algorithm is also
+2See 
+available on CleverHans and Foolbox , which are
+two popular Python packages to craft adversarial examples
+for machine learning models.
+A. Efﬁciency evaluation
+a) Baselines: We compare HopSkipJumpAttack with three
+state-of-the-art decision-based attacks: Boundary Attack ,
+Limited Attack and Opt Attack . We use the implementation of the three algorithms with the suggested hyperparameters from the publicly available source code online.
+Limited Attack is only included under the targeted ℓ∞setting,
+as in Ilyas et al. .
+b) Data and models: For a comprehensive evaluation of
+HopSkipJumpAttack, we use a wide range of data and models,
+with varied image dimensions, data set sizes, complexity levels
+of task and model structures.
+The experiments are carried out over four image data sets:
+MNIST, CIFAR-10 , CIFAR-100 , and ImageNet 
+with the standard train/test split . The four data sets have
+varied image dimensions and class numbers. MNIST contains
+70K 28 × 28 gray-scale images of handwritten digits in the
+range 0-9. CIFAR-10 and CIFAR-100 are both composed of
+32×32×3 images. CIFAR-10 has 10 classes, with 6K images
+per class, while CIFAR-100 has 100 classes, with 600 images
+per class. ImageNet has 1, 000 classes. Images in ImageNet
+are rescaled to 224 × 224 × 3. For MNIST, CIFAR-10 and
+Number of Queries
+ℓ2 Distance
+Untargeted ℓ2 (MNIST, CNN)
+Number of Queries
+ℓ2 Distance
+Targeted ℓ2 (MNIST, CNN)
+Number of Queries
+ℓ∞Distance
+Untargeted ℓ∞(MNIST, CNN)
+Number of Queries
+ℓ∞Distance
+Targeted ℓ∞(MNIST, CNN)
+Number of Queries
+ℓ2 Distance
+Untargeted ℓ2 (CIFAR10, ResNet)
+Number of Queries
+ℓ2 Distance
+Targeted ℓ2 (CIFAR10, ResNet)
+Number of Queries
+ℓ∞Distance
+Untargeted ℓ∞(CIFAR10, ResNet)
+Number of Queries
+ℓ∞Distance
+Targeted ℓ∞(CIFAR10, ResNet)
+Number of Queries
+ℓ2 Distance
+Untargeted ℓ2 (CIFAR10, DenseNet)
+Number of Queries
+ℓ2 Distance
+Targeted ℓ2 (CIFAR10, DenseNet)
+Number of Queries
+ℓ∞Distance
+Untargeted ℓ∞(CIFAR10, DenseNet)
+Number of Queries
+ℓ∞Distance
+Targeted ℓ∞(CIFAR10, DenseNet)
+Figure 3: Median distance versus number of model queries on MNIST with CNN, and CIFAR-10 with ResNet and DenseNet
+from top to bottom rows. 1st column: untargeted ℓ2. 2nd col.: targeted ℓ2. 3rd col.: untargeted ℓ∞. 4th col.: targeted ℓ∞.
+CIFAR-100, 1, 000 correctly classiﬁed test images are used,
+which are randomly drawn from the test data set, and evenly
+distributed across classes. For ImageNet, we use 100 correctly
+classiﬁed test images, evenly distributed among 10 randomly
+selected classes. The selection scheme follows Metzen et al.
+ for reproducibility.
+We also use models of varied structure, from simple to
+complex. For MNIST, we use a simple convolutional network
+composed of two convolutional layers followed by a hidden
+dense layer with 1024 units. Two convolutional layers have
+32, 64 ﬁlters respectively, each of which is followed by a
+max-pooling layer. For both CIFAR-10 and CIFAR-100, we
+train a 20-layer ResNet and 121-layer DenseNet 
+respectively, with the canonical network structure . For
+ImageNet, we use a pre-trained 50-layer ResNet . All models achieve close to state-of-the-art accuracy on the respective
+data set. All pixels are scaled to be in the range . For
+all experiments, we clip the perturbed image into the input
+domain for all algorithms by default.
+c) Initialization: For untargeted attack, we initialize all attacks by blending an original image with uniform random
+noise, and increasing the weight of uniform noise gradually
+until it is misclassiﬁed, a procedure which is available on
+Foolbox , as the default initialization of Boundary Attack.
+For targeted attack, the target class is sampled uniformly
+among the incorrect labels. An image belonging to the target
+class is randomly sampled from the test set as the initialization.
+The same target class and a common initialization image are
+used for all attacks.
+d) Metrics: The ﬁrst metric is the median ℓp distance between
+perturbed and original samples over a subset of test images,
+which was commonly used in previous work, such as Carlini
+and Wagner . A version normalized by image dimension
+was employed by Brendel et al. for evaluating Boundary
+Attack. The ℓ2 distance can be interpreted in the following
+way: Given a byte image of size h×w×3, perturbation of size
+d in ℓ2 distance on the rescaled input image amounts to perturbation on the original image of ⌈d/
+h × w × 3 ∗255⌉bits
+per pixel on average, in the range . The perturbation
+of size d in ℓ∞distance amounts to a maximum perturbation
+of ⌈255 · d⌉bits across all pixels on the raw image.
+As an alternative metric, we also plot the success rate at
+various distance thresholds for both algorithms given a limited
+budget of model queries. An adversarial example is deﬁned a
+success if the size of perturbation does not exceed a given
+distance threshold. The success rate can be directly related
+to the accuracy of a model on perturbed data under a given
+Number of Queries
+ℓ2 Distance
+Untargeted ℓ2 (CIFAR100, ResNet)
+Number of Queries
+ℓ2 Distance
+Targeted ℓ2 (CIFAR100, ResNet)
+Number of Queries
+ℓ∞Distance
+Untargeted ℓ∞(CIFAR100, ResNet)
+Number of Queries
+ℓ∞Distance
+Targeted ℓ∞(CIFAR100, ResNet)
+Number of Queries
+ℓ2 Distance
+Untargeted ℓ2 (CIFAR100, DenseNet)
+Number of Queries
+ℓ2 Distance
+Targeted ℓ2 (CIFAR100, DenseNet)
+Number of Queries
+ℓ∞Distance
+Untargeted ℓ∞(CIFAR100, DenseNet)
+Number of Queries
+ℓ∞Distance
+Targeted ℓ∞(CIFAR100, DenseNet)
+Number of Queries
+ℓ2 Distance
+Untargeted ℓ2 (ImageNet, ResNet)
+Number of Queries
+ℓ2 Distance
+Targeted ℓ2 (ImageNet, ResNet)
+Number of Queries
+ℓ∞Distance
+Untargeted ℓ∞(ImageNet, ResNet)
+Number of Queries
+ℓ∞Distance
+Targeted ℓ∞(ImageNet, ResNet)
+Figure 4: Median distance versus number of model queries on CIFAR-100 with ResNet, DenseNet, and ImageNet with ResNet
+from top to bottom rows. 1st column: untargeted ℓ2. 2nd col.: targeted ℓ2. 3rd col.: untargeted ℓ∞. 4th col.: targeted ℓ∞.
+distance threshold:
+perturbed acc. = original acc. × (1 −success rate).
+Throughout the experiments, we limit the maximum budget of
+queries per image to 25,000, the setting of practical interest,
+due to limited computational resources.
+e) Results: Figure 3 and 4 show the median distance (on a
+log scale) against the queries, with the ﬁrst and third quartiles
+used as lower and upper error bars. For Boundary, Opt and
+HopSkipJumpAttack, Table I summarizes the median distance
+when the number of queries is ﬁxed at 1,000, 5,000, and
+20,000 across all distance types, data, models and objectives.
+Figure 5 and 6 show the success rate against the distance
+threshold. Figure 3 and 5 contain results on MNIST with CNN,
+and CIFAR-10 with ResNet, Denset, subsequently from the
+top row to the bottom row. Figure 4 and 6 contain results on
+CIFAR-100 with ResNet and DenseNet, and ImageNet with
+ResNet, subsequently from the top row to the bottom row. The
+four columns are for untargeted ℓ2, targeted ℓ2, untargeted ℓ∞
+and targeted ℓ∞attacks respectively.
+With a limited number of queries, HopSkipJumpAttack is
+able to craft adversarial examples of a signiﬁcantly smaller
+distance with the corresponding original examples across all
+data sets, followed by Boundary Attack and Opt Attack. As a
+concrete example, Table I shows that untargeted ℓ2-optimized
+HopSkipJumpAttack achieves a median distance of 0.559 on
+CIFAR-10 with a ResNet model at 1, 000 queries, which
+amounts to below 3/255 per pixel on average. At the same
+budget of queries, Boundary Attack and Opt Attack only
+achieve median ℓ2-distances of 2.78 and 2.07 respectively.
+The difference in efﬁciency becomes more signiﬁcant for
+ℓ∞attacks. As shown in Figure 5, under an untargeted ℓ∞optimized HopSkipJumpAttack with 1,000 queries, all pixels
+are within an 8/255-neighborhood of the original image for
+around 70% of adversarial examples, a success rate achieved
+by Boundary Attack only after 20,000 queries.
+By comparing the odd and even columns of Figure 3-6,
+we can ﬁnd that targeted HopSkipJumpAttack takes more
+queries than the untargeted one to achieve a comparable
+distance. This phenomenon becomes more explicit on CIFAR-
+100 and ImageNet, which have more classes. With the same
+number of queries, there is an order-of-magnitude difference
+in median distance between untargeted and targeted attacks
+(Figure 3 and 4). For ℓ2-optimized HopSkipJumpAttack, while
+the untargeted version is able to craft adversarial images by
+perturbing 4 bits per pixel on average within 1,000 queries
+for 70% −90% of images in CIFAR-10 and CIFAR-100,
+the targeted counterpart takes 2,000-5,000 queries. The other
+attacks fail to achieve a comparable performance even with
+ℓ2 Distance
+Success Rate
+Untargeted ℓ2 (MNIST, CNN)
+ℓ2 Distance
+Success Rate
+Targeted ℓ2 (MNIST, CNN)
+ℓ∞Distance
+Success Rate
+Untargeted ℓ∞(MNIST, CNN)
+ℓ∞Distance
+Success Rate
+1K 1K 1K 1K
+Targeted ℓ∞(MNIST, CNN)
+ℓ2 Distance
+Success Rate
+25K 25K 25K
+Untargeted ℓ2 (CIFAR10, ResNet)
+ℓ2 Distance
+Success Rate
+Targeted ℓ2 (CIFAR10, ResNet)
+ℓ∞Distance
+Success Rate
+Untargeted ℓ∞(CIFAR10, ResNet)
+ℓ∞Distance
+Success Rate
+Targeted ℓ∞(CIFAR10, ResNet)
+ℓ2 Distance
+Success Rate
+25K 25K 25K
+Untargeted ℓ2 (CIFAR10, DenseNet)
+ℓ2 Distance
+Success Rate
+Targeted ℓ2 (CIFAR10, DenseNet)
+ℓ∞Distance
+Success Rate
+Untargeted ℓ∞(CIFAR10, DenseNet)
+ℓ∞Distance
+Success Rate
+Targeted ℓ∞(CIFAR10, DenseNet)
+Figure 5: Success rate versus distance threshold for MNIST with CNN, and CIFAR-10 with ResNet, DenseNet from top to
+bottom rows. 1st column: untargeted ℓ2. 2nd column: targeted ℓ2. 3rd column: untargeted ℓ∞. 4th column: targeted ℓ∞.
+25,000 queries. On ImageNet, untargeted ℓ2-optimized Hop-
+SkipJumpAttack is able to fool the model with a perturbation
+of size 6 bits per pixel on average for close to 50% of
+images with 1, 000 queries; untargeted ℓ∞-optimized Hop-
+SkipJumpAttack controls the maximum perturbation across all
+pixels within 16 bits for 50% images within 1, 000 queries.
+The targeted Boundary Attack is not able to control the
+perturbation size to such a small scale until after around
+25, 000 queries. On the one hand, the larger query budget
+requirement results from a strictly more powerful formulation
+of targeted attack than untargeted attack. On the other hand,
+this is also because we initialize targeted HopSkipJumpAttack
+from an arbitrary image in the target class. The algorithm may
+be trapped in a bad local minimum with such an initialization.
+Future work can address systematic approaches to better
+initialization.
+As a comparison between data sets and models, we see
+that adversarial images often have a larger distance to their
+corresponding original images on MNIST than on CIFAR-10
+and CIFAR-100, which has also been observed in previous
+work (e.g., ). This might be because it is more difﬁcult
+to fool a model on simpler tasks. On the other hand, Hop-
+SkipJumpAttack also converges in a fewer number of queries
+on MNIST, as is shown in Figure 3. It does not converge even
+after 25, 000 queries on ImageNet. We conjecture the query
+budget is related to the input dimension, and the smoothness of
+decision boundary. We also observe the difference in model
+structure does not have a large inﬂuence on decision-based
+algorithms, if the training algorithm and the data set keep the
+same. For ResNet and DenseNet trained on a common data set,
+a decision-based algorithm achieves comparable performance
+in crafting adversarial examples, although DenseNet has a
+more complex structure than ResNet.
+As a comparison with state-of-the-art white-box targeted attacks, C&W attack achieves an average ℓ2-distance of
+0.33 on CIFAR-10, and BIM achieves an average ℓ∞distance of 0.014 on CIFAR-10. Targeted HopSkipJumpAttack
+achieves a comparable distance with 5K-10K model queries
+on CIFAR-10, without access to model details. On ImageNet,
+targeted C&W attack and BIM achieve an ℓ2-distance of
+0.96 and an ℓ∞-distance of 0.01 respectively. Untargeted
+HopSkipJumpAttack achieves a comparable performance with
+10, 000 −15, 000 queries. The targeted version is not able to
+perform comparably as targeted white-box attacks when the
+budget of queries is limited within 25, 000.
+Visualized trajectories of HopSkipJumpAttack optimized for
+ℓ2 distances along varied queries on CIFAR10 and ImageNet
+can be found in Figure 7. On CIFAR-10, we observe untargeted adversarial examples can be crafted within around 500
+ℓ2 Distance
+Success Rate
+25K 25K 25K
+Untargeted ℓ2 (CIFAR100, ResNet)
+ℓ2 Distance
+Success Rate
+Targeted ℓ2 (CIFAR100, ResNet)
+ℓ∞Distance
+Success Rate
+Untargeted ℓ∞(CIFAR100, ResNet)
+ℓ∞Distance
+Success Rate
+1K 1K 1K 1K
+Targeted ℓ∞(CIFAR100, ResNet)
+ℓ2 Distance
+Success Rate
+25K 25K 25K
+Untargeted ℓ2 (CIFAR100, DenseNet)
+ℓ2 Distance
+Success Rate
+Targeted ℓ2 (CIFAR100, DenseNet)
+ℓ∞Distance
+Success Rate
+Untargeted ℓ∞(CIFAR100, DenseNet)
+ℓ∞Distance
+Success Rate
+1K 1K 1K 1K
+Targeted ℓ∞(CIFAR100, DenseNet)
+ℓ2 Distance
+Success Rate
+Untargeted ℓ2 (ImageNet, ResNet)
+ℓ2 Distance
+Success Rate
+Targeted ℓ2 (ImageNet, ResNet)
+ℓ∞Distance
+Success Rate
+Untargeted ℓ∞(ImageNet, ResNet)
+ℓ∞Distance
+Success Rate
+1K 1K 1K 1K
+Targeted ℓ∞(ImageNet, ResNet)
+Figure 6: Success rate versus distance threshold for CIFAR-100 with ResNet, DenseNet, and ImageNet with ResNet from top
+to bottom rows. 1st column: untargeted ℓ2. 2nd column: targeted ℓ2. 3rd column: untargeted ℓ∞. 4th column: targeted ℓ∞.
+queries; targeted HopSkipJumpAttack is capable of crafting
+human indistinguishable targeted adversarial examples within
+around 1, 000 −2, 000 queries. On ImageNet, untargeted
+HopSkipJumpAttack is able to craft good adversarial examples
+with 1, 000 queries, while targeted HopSkipJumpAttack takes
+10, 000 −20, 000 queries.
+B. Defense mechanisms under decision-based attacks
+We investigate the robustness of various defense mechanisms
+under decision-based attacks.
+a) Defense mechanisms: Three defense mechanisms are evaluated: defensive distillation, region-based classiﬁcation, and
+adversarial training. Defensive distillation , a form of
+gradient masking , trains a second model to predict the
+output probabilities of an existing model of the same structure.
+We use the implementaion provided by Carlini and Wagner 
+for defensive distillation. The second defense, region-based
+classiﬁcation, belongs to a wide family of mechanisms which
+add test-time randomness to the inputs or the model, causing
+the gradients to be randomized . Multiple variants have
+been proposed to randomize the gradients . We adopt
+the implementation in Cao and Gong with suggested noise
+levels. Given a trained base model, region-based classiﬁcation
+samples points from the hypercube centered at the input image,
+predicts the label for each sampled point with the base model,
+and then takes a majority vote to output the label. Adversarial
+training is known to be one of the most effective
+defense mechanisms against adversarial perturbation .
+We evaluate a publicly available model trained through a
+robust optimization method proposed by Madry et al. .
+We further evaluate our attack method by constructing a
+non-differentiable model via input binarization followed by
+a random forest in Appendix C. The evaluation is carried out
+on MNIST, where defense mechanisms such as adversarial
+training work most effectively.
+b) Baselines: We compare our algorithm with state-of-the-art
+attack algorithms that require access to gradients, including
+C&W Attack , DeepFool for minimizing ℓ2-distance,
+and FGSM , and BIM for minimizing ℓ∞-distance.
+For region-based classiﬁcation, the gradient of the base classiﬁer is taken with respect to the original input.
+We further include methods designed speciﬁcally for the
+defense mechanisms under threat. For defensive distillation,
+we include the ℓ∞-optimized C&W Attack . For regionbased classiﬁcation, we include backward pass differentiable
+approximation (BPDA) , which calculates the gradient of
+the model at a randomized input to replace the gradient at the
+original input in C&W Attack and BIM. All of these methods
+Untargeted ℓ2 Attack
+Targeted ℓ2 Attack
+Trajectories on CIFAR-10
+Untargeted ℓ2 Attack
+Targeted ℓ2 Attack
+Trajectories on ImageNet
+Figure 7: Visualized trajectories of HopSkipJumpAttack for optimizing ℓ2 distance on randomly selected images in CIFAR-10
+and ImageNet. 1st column: initialization (after blended with original images). 2nd-9th columns: images at 100, 200, 500, 1K,
+2K, 5K, 10K, 25K model queries. 10th column: original images.
+assume access to model details or even defense mechanisms,
+which is a stronger threat model than the one required for
+decision-based attacks. We also include Boundary Attack as a
+decision-based baseline.
+For HopSkipJumpAttack and Boundary Attack, we include
+the success rate at three different scales of query budget:
+2K, 10K and 50K, so as to evaluate our method both with
+limited queries and a sufﬁcient number of queries. We ﬁnd
+the convergence of HopSkipJumpAttack becomes unstable
+on region-based classiﬁcation, resulting from the difﬁculty
+of locating the boundary in the binary search step when
+uncertainty is increased near the boundary. Thus, we increase
+the binary search threshold to 0.01 to resolve this issue.
+c) Results: Figure 8 shows the success rate of various attacks at different distance thresholds for the three defense
+mechanisms. On all of the three defenses, HopSkipJumpAttack demonstrates similar or superior performance compared
+to state-of-the-art white-box attacks with sufﬁcient model
+queries. Even with only 1K-2K model queries, it also achieves
+acceptable performance, although worse than the best whitebox attacks. With sufﬁcient queries, Boundary Attack achieves
+a comparable performance under the ℓ2-distance metric. But
+it is not able to generate any adversarial examples when the
+number of queries is limited to 1, 000. We think this is because
+the strength of our batch gradient direction estimate over the
+random walk step in Boundary Attack becomes more explicit
+when there is uncertainty or non-smoothness near the decision
+boundary. We also observe that Boundary Attack does not
+work in optimizing the ℓ∞-distance metric for adversarial
+examples, making it difﬁcult to evaluate defenses designed for
+ℓ∞distance, such as adversarial training proposed by Madry
+et al. .
+On a distilled model, when the ℓ∞-distance is thresholded
+at 0.3, a perturbation size proposed by Madry et al. to
+measure adversarial robustness, HopSkipJumpAttack achieves
+success rates of 86% and 99% with 1K and 50K queries
+respectively. At an ℓ2-distance of 3.0, the success rate is 91%
+with 2K queries. HopSkipJumpAttack achieves a comparable
+performance with C&W attack under both distance metrics
+with 10K-50K queries. Also, gradient masking by defensive distillation does not have a large inﬂuence on the query
+efﬁciency of HopSkipJumpAttack, indicating that the gradient
+direction estimate is robust under the setting where the model
+does not have useful gradients for certain white-box attacks.
+region-based
+classiﬁcation,
+SkipJumpAttack achieves success rates of 82% and 93%
+at the same ℓ∞- and ℓ2-distance thresholds respectively.
+With 10K-50K queries, it is able to achieve a comparable
+performance to BPDA, a white-box attack tailored to such
+defense mechanisms. On the other hand, we observe that Hop-
+SkipJumpAttack converges slightly slower on region-based
+classiﬁcation than itself on ordinary models, which is because
+stochasticity near the boundary may prevent binary search in
+HopSkipJumpAttack from locating the boundary accurately.
+On an adversarially trained model, HopSkipJumpAttack
+achieves a success rate of 11.0% with 50K queries when
+the ℓ∞-distance is thresholded at 0.3. As a comparison, BIM
+ℓ2 Distance
+Success Rate
+ℓ2 Attack against Defensive Distillation
+HopSkipJump
+ℓ2 Distance
+Success Rate
+ℓ2 Attack against Region-based Classiﬁcation
+HopSkipJump
+ℓ2 Distance
+Success Rate
+ℓ2 Attack against Adversarial Training
+HopSkipJump
+ℓ∞Distance
+Success Rate
+ℓ∞Attack against Defensive Distillation
+HopSkipJump
+ℓ∞Distance
+Success Rate
+ℓ∞Attack against Region-based Classiﬁcation
+HopSkipJump
+ℓ∞Distance
+Success Rate
+ℓ∞Attack against Adversarial Training
+HopSkipJump
+Figure 8: Success rate versus distance threshold for a distilled model, a region-based classiﬁer and an adversarially trained
+model on MNIST. Blue, magenta, cyan and orange lines are used for HopSkipJumpAttack and Boundary Attack at the budget
+of 1K, 2K, 10K and 50K respectively. Different attacks are plotted with different line styles. An ampliﬁed ﬁgure is included
+near the critical ℓ∞-distance of 0.3 for adversarial training.
+has a success rate of 7.4% at the given distance threshold.
+The success rate of ℓ∞-HopSkipJumpAttack transfers to an
+accuracy of 87.58% on adversarially perturbed data, close
+to the state-of-the-art performance achieved by white-box
+attacks.3 With 1K queries, HopSkipJumpAttack also achieves
+comparable performance to BIM and C&W attack.
+VI. DISCUSSION
+We have proposed a family of query-efﬁcient algorithms based
+on a novel gradient-direction estimate, HopSkipJumpAttack,
+for decision-based generation of adversarial examples, which
+is capable of optimizing ℓ2 and ℓ∞-distances for both targeted
+and untargeted attacks. Convergence analysis has been carried
+out given access to the gradient. We have also provided
+analysis for the error of our Monte Carlo estimate of gradient direction, which comes from three sources: bias at the
+boundary for a nonzero perturbation size, bias of deviation
+from the boundary, and variance. Theoretical analysis has
+provided insights for selecting the step size and the perturbation size, which leads to a hyperparameter-free algorithm.
+We have also carried out extensive experiments, showing
+HopSkipJumpAttack compares favorably to Boundary Attack
+in query efﬁciency, and achieves competitive performance on
+several defense mechanisms.
+3See challenge.
+Given the fact that HopSkipJumpAttack is able to craft a
+human-indistinguishable adversarial example within a realistic
+budget of queries, it becomes important for the community
+to consider the real-world impact of decision-based threat
+models. We have also demonstrated that HopSkipJumpAttack is able to achieve comparable or even superior performance to state-of-the-art white-box attacks on several defense mechanisms, under a much weaker threat model. In
+particular, masked gradients, stochastic gradients, and nondifferentiability are not barriers to our algorithm. Because
+of its effectiveness, efﬁciency, and applicability to nondifferentiable models, we suggest future research on adversarial defenses may evaluate the designed mechanism against
+HopSkipJumpAttack as a ﬁrst step.
+One limitation of all existing decision-based algorithms, including HopSkipJumpAttack, is that they require evaluation
+of the target model near the boundary. They may not work
+effectively by limiting the queries near the boundary, or
+by widening the decision boundary through insertion of an
+additional “unknown” class for inputs with low conﬁdence.
+We have also observed that it still takes tens of thousands of
+model queries for HopSkipJumpAttack to craft imperceptible
+adversarial examples with a target class on ImageNet, which
+has a relatively large image size. Future work may seek the
+combination of HopSkipJumpAttack with transfer-based attack
+to resolve these issues.
+VII. ACKNOWLEDGEMENT
+We would like to thank Nicolas Papernot and anonymous
+reviewers for providing their helpful feedback.

@@ -1,0 +1,507 @@
+Towards Efﬁcient Model Compression via Learned Global Ranking
+Ting-Wu Chin1, Ruizhou Ding1, Cha Zhang2, Diana Marculescu13
+Carnegie Mellon University1, Microsoft Cloud and AI2, The University of Texas at Austin3
+{tingwuc, rding}@andrew.cmu.edu, , 
+Pruning convolutional ﬁlters has demonstrated its effectiveness in compressing ConvNets. Prior art in ﬁlter pruning requires users to specify a target model complexity (e.g.,
+model size or FLOP count) for the resulting architecture.
+However, determining a target model complexity can be
+difﬁcult for optimizing various embodied AI applications
+such as autonomous robots, drones, and user-facing applications. First, both the accuracy and the speed of ConvNets
+can affect the performance of the application.
+the performance of the application can be hard to assess
+without evaluating ConvNets during inference. As a consequence, ﬁnding a sweet-spot between the accuracy and
+speed via ﬁlter pruning, which needs to be done in a trialand-error fashion, can be time-consuming. This work takes
+a ﬁrst step toward making this process more efﬁcient by altering the goal of model compression to producing a set of
+ConvNets with various accuracy and latency trade-offs instead of producing one ConvNet targeting some pre-deﬁned
+latency constraint. To this end, we propose to learn a global
+ranking of the ﬁlters across different layers of the ConvNet,
+which is used to obtain a set of ConvNet architectures that
+have different accuracy/latency trade-offs by pruning the
+bottom-ranked ﬁlters. Our proposed algorithm, LeGR, is
+shown to be 2× to 3× faster than prior work while having comparable or better performance when targeting seven
+pruned ResNet-56 with different accuracy/FLOPs proﬁles
+on the CIFAR-100 dataset. Additionally, we have evaluated
+LeGR on ImageNet and Bird-200 with ResNet-50 and MobileNetV2 to demonstrate its effectiveness. Code available
+at 
+1. Introduction
+Building on top of the success of visual perception , natural language processing , and speech
+recognition with deep learning, researchers have
+started to explore the possibility of embodied AI applications. In embodied AI, the goal is to enable agents to take
+actions based on perceptions in some environments .
+We envision that next generation embodied AI systems
+will run on mobile devices such as autonomous robots and
+drones, where compute resources are limited and thus, will
+require model compression techniques for bringing such intelligent agents into our lives.
+In particular, pruning the convolutional ﬁlters in ConvNets, also known as ﬁlter pruning, has shown to be an
+effective technique for trading accuracy
+for inference speed improvements. The core idea of ﬁlter pruning is to ﬁnd the least important ﬁlters to prune by
+minimizing the accuracy degradation and maximizing the
+speed improvement. State-of-the-art ﬁlter pruning methods require a target model complexity of the whole ConvNet (e.g., total ﬁlter count, FLOP
+count1, model size, inference latency, etc.)
+to obtain a
+pruned network. However, deciding a target model complexity for optimizing embodied AI applications can be
+hard. For example, considering delivery with autonomous
+drones, both inference speed and precision of object detectors can affect the drone velocity , which in turn affects the inference speed and precision2. For an user-facing
+autonomous robot that has to perform complicated tasks
+such as MovieQA , VQA , and room-to-room navigation , both speed and accuracy of the visual perception module can affect the user experience. These aforementioned applications require many iterations of trial-anderror to ﬁnd the optimal trade-off point between speed and
+accuracy of the ConvNets.
+More concretely, in these scenarios, practitioners would
+have to determine the sweet-spot for model complexity and
+accuracy in a trial-and-error fashion. Using an existing ﬁlter pruning algorithm many times to explore the impact
+of the different accuracy-vs.-speed trade-offs can be timeconsuming. Figure 1 demonstrates the usage of ﬁlter pruning for optimizing ConvNets in aforementioned scenarios.
+With prior approaches, one has to go through the process of
+ﬁnding constraint-satisfying pruned-ConvNets via a prun-
+1The number of ﬂoating-point operations to be computed for a ConvNet
+to carry out an inference.
+2Higher velocity requires faster computation and might cause accuracy
+degradation due to the blurring effect of the input video stream.
+ 
+Figure 1: Using ﬁlter pruning to optimize ConvNets for embodied AI applications. Instead of producing one ConvNet
+for each pruning procedure as in prior art, our proposed
+method produces a set of ConvNets for practitioners to efﬁciently explore the trade-offs.
+ing algorithm for every model complexity considered until practitioners are satisﬁed with the accuracy-vs.-speedup
+trade-off. Our work takes a ﬁrst step toward alleviating the
+inefﬁciency in the aforementioned paradigm. We propose to
+alter the objective of pruning from outputting a single ConvNet with pre-deﬁned model complexity to producing a set
+of ConvNets that have different accuracy/speed trade-offs,
+while achieving comparable accuracy with state-of-the-art
+methods (as shown in Figure 4). In this fashion, the model
+compression overhead can be greatly reduced, which results
+in a more practical usage of ﬁlter pruning.
+To this end, we propose learned global ranking (or
+LeGR), an algorithm that learns to rank convolutional ﬁlters across layers such that the ConvNet architectures of
+different speed/accuracy trade-offs can be obtained easily
+by dropping the bottom-ranked ﬁlters. The obtained architectures are then ﬁne-tuned to generate the ﬁnal models. In
+such a formulation, one can obtain a set of architectures by
+learning the ranking once. We demonstrate the effectiveness
+of the proposed method with extensive empirical analyses
+using ResNet and MobileNetV2 on CIFAR-10/100, Bird-
+200, and ImageNet datasets. The main contributions of this
+work are as follows:
+• We propose learned global ranking (LeGR), which produces a set of pruned ConvNets with different accuracy/speed trade-offs. LeGR is shown to be faster than
+prior art in ConvNet pruning, while achieving comparable accuracy with state-of-the-art methods on three
+datasets and two types of ConvNets.
+• Our formulation towards pruning is the ﬁrst work that
+considers learning to rank ﬁlters across different layers
+globally, which addresses the limitation of prior art in
+magnitude-based ﬁlter pruning.
+2. Related Work
+Various methods have been developed to compress
+and/or accelerate ConvNets including weight quantization , efﬁcient convolution operators , neural architecture search , adjusting image resolution ,
+and ﬁlter pruning, considered in this paper. Prior art on ﬁlter pruning can be grouped into two classes, depending on
+whether the architecture of the pruned-ConvNet is assumed
+to be given.
+Pre-deﬁned architecture
+In this category, various work
+proposes different metrics to evaluate the importance of ﬁlters locally within each layer.
+For example, some prior
+work proposes to use ℓ2-norm of ﬁlter weights as
+the importance measure. On the other hand, other work
+has also investigated using the output discrepancy between
+the pruned and unpruned network as an importance measure . However, the key drawback for methods that
+rank ﬁlters locally within a layer is that it is often hard to
+decide the overall target pruned architectures . To cope
+with this difﬁculty, uniformly pruning the same portion of
+ﬁlters across all the layers is often adopted .
+Learned architecture
+In this category, pruning algorithms learn the resulting structure automatically given a
+controllable parameter to determine the complexity of the
+pruned-ConvNet. To encourage weights with small magnitudes, Wen et al. propose to add group-Lasso regularization to the ﬁlter norm to encourage ﬁlter weights to be
+zeros. Later, Liu et al. propose to add Lasso regularization on the batch normalization layer to achieve pruning
+during training. Gordon et al. propose to add computeweighted Lasso regularization on the ﬁlter norm. Huang
+et al. propose to add Lasso regularization on the output neurons instead of weights. While the regularization
+pushes unimportant ﬁlters to have smaller weights, the ﬁnal thresholding applied globally assumes different layers
+to be equally important. Later, Louizos et al. have proposed L0 regularization with stochastic relaxation. From a
+Bayesian perspective, Louizos et al. formulate pruning in a probabilistic fashion with a sparsity-induced prior.
+Similarly, Zhou et al. propose to model inter-layer dependency. From a different perspective, He et al. propose
+an automated model compression framework (AMC) ,
+which uses reinforcement learning to search for a ConvNet
+that satisﬁes user-speciﬁed complexity constraints.
+While these prior approaches provide competitive
+pruned-ConvNets under a given target model complexity,
+it is often hard for one to specify the complexity parameter
+when compressing a ConvNet in embodied AI applications.
+To cope with this, our work proposes to generate a set of
+pruned-ConvNets across different complexity values rather
+than a single pruned-ConvNet under a target model complexity.
+We note that some prior work gradually prunes the ConvNet by alternating between pruning out a ﬁlter and ﬁnetuning, and thus, can also obtain a set of pruned-ConvNets
+with different complexities.
+For example, Molchanov et
+al. propose to use the normalized Taylor approximation of the loss as a measure to prune ﬁlters. Speciﬁcally,
+they greedily prune one ﬁlter at a time and ﬁne-tune the network for a few gradient steps before the pruning proceeds.
+Following this paradigm, Theis et al. propose to switch
+from ﬁrst-order Taylor to Fisher information. However, our
+experiment results show that the pruned-ConvNet obtained
+by these methods have inferior accuracy compared to the
+methods that generate a single pruned ConvNet.
+To obtain a set of ConvNets across different complexities with competitive performance, we propose to learn a
+global ranking of ﬁlters across different layers in a datadriven fashion such that architectures with different complexities can be obtained by pruning out the bottom-ranked
+3. Learned Global Ranking
+The core idea of the proposed method is to learn a ranking for ﬁlters across different layers such that a ConvNet of
+a given complexity can be obtained easily by pruning out
+the bottom rank ﬁlters. In this section, we discuss our assumptions and formulation toward achieving this goal.
+As mentioned earlier in Section 1, often both accuracy
+and latency of a ConvNet affect the performance of the overall application. The goal for model compression in these
+settings is to explore the accuracy-vs.-speed trade-off for
+ﬁnding a sweet-spot for a particular application using model
+compression. Thus, in this work, we use FLOP count for the
+model complexity to sample ConvNets. As we will show in
+Section 5.3, we ﬁnd FLOP count to be predictive for latency.
+3.1. Global Ranking
+To obtain pruned-ConvNets with different FLOP counts,
+we propose to learn the ﬁlter ranking globally across layers. In such a formulation, the global ranking for a given
+ConvNet just needs to be learned once and can be used
+to obtain ConvNets with different FLOP counts.
+However, there are two challenges for such a formulation. First,
+the global ranking formulation enforces an assumption that
+the top-performing smaller ConvNets are a proper subset
+of the top-performing larger ConvNets.
+The assumption
+might be strong because there are many ways to set the ﬁlter counts across different layers to achieve a given FLOP
+count, which implies that there are opportunities where the
+top-performing smaller network can have more ﬁlter counts
+in some layers but fewer ﬁlter counts in some other layers
+compared to a top-performing larger ConvNet. Nonetheless, this assumption enables the idea of global ﬁlter ranking, which can generate pruned ConvNets with different
+FLOP counts efﬁciently. In addition, the experiment results
+in Section 5.1 show that the pruned ConvNets under this
+assumption are competitive in terms of performance with
+the pruned ConvNets obtained without this assumption. We
+state the subset assumption more formally below.
+Assumption 1 (Subset Assumption) For
+pruned ConvNet with FLOP count f, let F(f)l be the
+ﬁlter count for layer l. The subset assumption states that
+F(f)l ≤F(f ′)l ∀l if f ≤f ′.
+Another challenge for learning a global ranking is the
+hardness of the problem. Obtaining an optimal global ranking can be expensive, i.e., it requires O(K × K!) rounds of
+network ﬁne-tuning, where K is the number of ﬁlters. Thus,
+to make it tractable, we assume the ﬁlter norm is able to
+rank ﬁlters locally (intra-layer-wise) but not globally (interlayer-wise).
+Assumption 2 (Norm Assumption) ℓ2 norm can be used
+to compare the importance of a ﬁlter within each layer, but
+not across layers.
+We note that the norm assumption is adopted and empirically veriﬁed by prior art . For ﬁlter norms to
+be compared across layers, we propose to learn layer-wise
+afﬁne transformations over ﬁlter norms. Speciﬁcally, the
+importance of ﬁlter i is deﬁned as follows:
+Ii = αl(i) ∥Θi∥2
+2 + κl(i),
+where l(i) is the layer index for the ith ﬁlter, ∥·∥2 denotes
+ℓ2 norms, Θi denotes the weights for the ith ﬁlter, and α ∈
+RL, κ ∈RL are learnable parameters that represent layerwise scale and shift values, and L denotes the number of
+layers. We will detail in Section 3.2 how α-κ pairs are
+learned so as to maximize overall accuracy.
+Based on these learned afﬁne transformations from
+Eq. (1) (i.e., the α-κ pair), the LeGR-based pruning proceeds by ranking ﬁlters globally using I and prunes away
+bottom-ranked ﬁlters, i.e., smaller in I, such that the FLOP
+count of interest is met, as shown in Figure 2. This process can be done efﬁciently without the need of training
+data (since the knowledge of pruning is encoded in the α-κ
+3.2. Learning Global Ranking
+To learn α and κ, one can consider constructing a ranking with α and κ and then uniformly sampling ConvNets
+across different FLOP counts to evaluate the ranking. However, ConvNets obtained with different FLOP counts have
+drastically different validation accuracy, and one has to
+Figure 2: The ﬂow of LeGR-Pruning. ∥Θ∥2
+2 represents the ﬁlter norm. Given the learned layer-wise afﬁne transformations,
+i.e., the α-κ pair, LeGR-Pruning returns ﬁlter masks that determine which ﬁlters are pruned. After LeGR-Pruning, the pruned
+network will be ﬁne-tuned to obtain the ﬁnal network.
+know the Pareto curve3 of pruning to normalize the validation accuracy across ConvNets obtained with different
+FLOP counts. To address this difﬁculty, we propose to evaluate the validation accuracy of the ConvNet obtained from
+the lowest considered FLOP count as the objective for the
+ranking induced by the α-κ pair. Concretely, to learn α and
+κ, we treat LeGR as an optimization problem:
+α,κ Accval( ˆ
+Θl = LeGR-Pruning(α, κ, ˆζl).
+LeGR-Pruning prunes away the bottom-ranked ﬁlters until
+the desired FLOP count is met as shown in Figure 2. ˆζl
+denotes the lowest FLOP count considered. As we will discuss later in Section 5.1, we have also studied how ˆζ affects
+the performance of the learned ranking, i.e., how the learned
+ranking affects the accuracy of the pruned networks.
+Speciﬁcally, to learn the α-κ pair, we rely on approaches
+from hyper-parameter optimization literature. While there
+are several options for the optimization algorithm, we
+adopt the regularized evolutionary algorithm (EA) proposed
+in for its effectiveness in the neural architecture search
+space. The pseudo-code for our EA is outlined in Algorithm 1. We have also investigated policy gradients for solving for the α-κ pair, which is shown in Appendix B. We can
+equate each α-κ pair to a network architecture obtained by
+LeGR-Pruning. Once a pruned architecture is obtained, we
+ﬁne-tune the resulting architecture by ˆτ gradient steps and
+use its accuracy on the validation set4 as the ﬁtness (i.e.,
+3A Pareto curve describes the optimal trade-off curve between two metrics of interest. Speciﬁcally, one cannot obtain improvement in one metric
+without degrading the other metric. The two metrics we considered in this
+work are accuracy and FLOP count.
+4We split 10% of the original training set to be used as validation set.
+Algorithm 1 Learning α, κ with regularized EA
+Input: model Θ, lowest constraint ˆζl, random walk size
+σ, total search iterations E, sample size S, mutation ratio
+u, population size P, ﬁne-tune iterations ˆτ
+Output: α, κ
+Initialize Pool to a size P queue
+for e = 1 to E do
+α = 1, κ = 0
+if Pool has S samples then
+V = Pool.sample(S)
+α, κ = argmaxFitness(V )
+Layer= Sample u% layers to mutate
+for l ∈Layer do
+stdl=computeStd([Mi ∀i ∈l])
+αl = αl × ˆαl, where ˆαl ∼eN(0,σ2)
+κl = κl + ˆκl, where ˆκl ∼N(0,stdl)
+Θl = LeGR-Pruning-and-ﬁne-tuning(α, κ, ˆζl, ˆτ, Θ)
+Fitness = Accval( ˆ
+Pool.replaceOldestWith(α, κ, Fitness)
+validation accuracy) for the corresponding α-κ pair. We
+note that we use ˆτ to approximate τ (fully ﬁne-tuned steps)
+and we empirically ﬁnd that ˆτ = 200 gradient updates work
+well under the pruning settings across the datasets and networks we study. More concretely, we ﬁrst generate a pool of
+candidates (α and κ values) and record the ﬁtness for each
+candidate, and then repeat the following steps: (i) sample a
+subset from the candidates, (ii) identify the ﬁttest candidate,
+(iii) generate a new candidate by mutating the ﬁttest candidate and measure its ﬁtness accordingly, and (iv) replace the
+oldest candidate in the pool with the generated one. To mutate the ﬁttest candidate, we randomly select a subset of the
+layers Layer and conduct one step of random-walk from
+their current values, i.e., αl, κl ∀l ∈Layer.
+We note that our layer-wise afﬁne transformation formulation (Eq. 1) can be interpreted from an optimization
+perspective. That is, one can upper-bound the loss difference between a pre-trained ConvNet and its pruned-and-
+ﬁne-tuned counterpart by assuming Lipschitz continuity on
+the loss function, as detailed in Appendix A.
+4. Evaluations
+4.1. Datasets and Training Setting
+Our work is evaluated on various image classiﬁcation
+benchmarks including CIFAR-10/100 , ImageNet ,
+and Birds-200 . CIFAR-10/100 consists of 50k training
+images and 10k testing images with a total of 10/100 classes
+to be classiﬁed. ImageNet is a large scale image classiﬁcation dataset that includes 1.2 million training images and
+50k testing images with 1k classes to be classiﬁed. Also,
+we benchmark the proposed algorithm in a transfer learning
+setting since in practice, we want a small and fast model
+on some target datasets. Speciﬁcally, we use the Birds-200
+dataset that consists of 6k training images and 5.7k testing
+images covering 200 bird species.
+For Bird-200, we use 10% of the training data as the validation set used for early stopping and to avoid over-ﬁtting.
+The training scheme for CIFAR-10/100 follows , which
+uses stochastic gradient descent with nesterov , weight
+decay 5e−4, batch size 128, 1e−1 initial learning rate with
+decrease by 5× at epochs 60, 120, and 160, and train for
+200 epochs in total. For control experiments with CIFAR-
+100 and Bird-200, the ﬁne-tuning after pruning is done as
+follows: we keep all training hyper-parameters the same
+but change the initial learning rate to 1e−2 and train for 60
+epochs (i.e., τ ≈21k). We drop the learning rate by 10× at
+30%, 60%, and 80% of the total epochs, i.e., epochs 18, 36,
+and 48. To compare numbers with prior art on CIFAR-10
+and ImageNet, we follow the number of iterations in .
+Speciﬁcally, for CIFAR-10 we ﬁne-tuned for 400 epochs
+with initial learning rate 1e−2, drop by 5× at epochs 120,
+240, and 320. For ImageNet, we use pre-trained models and
+we ﬁne-tuned the pruned models for 60 epochs with initial
+learning rate 1e−2, drop by 10× at epochs 30 and 45.
+For the hyper-parameters of LeGR, we select ˆτ = 200,
+i.e., ﬁne-tune for 200 gradient steps before measuring the
+validation accuracy when searching for the α-κ pair. We
+note that we do the same for AMC for a fair comparison. Moreover, we set the number of architectures explored
+to be the same with AMC, i.e., 400. We set mutation rate
+u = 10 and the hyper-parameter of the regularized evolutionary algorithm by following prior art . In the following experiments, we use the smallest ζ considered as ˆζl
+to search for the learnable variables α and κ. The found
+α-κ pair is used to obtain the pruned networks at various
+FLOP counts. For example, for ResNet-56 with CIFAR-
+100 (Figure 3a), we use ˆζl = 20% to obtain the α-κ pair
+and use the same α-κ pair to obtain the seven networks
+(ζ = 20%, ..., 80%) with the ﬂow described in Figure 2.
+The ablation of ˆζl and ˆτ are detailed in Sec. 5.2.
+We prune ﬁlters across all the convolutional layers. We
+group dependent channels by summing up their importance
+measure and prune them jointly. The importance measure
+refers to the measure after learned afﬁne transformations.
+Speciﬁcally, we group a channel in depth-wise convolution with its corresponding channel in the preceding layer.
+We also group channels that are summed together through
+residual connections.
+4.2. CIFAR-100 Results
+In this section,
+we consider ResNet-56 and MobileNetV2 and we compare LeGR mainly with four ﬁlter
+pruning methods, i.e., MorphNet , AMC , Fisher-
+Pruning , and a baseline that prunes ﬁlters uniformly
+across layers.
+Speciﬁcally, the baselines are determined
+such that one dominant approach is selected from different groups of prior art.
+We select one approach 
+from pruning-while-learning approaches, one approach 
+from pruning-by-searching methods, one approach 
+from continuous pruning methods, and a baseline extending
+magnitude-based pruning to various FLOP counts. We note
+that FisherPruning is a continuous pruning method where
+we use 0.0025 learning rate and perform 500 gradient steps
+after each ﬁlter pruned following .
+As shown in Figure 3a, we ﬁrst observe that FisherPruning does not work as well as other methods and we hypothesize the reason for it is that the small ﬁxed learning rate in
+the ﬁne-tuning phase makes it hard for the optimizer to get
+out of local optima. Additionally, we ﬁnd that FisherPruning prunes away almost all the ﬁlters for some layers. On
+the other hand, we ﬁnd that all other approaches outperform
+the uniform baseline in a high-FLOP-count regime. However, both AMC and MorphNet have higher variances when
+pruned more aggressively. In both cases, LeGR outperforms
+prior art, especially in the low-FLOP-count regime.
+More importantly, our proposed method aims to alleviate
+the cost of pruning when the goal is to explore the trade-off
+curve between accuracy and inference latency. From this
+perspective, our approach outperforms prior art by a significant margin. More speciﬁcally, we measure the average
+time of each algorithm to obtain the seven pruned ResNet-
+56 across the FLOP counts in Figure 3a using our hardware (i.e., NVIDIA GTX 1080 Ti). Figure 3b shows the
+efﬁciency of AMC, MorphNet, FisherPruning, and the proposed LeGR. The cost can be broken down into two parts:
+(1) pruning: the time it takes to search for a network that has
+Figure 3: (a) The trade-off curve of pruning ResNet-56 and MobileNetV2 on CIFAR-100 using various methods. We average
+across three trials and plot the mean and standard deviation. (b) Training cost for seven ConvNets across FLOP counts using
+various methods targeting ResNet-56 on CIFAR-100. We report the average cost considering seven FLOP counts, i.e., 20%
+to 80% FLOP count in a step of 10% on NVIDIA GTX 1080 Ti. The cost is normalized to the cost of LeGR.
+some pre-deﬁned FLOP count and (2) ﬁne-tuning: the time
+it takes for ﬁne-tuning the weights of a pruned network. For
+MorphNet, we consider three trials for each FLOP count
+to ﬁnd an appropriate hyper-parameter λ to meet the FLOP
+count of interest. The numbers are normalized to the cost
+of LeGR. In terms of pruning time, LeGR is 7× and 5×
+faster than AMC and MorphNet, respectively.
+The efﬁciency comes from the fact that LeGR only searches the α-
+κ pair once and re-uses it across FLOP counts. In contrast,
+both AMC and MorphNet have to search for networks for
+every FLOP count considered. FisherPruning always prune
+one ﬁlter at a time, and therefore the lowest FLOP count
+level considered determines the pruning time, regardless of
+how many FLOP count levels we are interested in.
+4.3. Comparison with Prior Art
+Although the goal of this work is to develop a model
+compression method that produces a set of ConvNets across
+different FLOP counts, we also compare our method with
+prior art that focuses on generating a ConvNet for a speci-
+ﬁed FLOP count.
+In Table 1, we compare LeGR with prior art
+that reports results on CIFAR-10. First, for ResNet-56, we
+ﬁnd that LeGR outperforms most of the prior art in both
+FLOP count and accuracy dimensions and performs similarly to . For VGG-13, LeGR achieves signiﬁcantly
+better results compared to prior art.
+ImageNet Results
+For ImageNet, we prune ResNet-50
+and MobileNetV2 with LeGR to compare with prior art.
+For LeGR, we learn the ranking using 47% FLOP count
+for ResNet-50 and 50% FLOP count for MobileNetV2, and
+use the learned ranking to obtain ConvNets for other FLOP
+Table 1: Comparison with prior art on CIFAR-10. We group
+methods into sections according to different FLOP counts.
+Values for our approaches are averaged across three trials
+and we report the mean and standard deviation. We use
+boldface to denote the best numbers and use ∗to denote our
+implementation. The accuracy is represented in the format
+of pre-trained 7→pruned-and-ﬁne-tuned.
+MFLOP COUNT
+93.0 −→93.0
+90.9 (72%)
+TAYLOR ∗
+93.9 −→93.2
+90.8 (72%)
+93.9 −→94.1±0.0
+87.8 (70%)
+DCP-ADAPT 
+93.8 −→93.8
+66.3 (53%)
+92.8 −→91.8
+62.7 (50%)
+92.8 −→91.9
+62.7 (50%)
+93.8 −→93.5
+62.7 (50%)
+93.6±0.6 −→93.4±0.3
+59.4 (47%)
+93.9 −→93.7±0.2
+58.9 (47%)
+BC-GNJ 
+91.9 −→91.4
+141.5 (45%)
+BC-GHS 
+121.9 (39%)
+VIBNET 
+91.9 −→91.5
+70.6 (22%)
+91.9 −→92.4±0.2
+70.3 (22%)
+counts of interest. We have compared to 17 prior methods that report pruning performance for ResNet-50 and/or
+MobileNetV2 on the ImageNet dataset. While our focus
+is on the fast exploration of the speed and accuracy tradeoff curve for ﬁlter pruning, our proposed method is better
+or comparable compared to the state-of-the-art methods as
+shown in Figure 4. The detailed numerical results are in
+Appendix C. We would like to emphasize that to obtain
+a pruned-ConvNet with prior methods, one has to run the
+pruning algorithm for every FLOP count considered.
+contrast, our proposed method learns the ranking once and
+uses it to obtain ConvNets across different FLOP counts.
+Figure 4: Results for ImageNet. LeGR is better or comparable compared to prior methods. Furthermore, its goal is to output
+a set of ConvNets instead of one ConvNet. The detailed numerical results are in Appendix C.
+4.4. Transfer Learning: Bird-200
+We analyze how LeGR performs in a transfer learning setting where we have a model pre-trained on a large
+dataset, i.e., ImageNet, and we want to transfer its knowledge to adapt to a smaller dataset, i.e., Bird-200. We prune
+the ﬁne-tuned network on the target dataset directly following the practice in prior art . We ﬁrst obtain ﬁnetuned MobileNetV2 and ResNet-50 on the Bird-200 dataset
+with top-1 accuracy 80.2% and 79.5%, respectively. These
+are comparable to the reported values in prior art .
+As shown in Figure 5, we ﬁnd that LeGR outperforms Uniform and AMC, which is consistent with previous analyses
+in Section 4.2.
+Figure 5: Results for Bird-200.
+5. Ablation Study
+5.1. Ranking Performance and ˆζl
+To learn the global ranking with LeGR without knowing
+the Pareto curve in advance, we use the minimum consid-
+Figure 6: Robustness to the hyper-parameter ˆζl. Prior art is
+plotted as a reference (c.f. Figure 3a).
+ered FLOP count (ˆζl) during learning to evaluate the performance of a ranking. We are interested in understanding
+how this design choice affects the performance of LeGR.
+Speciﬁcally, we try LeGR targeting ResNet-56 for CIFAR-
+100 with ˆζl ∈{20%, 40%, 60%, 80%}. As shown in Figure 6, we ﬁrst observe that rankings learned using different FLOP counts have similar performances, which empirically supports Assumption 1. More concretely, consider the
+network pruned to 40% FLOP count by using the ranking
+learned at 40% FLOP count. This case does not take advantage of the subset assumption because the entire learning
+process for learning α-κ is done only by looking at the performance of the 40% FLOP count network. On the other
+hand, rankings learned using other FLOP counts but employed to obtain pruned-networks at 40% FLOP count have
+exploited the subset assumption (e.g., the ranking learned
+for 80% FLOP count can produce a competitive network
+Figure 7: Pruning ResNet-56 for CIFAR-100 with LeGR by
+learning α and κ using different ˆτ and FLOP count constraints.
+for 40% FLOP count). We ﬁnd that LeGR with or without
+employing Assumption 1 results in similar performance for
+the pruned networks.
+5.2. Fine-tuned Iterations
+Since we use ˆτ to approximate τ when learning the α-
+κ pair, it is expected that the closer ˆτ to τ, the better the
+α-κ pair LeGR can ﬁnd. We use LeGR to prune ResNet-
+56 for CIFAR-100 and learn α-κ at three FLOP counts
+ˆζl ∈{10%, 30%, 50%}. We consider ζ to be exactly ˆζl
+in this case. For ˆτ, we experiment with {0, 50, 200, 500}.
+We note that once the α-κ pair is learned, we use LeGR-
+Pruning to obtain the pruned ConvNet, ﬁne-tune it for τ
+steps, and plot the resulting test accuracy. In this experiment, τ is set to 21120 gradient steps (60 epochs). As
+shown in Figure 7, the results align with our intuition in
+that there are diminishing returns in increasing ˆτ. We observe that ˆτ affects the accuracy of the pruned ConvNets
+more when learning the ranking at a lower FLOP count
+level, which means in low-FLOP-count regimes, the validation accuracy after ﬁne-tuning a few steps might not be
+representative. This makes sense since when pruning away
+a lot of ﬁlters, the network can be thought of as moving
+far away from the local optimal, where the gradient steps
+early in the ﬁne-tuning phase are noisy. Thus, more gradient steps are needed before considering the accuracy to be
+representative of the fully-ﬁne-tuned accuracy.
+5.3. FLOP count and Runtime
+We demonstrate the effectiveness of ﬁlter pruning
+in wall-clock time speedup using ResNet-50 and MobileNetV2 on PyTorch 0.4 using two types of CPUs. Specifically, we consider both a desktop level CPU, i.e., Intel i7,
+and an embedded CPU, i.e., ARM A57, and use LeGR as
+the pruning methodology. The input is a single RGB image
+Figure 8: Latency reduction vs.
+FLOP count reduction.
+FLOP count reduction is indicative for latency reduction.
+of size 224x224 and the program (Python with PyTorch) is
+run using a single thread. As shown in Figure 8, ﬁlter pruning can produce near-linear acceleration (with a slope of approximately 0.6) without specialized software or hardware
+6. Conclusion
+To alleviate the bottleneck of using model compression
+in optimizing the ConvNets in a large system, we propose LeGR, a novel formulation for practitioners to explore
+the accuracy-vs-speed trade-off efﬁciently via ﬁlter pruning. More speciﬁcally, we propose to learn layer-wise afﬁne
+transformations over ﬁlter norms to construct a global ranking of ﬁlters. This formulation addresses the limitation that
+ﬁlter norms cannot be compared across layers in a learnable
+fashion and provides an efﬁcient way for practitioners to obtain ConvNet architectures with different FLOP counts. Additionally, we provide a theoretical interpretation of the proposed afﬁne transformation formulation. We conduct extensive empirical analyses using ResNet and MobileNetV2
+on datasets including CIFAR, Bird-200, and ImageNet and
+show that LeGR has less training cost to generate the pruned
+ConvNets across different FLOP counts compared to prior
+art while achieving comparable performance to state-of-theart pruning methods.
+Acknowledgement
+This research was supported in part by NSF CCF Grant
+No. 1815899, NSF CSR Grant No. 1815780, and NSF
+ACI Grant No. 1445606 at the Pittsburgh Supercomputing
+Center (PSC).

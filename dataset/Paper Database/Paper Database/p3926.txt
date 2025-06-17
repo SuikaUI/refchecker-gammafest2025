@@ -1,0 +1,659 @@
+Fast, Robust, Continuous Monocular Egomotion Computation
+Andrew Jaegle∗, Stephen Phillips∗, and Kostas Daniilidis
+University of Pennsylvania
+Philadelphia, PA USA
+{ajaegle, stephi, kostas}@seas.upenn.edu
+Abstract— We propose robust methods for estimating camera
+egomotion in noisy, real-world monocular image sequences in
+the general case of unknown observer rotation and translation
+with two views and a small baseline. This is a difﬁcult problem
+because of the nonconvex cost function of the perspective
+camera motion equation and because of non-Gaussian noise
+arising from noisy optical ﬂow estimates and scene non-rigidity.
+To address this problem, we introduce the expected residual
+likelihood method (ERL), which estimates conﬁdence weights
+for noisy optical ﬂow data using likelihood distributions of
+the residuals of the ﬂow ﬁeld under a range of counterfactual
+model parameters. We show that ERL is effective at identifying
+outliers and recovering appropriate conﬁdence weights in many
+settings. We compare ERL to a novel formulation of the
+perspective camera motion equation using a lifted kernel, a
+recently proposed optimization framework for joint parameter
+and conﬁdence weight estimation with good empirical properties. We incorporate these strategies into a motion estimation
+pipeline that avoids falling into local minima. We ﬁnd that ERL
+outperforms the lifted kernel method and baseline monocular
+egomotion estimation strategies on the challenging KITTI
+dataset, while adding almost no runtime cost over baseline
+egomotion methods.
+I. INTRODUCTION
+Visual odometry in real-world situations has attracted
+increased attention in the past few years in large part
+because of its applications in robotics domains such as
+autonomous driving and unmanned aerial vehicle (UAV)
+navigation. Stereo odometry and simultaneous localization
+and mapping (SLAM) methods using recently introduced
+depth sensors have made dramatic progress on real-world
+datasets. Signiﬁcant advances have also been achieved in
+the case of monocular visual odometry when combined with
+inertial information.
+State-of-the-art visual odometry uses either the discrete
+epipolar constraint to validate feature correspondences and
+compute inter-frame motion or directly estimates 3D
+motion and 3D map alignment from image intensities .
+In contrast to the state of the art, in this paper we revisit
+the continuous formulation of structure from motion (SfM),
+which computes the translational and rotational velocities
+and depths up to a scale from optical ﬂow measurements.
+Our motivation lies in several observations:
+• UAV control schemes often need to estimate the translational velocity, which is frequently done using a
+combination of monocular egomotion computations and
+single-point depths from sonar .
+∗Authors contributed equally.
+Flow residual under motion model 1
+Likelihood under Laplacian fit
+Flow residual under motion model 2
+Likelihood under Laplacian fit
+Flow residual under motion model M
+Likelihood under Laplacian fit
+Schematic depiction of the ERL method for egomotion estimation
+from noisy ﬂow ﬁelds. Figure best viewed in color. (A) Example optical
+ﬂow ﬁeld from two frames of KITTI odometry (sequence 5, images 2358-
+2359). Note the outliers on the grass in the lower right part of the image
+and scattered throughout the ﬂow ﬁeld. (B) We evaluate the ﬂow ﬁeld
+under M models with translation parameters sampled uniformly over the
+unit hemisphere. The residuals for the ﬂow ﬁeld under three counterfactual
+models are shown. Each black point indicates the translation direction used.
+Residuals are scaled to for visualization. (C) We estimate the likelihood
+of each observed residual under each of the models by ﬁtting a Laplacian
+distribution to each set of residuals. The ﬁnal conﬁdence weight for each
+ﬂow vector is estimated as the expected value of the residual likelihood
+over the set of counterfactual models. Likelihood distributions are shown
+for the three models above. (D) The weighted ﬂow ﬁeld is used to make a
+ﬁnal estimate of the true egomotion parameters. The black point indicates
+the translation direction estimated using ERL and the green point indicates
+ground truth. The unweighted estimate of translation is not visible as it is
+outside of the image bounds.
+• Fast UAV maneuvers require an immediate estimate of
+the direction of translation (the focus of expansion) in
+order to compute a time-to-collision map.
+• Continuous SfM computations result in better estimates
+when the incoming frame rate is high and the baseline
+is very small.
+However, estimating camera motion and scene parameters
+from a single camera (monocular egomotion estimation)
+remains a challenging problem. This problem case arises
+in many contexts where sensor weight and cost are at a
+premium, as is the case for lightweight UAVs and consumer
+ 
+cameras. Situations involving monocular sensors on small
+platforms pose additional problems: computational resources
+are often very limited and estimates must be made in real
+time under unusual viewing conditions (e.g. with a vertically
+ﬂipped camera, no visible ground plane, and a single pass
+through a scene). These contexts present many sources of
+noise. Real-time ﬂow estimation produces unreliable data,
+and the associated noise is often pervasive and non-Gaussian,
+which makes estimation difﬁcult and explicit outlier rejection
+problematic. Furthermore, violations of the assumption of
+scene rigidity due to independent motion of objects in the
+scene can lead to valid ﬂow estimates that are outliers
+nonetheless. Even in the noise-free case, camera motion
+estimation is plagued with many suboptimal interpretations
+(illusions) caused by the hilly structure of the cost function.
+Additionally, forward motion, which is very common in
+real-world navigation, is known to be particularly hard for
+monocular visual odometry .
+We propose an algorithm suitable for the robust estimation
+of camera egomotion and scene depth from noisy ﬂow in
+real-world settings with high-frame-rate video, large images,
+and a large number of noisy optical ﬂow estimates. Our
+method runs in real-time on a single CPU and can estimate
+camera motion and scene depth in scenes with noisy optical
+ﬂow with outliers, making it suitable for integration with
+ﬁlters for real-time navigation and for deployment on lightweight UAVs. The technical contributions of this paper are:
+• A novel robust estimator based on the expected residual
+likelihood (ERL) of ﬂow data that effectively attenuates
+the inﬂuence of outlier ﬂow measurements and runs at
+30-40 Hz on a single CPU.
+• A novel robust optimization strategy using a lifted
+kernel that modiﬁes the shape of the objective function to enable joint estimation of weights and model
+parameters, while enabling good empirical convergence
+properties.
+II. RELATED WORK
+A. Egomotion/visual odometry
+Many approaches to the problem of visual odometry have
+been proposed. A distinction is commonly made between
+feature-based methods, which use a sparse set of matching
+feature points to compute camera motion, and direct methods, which estimate camera motion directly from intensity
+gradients in the image sequence. Feature-based approaches
+can again be roughly divided into two types of methods:
+those estimating camera motion from point correspondences
+between two frames (discrete approaches) and those estimating camera motion and scene structure from the optical
+ﬂow measurements induced by the motion between the two
+frames (continuous approaches). In practice, point correspondences and optical ﬂow measurements are often obtained
+using similar descriptor matching strategies. Nonetheless, the
+discrete and continuous approaches use different problem
+formulations, which reﬂect differing assumptions about the
+size of the baseline between the two camera positions.
+The continuous approach is the appropriate choice in situations where the real-world camera motion is slow relative
+to the sampling frequency of the camera. Our approach is
+primarily intended for situations in which this is the case, e.g.
+UAVs equipped with high-frame-rate cameras. Accordingly,
+we focus our review on continuous, monocular methods. For
+a more comprehensive discussion, see .
+B. Continuous, monocular approaches
+In the absence of noise, image velocities at 5 or 8 points
+can be used to give a ﬁnite number of candidate solutions
+for camera motion . With more velocities, there
+is a unique optimal solution under typical scene conditions
+ . Many methods have been proposed to recover this
+solution, either by motion parallax or
+by using the so-called continuous epipolar constraint .
+The problem is nonlinear and nonconvex, but various linear
+approximation methods have been proposed to simplify and
+speed up estimation .
+Although the problem has a unique optimum, it is characterized by many local minima, which pose difﬁculties
+for linear methods . Furthermore, in the presence of
+noise, many methods are biased and inconsistent in the
+sense that they do not produce correct estimates in the limit
+of an unlimited number of image velocity measurements
+ . Many methods also fail under many common viewing
+conditions or with a limited ﬁeld of view . Recently, 
+and proposed branch-and-bound methods that estimate
+translational velocity in real time and effectively handle a
+large numbers of outliers. However, these methods deal with
+the case of pure translational camera motion, while our
+approach estimates both translational and rotational motion.
+Most directly related to our work is the robust estimation framework presented in . They propose a method
+based on a variant of a common algebraic manipulation and
+show that this manipulation leads to an unbiased, consistent
+estimator. They pose monocular egomotion as a nonlinear
+least-squares problem in terms of the translational velocity. In this framework, angular velocity and inverse scene
+depths are also easily recovered after translational velocity
+is estimated. To add robustness, they use a loss function
+with sub-quadratic growth, which they solve by iteratively
+reweighted least squares (IRLS). We use a similar formulation but demonstrate several novel methods for estimating
+the parameters of a robust loss formulation. Our methods
+have properties that are well-suited for dealing with image
+sequences containing several thousand ﬂow vectors in real
+time. In particular, we demonstrate that the ERL method adds
+robustness without requiring costly iterative reweighting,
+resulting in very little runtime overhead.
+Other methods for monocular odometry augment velocity
+data with planar homography estimates or depth
+ﬁlters to estimate scale. In this work, we do not rely on
+ground-plane estimation in order to maintain applicability to
+cases such as UAV navigation, where image sequences do not
+always contain the ground plane. Because we focus on frameby-frame motion estimation, we cannot rely on a ﬁltering
+Algorithm 1 ERL conﬁdence weight estimation
+Input: Measured ﬂow {un}N
+n=1, sampled translational velocities {tm}M
+Output: Estimated conﬁdence weights { ˆwn}N
+for all m do
+Compute scaled residuals:
+˜ru = |A⊥(tm)⊤(B ˆωm(tm)−u)|
+Compute maximum likelihood estimators of residual distribution:
+ˆµm = median(˜ru)
+∥˜run −ˆµm∥
+for all n do
+Compute conﬁdence weights as expected likelihood under Laplacian ﬁts:
+L (˜run; ˆµm, ˆbm)
+return { ˆwn}N
+approach to estimate depth. Our method can be augmented
+with domain-appropriate scale or depth estimators as part of
+a larger SLAM system.
+C. Robust optimization
+In this work, we propose to increase the robustness of
+monocular egomotion estimation (1) by estimating each ﬂow
+vector’s conﬁdence weight as its expected residual likelihood
+(ERL) and (2) by using a lifted robust kernel to jointly
+estimate conﬁdence weights and model parameters. ERL
+conﬁdence weights are conceptually similar to the weights
+recovered in the IRLS method for optimizing robust kernels
+ . Robust kernel methods attempt to minimize the residuals of observations generated by the target model process
+(“inliers”) while limiting the inﬂuence of other observations
+(“outliers”). Such methods have been used very successfully
+in many domains of computer vision . However, we
+are unaware of any previous work that attempts to estimate
+conﬁdence weights based on the distribution of residuals
+at counterfactual model parameters, as we do in the ERL
+The lifted kernel approach offers another method to design
+and optimize robust kernels in particularly desirable ways.
+Lifted kernels have recently been used in methods for bundle
+adjustment in SfM , object pose recovery , and nonrigid object reconstruction . Our lifted kernel approximates the truncated quadratic loss, which has a long history
+of use in robust optimization in computer vision and
+has demonstrated applicability in a wide variety of problem
+Previous studies have used robust loss functions for
+monocular egomotion , visual SLAM , and RGB-
+D odometry . To our knowledge, we present the ﬁrst
+application of lifted kernels for robust monocular egomotion.
+Noise is typically handled in odometry by using samplingbased iterative methods such as RANSAC, which makes use
+of a small number of points to estimate inlier sets (typically
+ﬁve or eight points in monocular methods). The use of a
+robust kernel allows us to derive our ﬁnal estimate from
+a larger number of points. This is desirable because the
+structure of the problem of continuous monocular odometry
+admits fewer correct solutions when constrained by a larger
+number of input points, which can better reﬂect the complex
+depth structure of real scenes. Our robust methods allow us
+to take advantage of a large number of ﬂow estimates, which,
+while noisy, may each contribute weakly to the ﬁnal estimate.
+III. PROBLEM FORMULATION AND APPROACH
+In this section, we present the continuous formulation of
+the problem of monocular visual egomotion. We describe
+and motivate our approach for solving the problem in the
+presence of noisy optical ﬂow. We then describe two methods
+for estimating the conﬁdence weights for each ﬂow vector in
+a robust formulation of the problem, as well as the pipeline
+we use to estimate camera motion and scene depth.
+A. Visual egomotion computation and the motion ﬁeld
+In the continuous formulation, visual egomotion methods
+attempt to estimate camera motion and scene parameters
+from observed local image velocities (optical ﬂow). The
+velocity of an image point due to camera motion in a rigid
+scene under perspective projection is given by
+u(xi) = ρ(xi)A(xi)t +B(xi)ω.
+where ui(xi) = (ui,vi)⊤∈R2 is the velocity (optical ﬂow)
+at image position xi = (xi,yi)⊤∈R2, t = (tx,ty,tz)⊤∈R3
+is the camera’s instantaneous translational velocity, ω =
+(ωx,ωy,ωz)⊤∈R3 is the camera’s instantaneous rotational
+velocity, and ρ(xi) =
+Z(xi) ∈R is the inverse of scene depth
+at xi along the optical axis. We normalize the camera’s
+focal length to 1, without loss of generality. In the case of
+calibrated image coordinates,
+This formulation is appropriate for the small-baseline case
+where point correspondences between frames can be treated
+as 2D motion vectors.
+The goal of monocular visual egomotion computation is
+thus to estimate the six motion parameters of t and ω and the
+N values for ρ from N point velocities u induced by camera
+motion. t and ρ are multiplicatively coupled in equation (1)
+above, so t can only be recovered up to a scale. We therefore
+restrict estimates of t to the unit hemisphere, ∥t∥= 1.
+The full expression for the set of N point velocities can
+be expressed compactly as
+u = A(t)ρ +Bω.
+where the expressions for A(x), B(x), and ρ(x) for all N
+points are
+∈R2N×N
+∈R2N×3
+and the velocity and depth for each of the points are
+concatenated to form u = (u⊤
+N)⊤∈R2N×1 and
+ρ = (ρ(x1),ρ(x2),...,ρ(xN))⊤∈RN×1. We estimate camera
+motion and scene depth by minimizing the objective
+t,ρ,ω E(t,ρ,ω) = min
+t,ρ,ω L(r(t,ρ,ω))
+t,ρ,ω ∥A(t)ρ +Bω −u∥2
+Here, L(x) : RN →R is a loss function and r(t,ρ,ω) :
+RN+6 →RN is a residual function for the ﬂow ﬁeld depending on the estimated model parameters. We ﬁrst describe the
+case of an unweighted residual function under a quadratic
+loss, which is suitable for the case of Gaussian noise.
+Following , we note that no loss of generality occurs
+by ﬁrst solving this objective for ρ in the least-squares sense.
+Minimizing over ρ gives
+ρ ∥A(t)ρ +Bω −u∥2
+t,ω ∥A⊥(t)⊤(Bω −u)∥2
+where A⊥(t) is the orthogonal compliment to A(t). This
+expression no longer depends on ρ and depends on t only
+through A⊥(t)⊤, which is fast to compute due to the sparsity
+of A(t) (see section II of the supplement for more details).
+In the absence of noise, we could proceed by directly
+minimizing equation (4) in t and ω. In particular, given a
+solution for t, we can directly solve for ω by least squares in
+O(N) time. In the noiseless case, we estimate t by optimizing
+∥A⊥(t)⊤(B ˆω(t)−u)∥2
+where ˆω(t) is the least-squares estimate of ω for a given
+t (see section IV of the supplement for more details). This
+method of estimating t, ρ, and ω was shown to be consistent
+in . That is, in the absence of outliers, this method
+leads to arbitrarily precise, unbiased estimates of the motion
+parameters as the sample size increases.
+B. Robust formulation
+However, the manipulations introduced in equations (4)
+and (5) rely on least-squares solutions and are not stable
+in the presence of outliers. Accordingly, instead of directly
+solving (5), we propose to solve a robust form. To do so, we
+introduce a conﬁdence weight for each ﬂow vector wi(ui) ∈
+ to give
+L(r(t, ˆω(t)),w)
+∥w◦A⊥(t)⊤(B ˆω(t)−u)∥2
+where w = (w(u1),w(u2),...,w(uN))⊤∈ N is the vector
+of all weights, r ∈RN is the vector of residuals for the ﬂow
+ﬁeld at some estimate of t, and ◦is the Hadamard product.
+Each entry w(ui) of w attempts to weight the corresponding data point ui proportionally to its residual at the optimal
+model parameters (ˆt, ˆρ, ˆω), reﬂecting the degree to which the
+point is consistent with a single generating function for the
+motion in the scene, possibly with Gaussian noise. In other
+words, it reﬂects the degree to which ui is an inlier for the
+optimal model of camera motion in a rigid scene. This is
+equivalent to replacing the choice of L(x) = x2 as the loss in
+equation (5) with a function that grows more slowly.
+We introduce a method to directly estimate the conﬁdence
+weights as the expected residual likelihood (ERL) for each
+ﬂow vector given the distribution of residuals for the ﬂow
+ﬁeld at a range of model parameters consistent with the
+solution in (5). We interpret each weight in terms of an
+estimate of the validity of the corresponding point under
+the model: that is, as an estimate of the point’s residual at
+the optimal model parameters in a noise-free context. We
+compare ERL to a method that replaces L(x) = x2 in (5) with
+a lifted truncated quadratic kernel and jointly optimizes
+the conﬁdence weights and model parameters. We demonstrate that ERL outperforms the lifted kernel approach on
+the KITTI dataset, and both of these approaches outperform
+existing methods for monocular egomotion computation.
+C. Conﬁdence weight estimation by expected residual likelihood
+Here, we describe the ERL method for estimating the con-
+ﬁdence weights in (6), and we demonstrate that this method
+provides a good estimate of the appropriate conﬁdence
+weights in the case of optical ﬂow for visual egomotion.
+At the optimal model parameters, (t∗,ρ∗,ω∗), the residuals for inlier points (i.e. correct ﬂow vectors due to rigid
+motion) are distributed according to a normal distribution, re-
+ﬂecting zero-mean Gaussian noise. However, in the presence
+of outliers, a zero-mean Laplacian distribution provides a better description of the residual distribution (see Supplemental
+Fig. 2). Accordingly, we can ﬁt a Laplacian distribution to
+the observed residuals at the optimal model parameters to
+approximate the probability density function for residuals.
+We use this property to identify outliers as those points
+that are inconsistent with the expected residual distribution
+at a range of model values. For each point, we compute the
+likelihood of each observed, scaled residual as
+ui|(tm,ρm,ωm),˜rm
+u ) = L (˜rui; ˆµm, ˆbm),
+ui is the scaled residual under the mth model
+(tm,ρm,ωm) at the ith ﬂow vector and ˜rm
+u2,..., ˜rm
+We ﬁt ˆµm and ˆbm, respectively the location and scale parameters of the Laplacian distribution, to the set of scaled
+residuals ˜rm
+u using maximum likelihood.
+Because inliers exhibit smaller self-inﬂuence than outliers
+ , inlier residuals will typically be associated with higher
+likelihood values. However, the distribution used to estimate
+the likelihood reﬂects both the inlier and outlier points. If
+the counterfactual model parameters used to estimate the mth
+likelihood correspond to a model that is highly suboptimal,
+some outliers may be assigned higher likelihoods than they
+Line fitting with outliers
+Least squares fit
+Confidence weight assigned by ERL
+A 2D line-ﬁtting problem demonstrating how ERL weights inliers
+and outliers. Inliers are generated as yi ≈2xi +1 with Gaussian noise. Each
+data points is colored according to its estimated conﬁdence weight.
+would be at the optimal model. Moreover, the presence
+of Gaussian noise means that the estimated likelihood for
+individual inliers may be erroneously low by chance for a
+particular model even if the optimal exponential distribution
+is exactly recovered.
+To arrive at more reliable estimates and to discount the
+effect of erroneous likelihoods due to the speciﬁc model parameters being evaluated, we estimate the expected residual
+likelihood for each data point by evaluating the likelihood
+under M models,
+ˆwi = E[˜rm
+L (˜rui; ˆµm, ˆbm).
+This method returns a vector ˆw ∈RN. To use ˆw as conﬁdence
+weights in a robust optimization context, we scale them to
+the interval . Scaling the maximum ˆwi to 1 and the
+minimum ˆwi to 0 for each ﬂow ﬁeld works well in practice.
+The full process to estimate weights by ERL is shown
+in Algorithm 1. This method returns conﬁdence weights in
+O(MN) time, where M is set by the user. Empirically, the
+ERL method gives results that reﬂect the inlier structure of
+the data with small values of M (we use M ≈100), allowing
+very quick runtimes. In practice, the method assigns high
+weights to very few outliers while assigning low weights to
+acceptably few inliers. Thus, the method balances a low false
+positive rate against a moderately low false negative rate.
+This is a good strategy because our method takes a large
+number of ﬂow vectors as input, which leads to redundancy
+in the local velocity information. Fig. 2 illustrates the ERL
+method’s use in a simple 2D robust line-ﬁtting application.
+As discussed above, choosing values for the conﬁdence
+weights in a least squares objective is equivalent to ﬁtting a
+robust kernel. We note that regression under the assumption
+of Laplacian noise leads to an L1 cost. However, we have no
+guarantees about the form of the robust kernel corresponding
+to the weights chosen by the ERL method. Accordingly, we
+also explored using a robust kernel with known properties.
+D. Robust estimation using a lifted kernel
+Here, we explore the effect of jointly optimizing the
+conﬁdence weights, w(u), and ω for a given value of t using
+Error surface after outliers removed
+Translation, x component
+Lifted kernel error surface
+Translation, x component
+Translation, y component
+ERL error surface
+Translation, y component
+Raw error surface
+Robust methods recover the error surface of the outlier-free ﬂow
+ﬁeld. (A) Example optical ﬂow ﬁeld from two frames of KITTI odometry
+(sequence 10, images 14-15). Note the prominent outliers indicated by
+the yellow box. Error surfaces on this ﬂow ﬁeld for (A) the raw method
+(equation (5)) with all ﬂow vectors, (B) with outliers removed by hand, and
+(C) with conﬁdence weights estimated by ERL or (D) the lifted kernel. The
+green point is the true translational velocity and the black point the method’s
+estimate. Blue: low error. Red: high error. Translation components are given
+in calibrated coordinates.
+the lifted kernel approach described in . In our case, a
+lifted kernel takes the form
+t,ω,w ˆL(r(t,ω),w)
+ω,w(∥w◦A⊥(t)⊤(Bω(t)−u)∥2
+where the lifted kernel of the loss L is denoted as ˆL. κ(x) :
+R →R is a regularization function applied to the weights.
+Because this approach does not rely on the least squares
+solution for rotational velocity, ˆω, it may gain additional
+robustness to noise. This approach also allows us to estimate
+the conﬁdence weights for particular values of t, unlike the
+ERL approach, which relies on estimates at several values
+of t to produce stable results.
+Different choices of κ produces different kernels. We use
+which gives a kernel that is a smooth approximation to the
+truncated quadratic loss . τ is a hyperparameter that
+determines the extent of the quadratic region of the truncated
+quadratic loss. We set τ = 0.05 for all results shown here,
+but other choices give similar results.
+The lifted kernel approach to solving nonlinear least
+squares problems is similar to IRLS insofar as it incorporates
+Vehicle velocity (m/s)
+Rotational error (percent)
+Median Rotational Error
+Soatto/Brockett
+Zhang/Tomasi
+8-Pt Epipolar + RANSAC
+Lifted Kernel
+Translational error (deg)
+Median Translational Error
+Median translational and rotational errors on the full KITTI
+odometry dataset for our methods and baselines.
+conﬁdence weights on each of the data points and optimizes
+the values of these weights in addition to the value of the
+target model parameters. However, rather than alternately estimating the best weights given estimated model parameters
+and the best model parameters given estimated weights, the
+lifted approach simultaneously optimizes for both weights
+and model parameters, effectively “lifting” a minimization
+problem to a higher dimension.
+The lifted kernel approach has several properties that
+are particularly beneﬁcial for encouraging fast convergence.
+First, by using the weights to increase the dimensionality
+of the optimization problem, the lifted kernel minimizes the
+extent of regions of low gradient in the cost function. This
+ensures the method can quickly and reliable converge to
+minima of the function. Second, optimization can exploit the
+Gauss-Newton structure of the joint nonlinear least-squares
+formulation for faster convergence than the slower iterativeclosest-points-like convergence exhibited by IRLS.
+To illustrate the effect of our two robust optimization
+strategies, we display the error surfaces for the ERL and
+lifted-kernel methods on a sample ﬂow ﬁeld from KITTI
+(Fig. 3). The error surfaces are shown as a function of the
+translational velocity. Both methods recover error surfaces
+that resemble the error due to inlier ﬂow vectors. The
+conﬁdence weights estimated by ERL generally more closely
+resemble the pattern of inliers and outliers in ﬂow data.
+To produce the results for the case with outliers removed,
+we strengthened the maximum bidirectional error criterion
+for ﬂow inclusion to eliminate noisy matches and manually
+removed obvious outliers from the ﬂow ﬁeld.
+IV. EXPERIMENTS
+We compare the performance of the proposed methods
+(called “ERL” and “Lifted Kernel” in the ﬁgures) to several
+baseline methods for monocular egomotion/visual odometry
+from the literature: 5-point epipolar+RANSAC (using ),
+8-point epipolar+RANSAC (using ), and two continuous
+epipolar methods - Zhang/Tomasi , which is identical to
+equation (5), and Soatto/Brockett . All experiments were
+run on a desktop with an Intel Core i7 processor and 16 GB
+of RAM. A single CPU core was used for all experiments.
+With ∼1000 ﬂow vectors, the ERL method runs at 30-40
+Hz in an unoptimized C++ implementation. Because of the
+low overhead of the ERL procedure, this is effectively the
+same runtime as the Zhang/Tomasi method. The lifted kernel
+optimization has no convergence guarantees, and it typically
+runs at <1 Hz in a MATLAB implementation. Note that both
+of these runtimes can be signiﬁcantly improved with better
+optimization. The Soatto/Brockett method runs extremely
+quickly (>500 Hz), but performs poorly on real sequences.
+The implementation of epipolar+RANSAC used here runs at
+∼25 Hz. Optical ﬂow for all our results was extracted using
+a multiscale implementation of the KLT method .
+For both ERL and the lifted approach, we optimize t
+using Gauss-Newton. We initialize t at a grid of values
+spaced over the unit hemisphere to decrease the chance of
+converging to a non-global minimum. We then prune the
+grid to a single initial value t0 by choosing the grid point
+that gives the lowest residual under equation (6) or (9) for
+ERL or the lifted kernel, respectively. We then optimize
+to convergence starting from t0. This pruning strategy is
+effective at avoiding local minima because good estimates for
+the weights return an error surface that is very similar to the
+noiseless case (see Fig. 3) and this error surface is smooth
+with respect to the sampling density we use (625 points)
+ . Conﬁdence weights for ERL are computed using model
+parameters sampled on a coarser grid (100 points), as this is
+adequate to give good conﬁdence weight estimates.
+For all tests using the lifted kernel, we optimize the expression in equation (9) using the efﬁcient Schur compliment
+implementation of Levenberg-Marquardt described in .
+Details of the optimization procedure used here are given
+in section III of the supplement. We did not explore jointly
+optimizing over t, ω, and w, but joint optimization over these
+model parameters with a lifted kernel is possible, and we plan
+to explore its use in future work.
+A. Evaluation on KITTI
+We evaluate the performance of our method using the
+KITTI dataset , which is a collection of real-world
+driving sequences with ground-truth camera motion and
+depth data. The sequences contained in the dataset are
+challenging for state-of-the-art odometry methods for several
+reasons. First, they contain large inter-frame motions and
+repetitive scene structures that make estimating accurate
+ﬂow correspondences difﬁcult in real time. Second, several
+sequences feature little to no camera motion, which typically
+causes monocular odometry methods to fail. Finally, some
+sequences contain independent motion due to other vehicles
+and pedestrians, which violates the assumption of scene
+rigidity and makes reliable odometry more difﬁcult.
+All results are performed on neighboring frames of the
+KITTI odometry dataset (no skipped-frame sequences are
+evaluated), as these image pairs better match the modeling
+assumptions of continuous egomotion/odometry methods.
+All sequences were captured at 10 Hz at a resolution of 1392
+x 512 pixels. We evaluated all methods on all 16 sequences
+of the KITTI odometry test set.
+The results for methods on KITTI are shown in Figs.
+4-6. For ease of visualization, the results for the 5-point
+Translational velocity error (deg)
+Zhang/Tomasi
+8-Pt Epipolar + RANSAC
+Vehicle speed (m/s)
+Lifted Kernel
+Full distribution of translational velocity errors.
+Zhang/Tomasi
+8-Pt Epipolar + RANSAC
+Vehicle speed (m/s)
+Rotational velocity error (percent)
+Lifted Kernel
+Full distribution of rotational velocity errors.
+epipolar method with RANSAC are not shown (they were
+signiﬁcantly worse than all other methods we attempted).
+ERL produces the best estimates of translational velocity,
+while the lifted kernel produces results of similar quality to 8point epipolar with RANSAC and the Zhang/Tomasi method.
+ERL, the lifted kernel, and Zhang/Tomasi produce rotational
+velocity estimates of similar quality. The 8-point epipolar
+method produces worse estimates in this case because of the
+large baseline assumption, which is not suitable for rotational
+velocity estimation under these conditions. Soatto/Brockett
+produces bad estimates in these test cases because of the
+bias introduced by its algebraic manipulation.
+B. Synthetic sequences
+To estimate the robustness of our methods to outliers,
+we test the methods on synthetic data. Synthetic data were
+created by simulating a ﬁeld of 1500 image points distributed
+uniformly at random depths between 2 and 10 m in front
+of the camera and uniformly in x and y throughout the
+frame. A simulated camera is moved through this ﬁeld with a
+translational velocity drawn from a zero-mean Gaussian with
+standard deviation of 1 m/frame and a rotational velocity
+drawn from a zero-mean Gaussian with standard deviation of
+0.2 radians/frame. Flow was generated from the resulting 3D
+point trajectories by perspective projection using a camera
+model with a 1 m focal length. All ﬂow vectors were
+corrupted with noise in a random direction and magnitude
+drawn from a zero-mean Gaussian with a standard deviation
+1/10th the mean ﬂow vector magnitude. Outliers were created
+by replacing a fraction of the points with random values
+drawn from a Gaussian ﬁt to the magnitude and direction of
+all inlier ﬂow vectors. We ran 100 iterations at each outlier
+rate. We ran all egomotion methods on the same data.
+Percent outliers
+Translational velocity error (deg)
+Performance on synthetic data
+Soatto/Brockett
+Zhang/Tomasi
+Lifted Kernel
+Translation error as a function of percent outliers on synthetic data
+for our robust methods and two baseline continuous egomotion methods.
+The errors in translational motion estimated on this data
+are shown in Fig. 7. As expected, the two robust methods
+outperform least-squares methods for reasonable numbers of
+outliers. At higher outlier rates, however, the performance
+of both robust methods deteriorates. Interestingly, the performance of the lifted kernel method is stable even when the
+majority of data points are outliers. We are uncertain why
+the lifted kernel performs better than ERL on synthetic data,
+while the opposite is true for KITTI. This difference may be
+due to the way the data were generated - in KITTI, outliers
+often reﬂect real structures in the scene and may contain
+some information about camera motion, but this is not the
+case in the synthetic data. The difference may also be due
+in part to the difference in depth structures in KITTI and
+the synthetic data. In KITTI, ﬂow magnitude for both inliers
+and outliers is reﬂective of depth structure, and depth in real
+scenes is not distributed uniformly.
+V. CONCLUSIONS
+We have introduced new techniques for robust, continuous
+egomotion computation from monocular image sequences.
+We described ERL, a novel robust method that directly
+estimates conﬁdence weights for the vectors of a ﬂow ﬁeld
+by evaluating the distribution of ﬂow residuals under a set
+of self-consistent counterfactual model parameters. We also
+introduced a new formulation of the perspective motion
+equation using a lifted kernel for joint optimization of
+model parameters and conﬁdence weights. We compared the
+results of ERL and the lifted kernel formulation, and showed
+that while the lifted kernel appears to be more stable in
+the presence of a large fraction of outliers, ERL performs
+better in a real-world setting. The ERL method achieves
+good results on KITTI without relying on stereo data or
+ground plane estimation and accordingly is well-suited for
+use in lightweight UAV navigation. We are unable to directly
+evaluate our methods on this target domain because there
+are currently no UAV datasets with suitable ground truth.
+Although the empirical results here are promising, we have
+no guarantees on the weights recovered by ERL, and this
+remains a topic for future work.
+Our code is publicly available at 
+com/stephenphillips42/erl_egomotion.
+ACKNOWLEDGMENTS
+The authors gratefully acknowledge support by the grants
+NSF-DGE-0966142, NSF-IIP-1439681, NSF-IIS-1426840,
+ARL MAST-CTA W911NF-08-2-0004, and ARL RCTA
+W911NF-10-2-0016.

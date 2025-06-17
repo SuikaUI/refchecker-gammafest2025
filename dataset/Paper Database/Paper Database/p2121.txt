@@ -1,0 +1,603 @@
+Importance Estimation for Neural Network Pruning
+Pavlo Molchanov, Arun Mallya, Stephen Tyree, Iuri Frosio, Jan Kautz
+{pmolchanov, amallya, styree, ifrosio, jkautz}@nvidia.com
+Structural pruning of neural network parameters reduces
+computation, energy, and memory transfer costs during inference. We propose a novel method that estimates the
+contribution of a neuron (ﬁlter) to the ﬁnal loss and iteratively removes those with smaller scores. We describe
+two variations of our method using the ﬁrst and secondorder Taylor expansions to approximate a ﬁlter’s contribution. Both methods scale consistently across any network
+layer without requiring per-layer sensitivity analysis and
+can be applied to any kind of layer, including skip connections. For modern networks trained on ImageNet, we
+measured experimentally a high (>93%) correlation between the contribution computed by our methods and a reliable estimate of the true importance. Pruning with the
+proposed methods leads to an improvement over state-ofthe-art in terms of accuracy, FLOPs, and parameter reduction. On ResNet-101, we achieve a 40% FLOPS reduction
+by removing 30% of the parameters, with a loss of 0.02%
+in the top-1 accuracy on ImageNet. Code is available at
+ 
+1. Introduction
+Convolutional neural networks (CNNs) are widely used
+in today’s computer vision applications. Scaling up the size
+of datasets as well as the models trained on them has been
+responsible for the successes of deep learning. The dramatic increase in number of layers, from 8 in AlexNet ,
+to over 100 in ResNet-152 , has enabled deep networks to achieve better-than-human performance on the ImageNet classiﬁcation task. Empirically, while larger
+networks have exhibited better performance, possibly due to
+the lottery ticket hypothesis , they have also been known
+to be heavily over-parameterized .
+The growing size of CNNs may be incompatible with
+their deployment on mobile or embedded devices, with limited computational resources. Even in the case of cloud
+services, prediction latency and energy consumption are
+important considerations. All of these use cases will bene-
+Top-1 Error (%)
+Parameters (1e7)
+ResNet-101
+No pruning
+Taylor-FO-BN (Ours)
+Li et al. 
+ThiNet 
+Ye et al. 
+Figure 1: Pruning ResNets on the ImageNet dataset. The proposed
+method is highlighted in gray. Bottom-left is better.
+ﬁt greatly from the availability of more compact networks.
+Pruning is a common method to derive a compact network
+– after training, some structural portion of the parameters is
+removed, along with its associated computations.
+A variety of pruning methods have been proposed, based
+on greedy algorithms , sparse regularization , and reinforcement learning . Many of them rely on
+the belief that the magnitude of a weight and its importance
+are strongly correlated. We question this belief and observe a
+signiﬁcant gap in correlation between weight-based pruning
+decisions and empirically optimal one-step decisions – a gap
+which our greedy criterion aims to ﬁll.
+We focus our attention on extending previously proposed
+methods with a new pruning criterion and a
+method that iteratively removes the least important set of
+neurons (typically ﬁlters) from the trained model. We deﬁne
+the importance as the squared change in loss induced by
+removing a speciﬁc ﬁlter from the network. Since computing the exact importance is extremely expensive for large
+networks, we approximate it with a Taylor expansion (akin
+to ), resulting in a criterion computed from parameter
+gradients readily available during standard training. Our
+method is easy to implement in existing frameworks with
+minimal overhead.
+Additional beneﬁts of our novel criterion include: a) no
+ 
+hyperparameters to set, other than providing the desired
+number of neurons to prune; b) globally consistent scale
+of our criterion across network layers without the need for
+per-layer sensitivity analysis; c) a simple way of computing
+the criterion in parallel for all neurons without greedy layerby-layer computation; and d) the ability to apply the method
+to any layer in the network, including skip connections. We
+highlight our main contributions below:
+• We propose a new method for estimating, with a little
+computational overhead over training, the contribution
+of a neuron (ﬁlter) to the ﬁnal loss. To do so, we use
+averaged gradients and weight values that are readily
+available during training.
+• We compare two variants of our method using the
+ﬁrst and second-order Taylor expansions, respectively,
+against a greedy search (“oracle”), and show that both
+variants achieve state-of-the-art results, with our ﬁrstorder criteria being signiﬁcantly faster to compute with
+slightly worse accuracy.
+We also ﬁnd that using a squared loss as a measure
+for contribution leads to better correlations with the
+oracle and better accuracy when compared to signed
+difference .
+Estimated Spearman correlation with the oracle on
+ResNets and DenseNets trained on ImageNet show
+signiﬁcant agreement (>93%), a large improvement
+over previous methods , leading to
+improved pruning.
+• Pruning results on a wide variety of networks trained
+on CIFAR-10 and ImageNet, including those with skip
+connections, show improvement over state-of-the-art.
+2. Related work
+One of the ways to reduce the computational complexity
+of a neural network is to train a smaller model that can mimic
+the output of the larger model. Such an approach, termed
+network distillation, was proposed by Hinton et al. .
+The biggest drawback of this approach is the need to
+deﬁne the architecture of the smaller distilled model beforehand.
+Pruning – which removes entire ﬁlters, or neurons, that
+make little or no contribution to the output of a trained network – is another way to make a network smaller and faster.
+There are two forms in which structural pruning is commonly applied: a) with a predeﬁned per-layer pruning ratio,
+or b) simultaneously over all layers. The second form allows pruning to automatically ﬁnd a better architecture, as
+demonstrated in . An exact solution for pruning will be
+to minimize the ℓ0 norm of all neurons and remove those that
+are zeroed-out. However, ℓ0 minimization is impractical as
+it is non-convex, NP-hard, and requires combinatorial search.
+Therefore, prior work has tried to relax the optimization
+using Bayesian methods or regularization terms.
+One of the ﬁrst works that used regularization, by Hanson
+and Pratt , used weight decay along with other energy
+minimization functions to reduce the complexity of the neural network. At the same time, Chauvin discovered that
+augmenting the loss with a positive monotonic function of
+the energy term can lead to learning a sparse solution.
+Motivated by the success of sparse coding, several methods relax ℓ0 minimization with ℓ1 or ℓ2 regularization, followed by soft thresholding of parameters with a predeﬁned
+threshold. These methods belong to the family of Iterative
+Shrinkage and Thresholding Algorithms (ISTA) . Han et
+al. applied a similar approach for removing individual
+weights of a neural network to obtain sparse non-regular
+convolutional kernels. Li et al. extended this approach
+to remove ﬁlters with small ℓ1 norms.
+Due to the popularity of batch-normalization layers
+in recent networks , several approaches have been
+proposed for ﬁlter pruning based on batch-norm parameters . These works regularize the scaling term (γ) of
+batch-norm layers and apply soft thresholding when value
+fell below a predeﬁned threshold. Further, FLOPS-based
+penalties can also be included to directly reduce computational costs . A more general scheme that uses an ISTAlike method on scaling factors was proposed by and can
+be applied to any layer.
+All of the above methods explicitly rely on the belief
+that the magnitude of the weight or neuron is strongly correlated with its importance. This belief was investigated as
+early as 1988 by Mozer who proposed adding a gating
+function after each layer to be pruned. With gate values
+initialized to 1, the expectation of the negative gradient is
+used as an approximation for importance. Mozer noted that
+weights magnitude merely reﬂect the statistics of importance.
+LeCun et al. also questioned whether magnitude is a
+reasonable measure of neuron importance. The authors suggested using a product of the Hessian’s diagonal and the
+squared weight as a measure of individual parameter importance, and demonstrated improvement over magnitude-only
+This approach assumes that after convergence, the Hessian is a positive deﬁnite matrix, meaning that removing
+any neuron will only increase the loss. However, due to
+stochasticity in training with minibatches under a limited
+observation set and in the presence of saddle points, there do
+exist neurons whose removal will decrease the loss.
+Our method does not assume that the contribution of all
+neurons is strictly positive. Therefore, we approximate the
+squared difference of the loss when a neuron is removed and
+can do so with a ﬁrst-order or second-order approximation,
+if the Hessian is available.
+A few works have estimated neuron importance empirically. Luo et al. propose to use a greedy per-layer
+procedure to ﬁnd the subset of neurons that minimize a reconstruction loss, at a signiﬁcant computational cost. Yu et
+al. estimate the importance of input features to a linear
+classiﬁer and propagate their importance assuming Lipschitz
+continuity, requiring additional computational costs and nontrivial implementation of the feature score computation. Our
+proposed method is able to outperform these methods while
+requiring little additional computation and engineering.
+Pruning methods such as require sensitivity analysis in order to estimate the pruning ratio that
+should be applied to particular layers. Molchanov et al. 
+assumed all layers have the same importance in feed-forward
+networks and proposed a normalization heuristic for global
+scaling. However, this method fails in networks with skip
+connections. Further, it computes the criterion using network
+activations, which increases memory requirements. Conversely, pruning methods operating on batch-normalization
+ do not require sensitivity analysis and can be
+applied globally. Our criterion has globally-comparable scaling by design and does not require sensitivity analysis. It can
+be efﬁciently applied to any layer in the network, including
+skip connections, and not only to batch-norm layers.
+A few prior works have utilized pruning as a network
+training regularizer. Han et al. re-initialize weights after
+pruning and ﬁnetune them to achieve even better accuracy
+than the initial model. He et al. extend this idea by
+training ﬁlters even after they were zeroed-out. While our
+work focuses only on removing ﬁlters from networks, it
+might be possible to extend it as a regularizer.
+Given neural network parameters W = {w0, w1, ..., wM}
+and a dataset D = {(x0, y0), (x1, y1), ..., (xK, yK)} composed of input (xi) and output (yi) pairs, the task of training
+is to minimize error E by solving:
+W E(D, W) = min
+W E(y|x, W).
+In the case of pruning we can include a sparsiﬁcation
+term in the cost function to minimize the size of the model:
+W E(D, W) + λ||W||0,
+where λ is a scaling coefﬁcient and ||·||0 is the ℓ0 norm which
+represents the number of non-zero elements. Unfortunately
+there is no efﬁcient way to minimize the ℓ0 norm as it is
+non-convex, NP-hard, and requires combinatorial search.
+An alternative approach starts with the full set of parameters W upon convergence of the original optimization (1)
+and gradually reduces this set by a few parameters at a time.
+In this incremental setting, the decision of which parameters to remove can be made by considering the importance
+of each parameter individually, assuming independence of
+parameters. We refer to this simpliﬁed approximation to full
+combinatorial search as greedy ﬁrst-order search.
+The importance of a parameter can be quantiﬁed by the
+error induced by removing it. Under an i.i.d. assumption,
+this induced error can be measured as a squared difference
+of prediction errors with and without the parameter (wm):
+E(D, W) −E(D, W|wm = 0)
+Computing Im for each parameter, as in (3), is computationally expensive since it requires evaluating M versions of the
+network, one for each removed parameter.
+We can avoid evaluating M different networks by approximating Im in the vicinity of W by its second-order Taylor
+expansion:
+where gm =
+∂wm are elements of the gradient g, Hi,j =
+∂wi∂wj are elements of the Hessian H, and Hm is its m-th
+row. An even more compact approximation is computed
+using the ﬁrst-order expansion, which simpliﬁes to:
+The importance in Eq. (5) is easily computed since the
+gradient g is already available from backpropagation. For
+the rest of this section we will primarily use the ﬁrst-order
+approximation, however most statements also hold for the
+second-order approximation. Future reference we denote the
+set of ﬁrst-order importance approximations:
+I(1)(W) = {I(1)
+1 (W), I(1)
+2 (W), ..., I(1)
+To approximate the joint importance of a structural set
+of parameters WS, e.g. a convolutional ﬁlter, we have two
+alternatives. We can deﬁne it as a group contribution:
+or, alternatively, sum the importance of the individual parameters in the set,
+For insight into these two options, and to simplify calculations, we add “gates” to the network, z = 1M, with
+weights equal to 1 and dimensionality equal to the number
+of neurons (feature maps) M. Gating layers make importance score computation easier, as they: a) are not involved
+in optimization; b) have a constant value, therefore allowing
+W to be omitted from Eq. (4-8); and c) implicitly combine
+the contributions of ﬁlter weights and bias.
+If a gate zm follows a neuron parameterized by weights
+Ws∈Sm, then the importance approximation I(1)
+Sm(W), (9)
+where S represents the inner dimensions needed to compute
+the output of the previous layer, e.g. input dimension for a
+linear layer, or spatial and input dimensions for a convolutional layer. We see that gate importance is equivalent to
+group contribution on the parameters of the preceding layer.
+Through some manipulation, we can make a connection
+to information theory from our proposed method. Let’s
+denote hm =
+s∈SmWs∈Sm and observe (under the
+assumption that, at convergence, E(hm)2 = 0):
+Var(hm) = E(h2
+m) −E(hm)2 = I(1)(z),
+where the variance is computed across observations.
+If the error function E(·) is chosen to be the loglikelihood function, then assuming the gradient is estimated
+as hx = ∂ln p(x;z)
+, borrowing from concepts in information
+theory , we obtain
+Varx(h) = E
+where J is the expected Fisher information matrix. We conclude that the variance of the gradient is the expectation of
+the outer product of gradients and is equal to the expected
+Fisher information matrix. Therefore, the proposed metric,
+I(1), can be interpreted as the variance estimate and as the diagonal of the Fisher information matrix. Similar conclusion
+was drawn in .
+3.1. Pruning algorithm
+Our pruning method takes a trained network as input and
+prunes it during an iterative ﬁne-tuning process with a small
+learning rate. During each epoch, the following steps are
+1. For each minibatch, we compute parameter gradients
+and update network weights by gradient descent. We
+also compute the importance of each neuron (or ﬁlter)
+using the gradient averaged over the minibatch, as described in (7) or (8). (Or, the second-order importance
+estimate may be computed if the Hessian is available.)
+2. After a predeﬁned number of minibatches, we average
+the importance score of each neuron (or ﬁlter) over the
+of minibatches, and remove the N neurons with the
+smallest importance scores.
+Fine-tuning and pruning continue until the target number of
+neurons is pruned, or the maximum tolerable loss can no
+longer be achieved.
+3.2. Implementation details
+Hessian computation.
+Computing the full Hessian in
+Eq. (4) is computationally demanding, thus we use a diagonal approximation. During experiments with ImageNet we
+cannot compute the Hessian because of memory constraints.
+Importance score accumulation. During training or ﬁnetuning with minibatches, observed gradients are combined
+to compute a single importance score ˆI = E
+Importance score aggregation. In this work, we compute
+the importance of structured parameters as a sum of individual contributions deﬁned in Eq. (8), unless gates are used
+automatically compute the group contribution on the parameters from the preceding layer. Second-order methods are
+always computed on gates. We observed that the “group
+contribution” criterion in Eq. (7) exhibits very low correlation with the “true” importance (3) if the parameter set S is
+too large, due to expectation of gradients tending to zero at
+convergence.
+Gate placement. Unless otherwise stated, gates are placed
+immediately after a batch normalization layer to capture
+contributions from scaling and shifting parameters simultaneously. The ﬁrst-order criterion computed for a feature
+map m at the gate can be shown to be I(1)
+m (γm, βm) =
+∂γm + βm ∂E
+∂βm )2 with γ and β being the scale and shift
+parameters of the batch normalization.
+Averaging importance scores over pruning iterations.
+We average importance scores between pruning iterations using an exponential moving average ﬁlter (momentum) with
+coefﬁcient 0.9.
+Pruning strategy. We found that the method performs better
+when we deﬁne the number of neurons to be removed, prune
+them in batches and ﬁne-tune the network after that. An
+alternative approach is to continuously prune as long as the
+training or validation loss is below the threshold. The latter
+approach leads the optimization into local minima and ﬁnal
+results are slightly worse.
+Number of minibatches between pruning iterations needs
+be sufﬁcient to capture statistics of the overall data. We use
+10 minibatches and a small batch size for CIFAR datasets,
+but a larger (256) batch size and 30 minibatches for ImageNet pruning, as noted with each experiment.
+Number of neurons pruned per iteration needs to be chosen
+based on how correlated the neurons are to each other. We
+observed that a ﬁlter’s contribution changes during pruning and we usually prune around 2% of initial ﬁlters per
+iteration.
+4. Experiments
+We evaluate our method on a variety of neural network
+architectures on the CIFAR-10 and ImageNet 
+datasets. We also experiment with variations of our method
+to understand the best variant. Whenever we refer to Weight,
+Weight magnitude or BN scale, we use ℓ2 norm.
+4.1. Results on CIFAR-10
+With the CIFAR-10 dataset, we evaluate “oracle” methods and second-order methods by pruning smaller networks,
+including LeNet3 and variants of ResNets and preactivation ResNets .
+We start with a simple network, LeNet3, trained on the
+CIFAR-10 dataset to achieve 73% test accuracy. The architecture of LeNet consists of 2 convolutional and 3 linear layers arranged in a C-R-P-C-R-P-L-R-L-R-L (C:
+Conv, R: ReLU, P: Pooling, L: Linear) order with 16, 32,
+120, 84, and 10 neurons respectively. We prune the ﬁrst 2
+convolutional and ﬁrst 2 linear layers without changing the
+output linear layer or ﬁnetuning after pruning.
+Single layer pruning. In this setup, we only prune the ﬁrst
+convolutional layer. This setting allows us to use the Combinatorial oracle, the true ℓ0 minimizer: we compute the
+loss for all possible combinations of k neurons that can be
+pruned and pick the best one. Note that this requires an exponential number of feedforward passes to evaluate –
+k, where n is the number of ﬁlters and k is number of ﬁlters
+to prune, and so is not practical for multiple layers or larger
+networks. We compare against a greedy search approximation, the Greedy oracle, that exhaustively ﬁnds the single
+best neuron to remove at each pruning step, repeated k times.
+Results shown in Fig. 2 show the loss vs. the number of
+neurons pruned. We observe that the Combinatorial oracle
+is not signiﬁcantly better than the Greedy oracle when pruning a small number of neurons. Considering that the former
+has exponential computational complexity, in subsequent
+experiments we use the Greedy oracle (referred to simply as
+Oracle) as a representation of the best possible outcome.
+Figure 2: Pruning the ﬁrst layer of LeNet3 on CIFAR-10 with
+Combinatorial oracle and Greedy oracle. Networks remain ﬁxed
+and are not ﬁne-tuned. Results for Greedy oracle are averaged over
+30 seeds with mean and standard deviation shown. Best observed
+results for Combinatorial oracle for every seed are averaged.
+All layers pruning. Fig. 3 shows pruning results when all
+layers are pruned using various criteria. We refer to our
+methods based on the Taylor expansion as Taylor FO/Taylor
+SO, indicating the order of the approximation used, ﬁrstand second-order, respectively. We consider both a direct
+application to convolutional ﬁlter weights (“on weight”) and
+the use of gates following each convolutional layer (“on
+gate”).] We treat linear layers as 1 × 1 convolutions. In all
+cases, pruning removes the entire ﬁlter and its corresponding
+bias. At each pruning iteration, we remove the neuron with
+the least importance as measured by the criterion used, and
+measure the loss on the training set.
+Results in Fig. 3 show that Oracle pruning performs best,
+followed closely by the second- and ﬁrst-order Taylor expansion criteria, respectively. Both ﬁrst and second-order Taylor
+methods prune nearly the same number of neurons as the
+Oracle before exceeding the loss threshold. Weight-based
+pruning, which removes neurons with the least ℓ2 norm, performs as poorly as randomly removing neurons. OBD 
+performs similarly to the Oracle and Taylor methods.
+The experiments on LeNet conﬁrm the following: (1) The
+greedy oracle closely follows the pruning performance of
+the Combinatorial oracle for small changes to the network,
+while being exponentially faster to compute. (2) Our ﬁrstorder method (Taylor FO) is comparable to the second-order
+method (Taylor SO) in this setting.
+Now we compare pruning criteria on the more complex architecture ResNet-18, from the pre-activation family .
+Each residual block has an architecture of
+BN1-ReLU-conv1-BN2-ReLU-conv2, together with a
+skip connection from the input to the output, repeated for a
+total of 8 blocks. Trained on CIFAR-10, ResNet-18 achieves
+a test accuracy of 94.79%. For pruning, we consider entire
+Figure 3: Pruning LeNet3 on CIFAR-10 with various criteria. Network remains ﬁxed and is not ﬁne-tuned. Results are averaged over
+50 seeds with mean and standard deviation. The number of pruned
+neurons when the loss reaches 1.0 is shown in parentheses.
+Residual block
+All layers
+Taylor FO on conv weight
+Weight magnitude
+Gate after BN2
+Taylor FO - FG
+Gate before BN2
+Taylor FO - FG
+Table 1: Spearman correlation of different criteria with the Oracle on CIFAR-10 with ResNet-18. (FG denotes full gradient, as
+described in the text).
+feature maps in the conv layers as they command the largest
+share of computational resources.
+In these experiments, we examine the following ways of
+estimating our criterion: (1) Applying it directly on convolutional ﬁlter weights, (2) Using gates placed before BN2 and
+after conv2, and (3) Using gates placed after BN2 and after
+conv2. We remove 100 neurons every 20 minibatches, and
+report ﬁnal results averaged over 10 seeds. We also compare
+using gradients averaged over a mini-batch and gradients
+obtained per data sample, the latter denoted by “full grad”,
+or “FG”. We should note that using the full gradient changes
+the gate formulation from computing the group contribution
+(Eq. 7) to the sum of individual contributions (Eq. 8).
+Table 1 presents the Spearman correlation between various pruning criteria and the greedy oracle. Results in the
+Residual block column are averaged over all 8 blocks. The
+All layers column includes additional layers: the ﬁrst convolutional layer (not part of residual blocks), all convolutions in
+residual blocks, and all strided convolutions. We observe that
+placing the gate before BN2 signiﬁcantly reduces correlation
+– correlation for conv1 drops from 0.95 to 0.28 for Taylor FO, suggesting that the subsequent batch-normalization
+layer signiﬁcantly affects criteria computed from the gate.
+We observe that the effect is less signiﬁcant when the full
+gradient is used, however it shows smaller correlation overall
+with the oracle. OBD has lower correlation than our Taylor based methods. The highest correlation is observed for
+Taylor SO, with Taylor FO following right after. As placing
+gates after BN2 dramatically improves the results, this indicates that the batch-normalization layers play a key role in
+determining the contribution of the corresponding ﬁlter.
+Results of pruning ResNet-18 without ﬁne-tuning are
+shown in Fig. 4. We observe that the oracle achieves the
+best accuracy for a given number of pruned neurons. All
+methods, except “-ﬁxed” and Random, recompute the criteria
+Figure 4: Pruning ResNet-18 trained on CIFAR-10 without ﬁnetuning. The number of neurons pruned when the loss reaches 0.5
+is shown in parentheses.
+after each iterative step and can adjust to the pruned network.
+Oracle-ﬁxed and Taylor FO-ﬁxed are computed across the
+same number of batches as non-ﬁxed criteria. We notice
+that ﬁxed criteria clearly perform signiﬁcantly worse than
+oracle, emphasizing importance of reestimating the criteria
+after each pruning iteration, allowing the values to adjust to
+changes in the network architecture.
+An interesting observation is that the OBD method performs poorly in spite of having a good correlation with the
+oracle in Table 1. The reason for this discrepancy is that
+when we evaluate correlation with the oracle, we square
+estimates of OBD to make them comparable to the way
+the oracle was estimated. However, during pruning, we
+use signed values of OBD, as was prescribed in . As
+mentioned earlier, for deep networks, the diagonal of the
+Hessian is not positive for all elements and removing those
+with negative impact results in increased network instability.
+Therefore, without ﬁne-tuning, OBD is not well suited for
+pruning. Another important observation is that if the Hessian is available, using the Taylor SO expansion can get both
+better pruning and correlation. Surprisingly, we observe no
+improvement in using the full gradient, probably because of
+the switch in contributions from group to individual.
+At this stage, after experiments with the small LeNet3
+network the larger ResNet-18 on the CIFAR-10 dataset, we
+make the following observations: (1) Our proposed criteria
+based on the Taylor expansion of the pruning loss have a
+very high correlation with the neuron ranking produced by
+the oracle. (2) The ﬁrst- and second-order Taylor criteria
+are comparable. As the Taylor FO can be computed much
+faster with a lower memory footprint, further experiments
+with larger networks on ImageNet are performed using this
+criterion only.
+4.2. Results on ImageNet
+Here, we apply our method on the challenging task of
+pruning networks trained on ImageNet , speciﬁcally the
+ILSVRC2012 version. For all experiments in this section,
+we use PyTorch and default pretrained models as a
+starting point for network pruning. We use standard preprocessing and augmentation: re-sizing images to have a
+smallest dimension of 256, randomly cropping a 224 × 224
+patch, randomly applying horizontal ﬂips, and normalizing
+images by subtracting a per-dataset mean and dividing by a
+per-dataset standard deviation. During testing, we use the
+central crop of size 224 × 224.
+Neuron importance correlation study
+We compare against pruning methods that use various heuristics, such as weight magnitude , magnitude of the
+batch-norm scale, BN scale , and output-based
+heuristics (Taylor expansion applied to layer outputs) .
+We estimate the correlation between the “real importance”
+of a ﬁlter and these criteria. Estimating real importance, or
+the change in loss value upon removing a neuron, requires
+running inference multiple times while setting each individual ﬁlter to 0 in turn. (Note that the oracle ranks neurons
+based on this value). For ResNet-101, we pruned ﬁlters in
+the ﬁrst 2 convolutional layers of every residual block. Separately, we add gates to skip connections at the input and
+output of each block. For the VGG11-BN architecture, we
+replace drop-out layers with batch-norms (0.5 scale and 0
+shift) and ﬁne-tune for 12 epochs until test accuracy reaches
+70.8% to be comparable with . For DenseNet201, we
+considered features after the batch-norm layer that follows
+the ﬁrst 1 × 1 convolution in every dense layer.
+The statistical correlation between heuristics and measured importance are summarized in Table 2. Correlations
+were measured on a subset of ImageNet consisting of a
+few thousand images. We evaluated various implementations of our method, but always use the ﬁrst-order Taylor
+expansion, denoted Taylor FO. As previously discussed, the
+most promising variation uses a gate after each batch-norm
+layer. The All layers correlation columns show how well
+the criteria scale across layers. Our method exhibits >93%
+Spearman correlation for all three networks. Weight magnitude and BN scale have quite low correlation, suggesting that
+magnitude is not a good representation of importance. Output-based expansion proposed in has high correlation on
+the VGG11-BN network but fails on ResNet and DenseNet
+architectures. Surprisingly, we observe >92% Pearson correlation for ResNet and DenseNet, showing we can almost
+exactly predict the change in loss for every neuron.
+We are also able to study the effect of skip connections
+by adding a gate after the output of each residual block. We
+add skip connections to the full set of ﬁlters and evaluate
+Averaged per layer
+All layers
+ResNet-101
+Gate after BN
+Gate after BN - FG
+Conv weight
+Weight magnitude
+Taylor-output 
+Including skip connections
+Gate after BN
+Gate after BN - FG
+Gate after BN
+Conv/Linear weight
+Gate after BN - FG
+Weight magnitude
+Taylor-output 
+DenseNet-201
+Gate after BN
+Gate after BN - FG
+Conv weight
+Weight magnitude
+Taylor-output 
+Table 2: Correlation study of different criteria and oracle on the ImageNet dataset. Spearman and Kendall measure rank correlations.
+BN stands for batch-normalization, FG for full gradient.
+their correlation, denoted “Including skip connections” in
+Table 2. We observe high correlation of the criterion with
+skip connections as well. Given this result, we adopt this
+methodology for pruning ResNets and remove channels from
+skip connections and bottleneck layers simultaneously. We
+refer to this variant of our method as Taylor-FO-BN.
+Pruning and ﬁne-tuning
+We use the following settings: 4 GPUs and a batch size of
+256 examples; we optimized using SGD with initial learning
+rate 0.01 (or 0.001, see Sec. 6.2) decayed a factor 10 every
+10 epochs, momentum set to 0.9; pruning and ﬁne-tuning
+run for 25 epochs total; we report the best validation accuracy observed. Every 30 mini-batches we remove 100
+neurons until we reach the predeﬁned number of neurons to
+be pruned, after which we reset the momentum buffer and
+continue ﬁne-tuning. By setting the percentage of neurons
+to remain after pruning to be X, we get different versions of
+the ﬁnal model and refer to them as Taylor-FO-BN-X%.
+Comparison of pruning networks on ImageNet by the
+proposed method and other methods is presented in the Table 3, where we report total number of FLOPs, number of
+parameters, and the top-1 error rate. Comparison is grouped
+by network architecture type and the number of parameters.
+For ResNet-101 we observe smaller error rates and fewer
+GFLOPs (by at least 1.22 GFLOPs) when compare to BN-
+ISTA method . Pruning only skip connections shows
+larger errors however makes the ﬁnal network faster (see
+Sec 6.2). By pruning 40% of FLOPs and 30% of parameters
+from original ResNet-101 we only lose 0.02% in accuracy.
+Normalized rank, smaller better
+skip connections
+Normalized rank, smaller better
+skip connections
+Figure 5: Statistics in boxplot form of per-layer ranks before (top) and after (bottom) pruning ResNet-101 with Taylor-FO-BN-50%. First 4
+layers correspond to skip connections, the rest are residual blocks represented by the ﬁrst 2 convolutional layers per block. We can notice
+that after pruning most of neurons become more equal than before pruning.
+Pruning Method
+Params(107)
+ResNet-101
+Taylor-FO-BN-40% (Ours)
+Taylor-FO-BN-50% (Ours)
+BN-ISTA v2 
+Taylor-FO-BN-55% (Ours)
+BN-ISTA v1 
+No pruning
+Taylor-FO-BN-75% (Ours)
+pruning only skip connections
+Taylor-FO-BN-52% (Ours)
+Taylor-FO-BN-22% (Ours)
+Taylor-FO-BN-56% (Ours)
+Taylor-FO-BN-56% (No skip)
+ThiNet-30 
+Taylor-FO-BN-72% (Ours)
+NISP-50-B 
+ThiNet-70 
+Taylor-FO-BN-81% (Ours)
+SSS , ResNet-32
+NISP-50-A 
+Taylor-FO-BN-91% (Ours)
+No pruning
+SSS , ResNet-41
+No pruning
+Taylor-FO-BN-82% (Ours)
+Li et al. 
+No pruning
+Taylor-FO-BN-50% (Ours)
+From scratch 
+Slimming , from 
+DenseNet-201
+No pruning
+Taylor-FO-BN-60% (Ours)
+Taylor-FO-BN-36% (Ours)
+No pruning
+Table 3: Pruning results on ImageNet (1-crop validation errors).
+Pruning results on ResNet-50 and ResNet-34 demonstrate
+signiﬁcant improvements over other methods. Additionally we study our method without pruning skip connections,
+marked as “No skip” and observe accuracy loss. Comparison
+per layer ranking of different layers in ResNet-101 before
+and after pruning is shown in Fig. 5.
+Pruning neurons with a single step. As an alternative to
+iterative pruning, we performed pruning of 10000 neurons
+with a single step after 3000 mini-batches, followed by ﬁnetuning. This gave a top-1 error of 25.3% , which is 0.68%
+higher than Taylor-FO-BN-50%, again emphasizing the beneﬁt of re-evaluating the criterion between pruning iterations.
+Pruning other networks. We also prune the VGG11-BN
+and DenseNet networks.
+The former is a simple feedforward architecture, without skip connections. We prune
+50% of neurons across all layers, as per prior work .
+Our approach shows only 0.19% loss in accuracy after removing 76% of parameters and improves on the previously
+reported results by 0.65% and more than 2% . DeseNets reuse feature maps multiple times, potentially making
+them less amenable to pruning. We prune DenseNet-201 and
+observe that with the same number of FLOPs (Taylor-FO-
+BN-52%) as DenseNet-121, we have 1.79% lower error.
+5. Conclusions
+In this work, we have proposed a new method for estimating the contribution of a neuron using the Taylor expansion
+applied on a squared change in loss induced by removing a
+chosen neuron. We demonstrated that even the ﬁrst-order
+approximation shows signiﬁcant agreement with true importance, and outperforms prior work on a range of deep networks. After extensive analysis, we showed that applying the
+ﬁrst-order criterion after batch-norms yields the best results,
+under practical computational and memory constraints.

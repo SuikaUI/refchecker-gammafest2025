@@ -1,0 +1,1479 @@
+Technical Report CUCS-017-02
+Columbia University, August 2002
+Optimizing Top-
+K Selection Queries over Multimedia
+Repositories
+Surajit Chaudhuri
+Microsoft Research
+ 
+Luis Gravano
+Columbia University
+ 
+Am´elie Marian
+Columbia University
+ 
+Repositories of multimedia objects having multiple types of attributes (e.g., image, text) are becoming increasingly common. A query on these attributes will typically request not just a set of objects, as in the traditional relational query model (ﬁltering), but also a grade of match associated with
+each object, which indicates how well the object matches the selection condition (ranking). Furthermore, unlike in the relational model, users may just want the
+k top-ranked objects for their selection
+queries, for a relatively small
+k. In addition to the differences in the query model, another peculiarity
+of multimedia repositories is that they may allow access to the attributes of each object only through
+indexes. In this paper, we investigate how to optimize the processing of top-k selection queries over
+multimedia repositories. The access characteristics of the repositories and the above query model lead
+to novel issues in query optimization. In particular, the choice of the indexes used to search the repository strongly inﬂuences the cost of processing the ﬁltering condition. We deﬁne an execution space
+that is search-minimal, i.e., the set of indexes searched is minimal. Although the general problem
+of picking an optimal plan in the search-minimal execution space is NP-hard, we present an efﬁcient
+algorithm that solves the problem optimally when the predicates in the query are independent. We
+also show that the problem of optimizing top-k selection queries can be viewed, in many cases, as that
+of evaluating more traditional selection conditions. Thus, both problems can be viewed together as an
+extended ﬁltering problem to which techniques of query processing and optimization may be adapted.
+Work done in part while the authors were at Hewlett-Packard Laboratories.
+Introduction
+The problem of content management of multimedia repositories is becoming increasingly important with
+the development of multimedia applications and the web . For example, digitization of photo and art
+collections is becoming popular, multimedia mail and groupware applications are getting widely available,
+and satellite images are being used for weather predictions. To access such large repositories efﬁciently,
+we need to store information on attributes of the multimedia objects. Such attributes include the date the
+multimedia object was authored, a free-text description of the object, and features like color histograms.
+These attributes provide the ability to recall one or more objects from the repository. There are at least
+three major ways in which accesses to a multimedia repository differ from that to a structured database
+(e.g., a relational database). First, rarely does a user expect an exact match with the feature of a multimedia
+object (e.g., color histogram). Rather, an object does not either satisfy or fail a condition, but has instead
+an associated grade of match . Thus, an atomic ﬁlter condition will not be an equality between
+two values (e.g., between a given color
+0 and the color oid.color of an object), but instead an inequality
+involving the grade of match between the two values and some target grade (e.g., Grade(color,
+0:7). Next, every condition on an attribute of a multimedia object may only be evaluated through calls
+to a system or index that handles that particular attribute. This is in contrast to a traditional database
+where, after accessing a tuple, all selection predicates can be evaluated on the tuple. Finally, the process
+of querying and browsing over a multimedia repository is likely to be interactive, and users will tend to
+ask for only a few best matches according to a ranking criterion.
+The above observations lead us to investigate a query model with ﬁlter conditions as well as ranking
+expressions, and to study the cost-based optimization of such queries
+1. In general, a query will specify
+both a ﬁlter condition
+F and a ranking expression
+R. The query answer is a rank of the objects that satisfy
+F, based on their grade of match for the ranking expression
+Optimizing a ﬁlter condition in this querying model presents new challenges. An atomic condition can
+be processed in two ways: by a search, where we retrieve all the objects that match the given condition
+(access by value), and by a probe, where instead of using the condition as an access method, we only test
+it for each (given) object id (access by object id). For example, consider a ﬁlter condition consisting of
+a conjunction of two atomic conditions. If we search on the ﬁrst condition and probe on the second, the
+latter beneﬁts from the reduction in the number of objects that need probing, due to the selectivity of the
+1The queries identify a candidate set (or list) of objects for displaying. How to actually display these objects is an important
+problem that we do not address in this paper.
+ﬁrst condition.
+The costs of these two kinds of accesses, search and probe, in multimedia repositories can vary for
+a single data and attribute type as well as across types. How to order a sequence of probes without
+considering the search costs, as well as how to determine a set of search conditions when the probing
+cost is zero (or a constant) has been studied before. When the ﬁlter condition is a conjunction of atomic
+conditions, the problem becomes closely related to that of ordering joins. However, to the best of our
+knowledge, no work has studied the optimization problem when both searches and probes have non-zero
+costs and the ﬁlter condition is an arbitrary boolean expression.
+To optimize the processing of a ﬁlter condition, we deﬁne a space of search-minimal executions, and
+show an optimal strategy in that space for the case when the conditions present in the ﬁlter condition are
+independent. Although the search-minimal execution space is a restricted space, our experiments indicate
+that if we introduce a simple post-optimization step for conjunctive conditions, we obtain plans that are
+nearly always as efﬁcient as the plans obtained when plans are not restricted to be search minimal. Our
+experiments also show that considering both the search and probe costs during query optimization impacts
+the choice of an execution plan signiﬁcantly. Also, we prove that if the conditions in the ﬁlter condition
+are not independent, the problem of determining an optimal search-minimal execution is NP-hard.
+Our paper also contributes to the problem of optimizing the evaluation of queries that contain ranking
+expression. Previous signiﬁcant work in this area is due to Fagin , who shows his approach
+to be asymptotically optimal under broad assumptions. A key contribution of our paper is to show that
+ranking expressions can be processed “almost” like ﬁlter conditions efﬁciently. Our experimental results
+indicate that such processing of ranking expressions as ﬁlter conditions is often quite efﬁcient. Unlike
+Fagin’s work, our optimization and evaluation technique is heuristic (as in relational query optimization).
+However, from a practical systems perspective, our technique is of signiﬁcance since for the ﬁrst time it
+provides an ability to treat queries that contain both ﬁlter and ranking expressions in a uniform framework
+for query optimization and evaluation with few extensions to core query processing techniques.
+The rest of the paper is organized as follows. Section 2 describes the query model that we use.
+Sections 3 and 4 present the results on evaluating ﬁlter conditions and ranking expressions, respectively.
+Section 5 discusses our experimental results. Section 6 is devoted to related work. We conclude with a
+summary and a few interesting questions for future work in Section 7.
+Query Model
+In this section we introduce a query model to select multimedia objects from a repository. (See for a
+similar model.) Such a query model needs to satisfy the following requirements:
+1. Consider that a match between the value of an attribute of a multimedia object and a given constant
+is not exact, i.e., must account for the grade of match.
+2. Allow users to specify thresholds on the grade of match of the acceptable objects.
+3. Enable users to ask for only a few top-matching objects.
+Given an object
+o, an attribute attr, and a constant value, the notion of a grade of match Grade(attr,
+value)(o) between
+o and the given value for attribute attr addresses the ﬁrst requirement. Such a grade is
+a real number in the
+1] range and designates the degree of equality (match) between
+o:attr and
+We address the second requirement by introducing the notion of a ﬁlter condition. The atomic ﬁlter
+conditions are of the form Grade(attr, value)(o)
+ grade. An object
+o satisﬁes this condition if the
+grade of match between its value o.attr for attribute attr and constant value is at least grade. Additional
+ﬁlter conditions are generated from the atomic conditions by using the
+^ (“and”) and
+_ (“or”) boolean
+connectives. Filter conditions evaluate to either true or false. Exact matches such as o.attr = value can be
+represented by the ﬁlter condition Grade(attr,value)(o)
+ 1. However, in this paper, we will not discuss
+how exact matches can be treated especially.
+Following , we address the third requirement for the query model through the notion of
+a ranking expression. The ranking expression computes a composite grade for an object from individual
+grades of match and the composition functions Min and Max. (Fagin’s expressions are more general in
+that he allows other composition functions.) Every object has a grade between 0 and 1 for a given ranking
+expression. Users can then use a ranking expression in their queries, and ask for
+k objects with the top
+grades for the given ranking expression. In this paper, we assume that ties are broken arbitrarily. An
+alternative semantics, which we do not pursue in this paper, is that if there are ties, all objects with the
+same grade are returned, even if that exceeds the required number of objects
+We use the following SQL-like syntax to describe the queries in our model:
+SELECT oid
+FROM Repository
+WHERE Filter condition
+ORDER [k] by Ranking expression
+The above query asks for
+k objects in the object repository with the highest grade for the ranking
+expression, among those objects that satisfy the ﬁlter condition. Intuitively, the ﬁlter condition eliminates
+unacceptable matches, while the ranking expression orders the acceptable objects.
+Example 2.1: Consider a multimedia repository of information on criminals. A record on every person
+on ﬁle consists of a textual description (proﬁle), a scanned ﬁngerprint (ﬁngerprint), and a recording of a
+voice sample (voice sample). Given a ﬁngerprint F and a voice sample V, the following example asks for
+records whose ﬁngerprint matches F well. Alternatively, a record is also acceptable if its proﬁle matches
+the string ‘on parole’ with grade 0.9 or higher, and its voice sample matches V with grade 0.5 or higher.
+The ranking expression ranks the acceptable records by the maximum of their grade of match for the
+voice sample V and for the ﬁngerprint F. The answer contains the top 10 such acceptable records. (For
+simplicity, we omitted the parameter oid in the atomic conditions below.)
+SELECT oid
+repository
+(Grade(voice_sample, V) >= .5 AND Grade(profile, ‘on parole’) >= .9)
+OR (Grade(fingerprint, F) >= .9)
+ORDER BY Max(Grade(fingerprint, F), Grade(voice_sample, V))
+Expressivity of the Query Model
+The ﬁlter condition
+F in a query
+Q selects the set of objects in the repository that satisfy the condition,
+whereas the ranking expression
+R computes a grade for each object. We use these grades for ordering the
+objects that satisfy the ﬁlter condition.
+Given a ﬁlter condition
+F and a ranking expression
+R, an interesting expressivity question is whether
+we actually need both
+R. In other words, we would like to know whether we can “embed” the ﬁlter
+F in a new ranking expression
+F such that the top objects according to
+F are the top objects
+R that satisfy
+F. (Note that a ﬁlter condition does not impose an order on the objects, therefore we
+cannot express
+F using a single ﬁlter condition
+R. However, see Section 4.)
+Table 1: The three objects in the database, and their grades for each of the four possible deﬁnitions of
+More formally, given
+R, a ranking expression
+F that replaces
+R should verify the
+following two conditions for any database
+db and for any given
+k, assuming that at least
+k objects satisfy
+F in database
+0 objects satisfy
+k, then use
+0 instead of
+1. An object
+db is among the top
+k objects according to
+o satisﬁes
+2. If objects
+db satisfy
+The following example establishes the need for both a ﬁlter condition and a ranking expression in our
+model. It shows that it is not possible to ﬁnd such a ranking expression
+F for an arbitrary ﬁlter condition
+F and an arbitrary ranking expression
+Example 2.2: Let
+2 are different attributes,
+2 are constants. Consider the ﬁlter condition
+0:2, and the ranking expression
+2. The query associated with
+R ranks the objects that have grade 0.2 or higher for
+according to their grade for
+2. Suppose that there is a ranking expression
+F that satisﬁes the two
+conditions above. Then,
+F is necessarily equivalent to (i.e., always produces the same grades as) one
+of the following expressions:
+), or Max (e
+). Consider the database of three objects
+described in Table 1, and that we are interested in the top object ( k
+R that satisﬁes
+F. The actual
+answer to the query should be object
+2, which has the highest grade for
+R (0.4) among the two objects
+3) that pass the ﬁlter condition
+F. We will show that any of the four possibilities for
+F produces
+a wrong answer for the query:
+): The top object for
+3, which is a wrong answer.
+): The top object for
+1, which is a wrong answer.
+Storage Level Interfaces
+A repository has a set of multimedia objects. We assume that each object has an id and a set of attribute
+values, which we can only access through indexes. Given a value for an attribute, an index supports
+access to the ids of the objects that match that value closely enough, as we will discuss below. Indexes
+also support access to the attribute values of an object given its oid.
+The following are several storage-level access interfaces that we assume multimedia repositories support. (See for example .) Key to these interfaces is that the objects match attribute values with a grade
+of match, as we discussed above.
+ GradeSearch(attribute, value, min grade): Given a value for an attribute, and a minimum grade
+requirement, returns the set of objects that match the attribute value with at least the speciﬁed
+grade, together with the grades for the objects.
+ TopSearch(attribute, value, count): Given a value for an attribute, and the count of the number of
+objects desired, returns a list of count objects that match the attribute value with the highest grades
+in the repository, together with the grades for the objects.
+ Probe(attribute, value,
+foidg): Given a set of object ids and a value for an attribute, returns the
+grade of each of the speciﬁed objects for the attribute value.
+Not all repositories have to support all of these interfaces at the physical level. For example, a repository may implement a Probe call atop GradeSearch by requesting all objects that match a given attribute
+value with at least some speciﬁed grade, and then decreasing this grade until the grade for the object
+requested in the Probe call is obtained. A similar strategy could be implemented atop TopSearch. Next,
+we brieﬂy describe how text and image attributes may support the above interfaces.
+Text Attributes:
+Consider a repository of objects with a textual attribute
+T. For this attribute, the repository might have an
+index that handles queries using the vector-space model of document retrieval . In such a model,
+the value of an object for attribute
+T is regarded as a traditional document. Then, given a query value
+for attribute
+T (i.e., a sequence of words), this index assigns a grade to every object in the repository,
+according to how similar its value for
+T and the query value are. To compute these similarities, vectorspace retrieval systems typically represent both documents and queries as weight vectors, where each
+weight corresponds to a term in the vocabulary. Given a query, a vector-space retrieval system returns a
+list of the matching documents sorted by their grade for the query. The grade –or similarity– of a document
+and a query is usually computed by taking the inner product of their weight vectors. Vector-space retrieval
+systems usually provide the GradeSearch interface, the TopSearch interface, or both.
+Some text-retrieval systems allow access to the document weight vectors by document id. If this is
+the case, the Probe interface is readily provided by accessing the weight vectors of the objects requested,
+and computing the similarity of these vectors and the query vector. If this direct access is not provided,
+Probe can be simulated by GradeSearch or TopSearch, as discussed above.
+Image Attributes:
+Other popular attributes are features of images. If the objects of a repository contain an image, an attribute
+of the objects could be the color histogram of this image. Then, a ﬁlter condition on such an attribute can
+ask for objects whose image histogram matches a given color histogram closely, for example. The QBIC
+system supports this type of queries . One of the most popular ways of handling such attributes and
+queries is by using
+R trees and its variants to index the feature vectors associated with the
+attributes. The grade between two feature vectors is computed based on the semantics of the attributes,
+and sophisticated algorithms have been developed in the context of the QBIC project, for instance .
+Given one feature-vector attribute, a value
+v for the attribute, and a grade, GradeSearch can be implemented over an
+R tree by determining a box around the given value
+v that contains all vectors that
+v with the given grade or higher, for a given grade-computation algorithm. We then process the
+corresponding range search. has presented an algorithm to ﬁnd nearest neighbors on
+R trees. This
+algorithm can be used for implementing TopSearch.
+Filter Conditions
+In this section we will consider processing and cost-based optimization of queries that have only a ﬁlter
+condition, i.e., they are of the form:
+SELECT oid
+FROM Repository
+WHERE Filter condition
+We will assume that the ﬁlter conditions are independent. Similar restrictions have been traditionally
+adopted since the System-R optimization effort .
+Deﬁnition 3.1: We say that a ﬁlter condition
+f is independent if:
+1. Every atomic ﬁlter condition occurs at most once in
+n atomic ﬁlter conditions
+2 satisfy the following:
+p(a) is the probability that the ﬁlter condition
+a is true.
+Independence rules out ﬁlter conditions with repeated attributes, and also ﬁlter conditions with, for example, two atomic conditions
+2 such that
+1 is true (or false) whenever
+2 is true.
+We assume that our repository requires that we use an index to evaluate every atomic ﬁlter condition.
+One way to process such queries is to retrieve object ids using one GradeSearch for each atomic condition
+in the ﬁlter condition, and then merge these sets of object ids through a sequence of unions and intersections. Alternatively, we can retrieve a set of object ids using GradeSearch for some conditions, and check
+the remaining conditions on these objects through Probe operations.
+The key optimization problem is to determine the set of ﬁlter conditions that are to be evaluated using
+GradeSearch. The rest of the conditions will be evaluated by using Probe. In order to efﬁciently execute
+the latter step, we will exploit the known techniques in optimizing the processing of expensive ﬁlter
+conditions .
+In this section, we ﬁrst deﬁne a space of search-minimal executions, which access as few attributes as
+possible using GradeSearch, and sketch the cost model and the optimization criteria. Next, we describe an
+optimization algorithm and explain the conditions under which it is optimal. Finally, we show how we can
+further improve the execution plan produced by our algorithm through a simple “post-optimization” step
+to lower the cost of the original plan, and conclude with a result that indicates that the general problem of
+determining an optimal search-minimal execution is NP-hard.
+The results in this section are complemented by the experiments in Section 5, which show that considering both the search and probe costs leads to signiﬁcantly better execution strategies, and that postoptimized search-minimal executions behave almost as well as the best (not necessarily search-minimal)
+executions.
+j as a shorthand for an atomic condition specifying an attribute, value, and grade, e.g., Grade(attr,val)(o)
+Execution Space
+As an introduction, we begin by discussing the possible space of execution for simple ﬁlter conditions, i.e.,
+conditions that consist of a disjunction (or a conjunction) of atomic conditions. We will then generalize
+our description for arbitrary ﬁlter conditions with disjunctions and conjunctions.
+To process an atomic condition Grade(attr, value)(o)
+ grade, we use the GradeSearch(attr, value,
+grade) access method described in the previous section.
+Consider now the case where the ﬁlter condition is a disjunction of atomic ﬁlter conditions
+All objects that satisfy at least one of the
+i satisfy the entire ﬁlter condition. Evaluation of an atomic
+i requires the use of the GradeSearch access method associated with
+i. Since we assume that
+the atomic conditions are independent, use of a GradeSearch is needed for each atomic condition not to
+miss any object that satisﬁes the entire condition.
+Consider now the case where the ﬁlter condition is a conjunction of atomic ﬁlter conditions
+n. There are several execution alternatives. In particular, we can retrieve all the objects that may satisfy
+the ﬁlter condition by using GradeSearch on any of the atomic conditions
+n. Subsequently, we
+can test each retrieved object to verify that it satisﬁes all of the remaining conditions. The cost of using
+one atomic condition for GradeSearch instead of another may lead to signiﬁcant differences in the cost.
+Thus, we can process a conjunction of atomic ﬁlter conditions by executing the following steps:
+1. Search: Retrieve objects based on one atomic condition (using GradeSearch).
+2. Probe: Test that the retrieved objects satisfy the other conditions (using Probe).
+An important optimization step is to carry out Step (2) efﬁciently by ordering the atomic-condition probes
+(Section 3.3).
+We call the above class of execution alternatives for a conjunctive query search-minimal since only a
+minimal set of conditions (in this case, only one condition) is used for GradeSearch. The search-minimal
+strategies represent a subset of the possible executions. In particular for a conjunctive ﬁlter condition,
+instead of searching on a single subcondition and probing on the others, it is possible to search on any
+subset of the atomic conditions and to take the intersection of the sets of object-ids retrieved. However,
+the space of all such executions is signiﬁcantly larger. In particular, there are exponentially many subsets
+of conjuncts to search on, but only a linear number of minimal conjunct sets for searching.
+Intuitively, a search-minimal execution evaluates a minimal set of atomic conditions using GradeSearch,
+and evaluates the rest of the conditions using Probe. A simple conjunctive ﬁlter condition needs to use
+GradeSearch for only one atomic condition. However, an arbitrary ﬁlter condition involving
+might need to search more than one atomic condition, like the disjunction above.
+We are motivated by several factors to focus on search-minimal executions. First, as discussed in
+the context of conjunctive queries, search-minimal executions avoid an explosion in the search space.
+Next, as we will discuss in Section 3.4 as well as demonstrate experimentally in Section 5, simple postoptimizations allow us to derive from the optimal search-minimal execution a cheaper execution that is
+not necessarily search-minimal.
+By searching on a condition using GradeSearch, we obtain a set of objects. However, we may need to
+do additional probes to determine the subset of objects that satisfy the entire ﬁlter condition. Thus, given
+an atomic condition
+i and a ﬁlter condition
+f, the residue of
+), is a boolean condition
+that the objects retrieved using
+i should satisfy to satisfy the entire condition
+f. The following deﬁnition
+captures how we construct residues for independent ﬁlter conditions.
+Deﬁnition 3.2: Let
+f be an independent ﬁlter condition, represented as a tree in which the internal nodes
+correspond to the boolean connectives (hence there are “
+^ nodes” and “
+_ nodes”) and the leaf nodes
+correspond to the atomic conditions in
+a be an atomic condition of
+f. Consider the path from the
+leaf node for (the only occurrence of)
+a to the root of the tree for
+f. For every
+i in this path, let
+be the condition consisting of the conjunction of all the subtrees that are children of the node
+i and that
+do not contain
+a. Then the residue of
+i. If there are no such nodes, then
+Example 3.3: Consider the ﬁlter condition:
+Consider the residue of the atomic condition
+2 using the deﬁnition above. Thus,
+4. As another example,
+3. Then, any object that satisﬁes
+4 and also satisﬁes
+) satisﬁes the entire condition
+Proposition 3.4: Let
+f be an independent ﬁlter condition, and
+a be an atomic condition of
+Proof: By induction on the structure of the ﬁlter condition
+) = true. Thus the
+proposition follows trivially.
+Now, consider the case
+n. Assume that
+a appears in
+1 (and nowhere else, because
+is independent). From the deﬁnition of residue,
+n. From the inductive
+hypothesis,
+Next, consider the case
+n. Assume that
+a appears in
+1. From the deﬁnition of
+). From the inductive hypothesis,
+Given a ﬁlter condition
+f, we would like to characterize the smallest sets of atomic conditions such
+that by searching the conditions in any of these sets we retrieve all of the objects that satisfy
+f (plus some
+extra ones that are pruned out by probing).
+Deﬁnition 3.5: A complete set of atomic conditions
+m for a ﬁlter condition
+f is a set of atomic conditions
+f such that any object that satisﬁes
+f also satisﬁes at least one of the atomic conditions in
+complete set
+f is a search-minimal condition set for
+f if there is no proper subset of
+m that is also
+complete for
+Example 3.6: Consider Example 3.3. Each of
+g is a search-minimal condition
+set. If we decide to search on
+g, the following three steps yield exactly all of the objects that satisfy
+1. Search on
+2 and probe the retrieved objects with residue
+4. Keep the objects that
+2. Search on
+3 and probe the retrieved objects with residue
+4. Keep the objects that
+3. Return the objects kept.
+Proposition 3.7: Let
+m be a complete set of atomic conditions for an independent ﬁlter condition
+In particular, the above holds if
+m is a search-minimal condition set for
+f: Follows directly from Proposition 3.4 and from the fact that every condition has at least one atomic condition.
+)): By induction on the structure of
+a, then the results follows
+Now consider the case
+n. Because
+m is complete for
+f, there must exist
+i is a complete set of atomic conditions for
+i, for some
+complete for
+i, and using the inductive hypothesis, it follows that
+Finally, consider the case
+n. Because
+m is complete for
+f, there exists
+i is a complete set of atomic conditions for
+i, for all
+n. From the inductive
+hypothesis,
+)), because
+), for all
+Now we are ready to deﬁne the space of search-minimal executions.
+Deﬁnition 3.8: A search-minimal execution of an independent ﬁlter condition
+f searches the repository
+using a search-minimal condition set
+f, and executes the following steps:
+ For each condition
+– Search on
+a to obtain a set of objects
+– Probe every object in
+a with the residual condition
+) to obtain a ﬁltered set
+objects that satisfy
+ Return the union
+We now present algorithms to pick a plan from the space of search-minimal executions. We then show
+how to further optimize these plans to lower their cost (Section 3.4). The strategies that result from these
+post-optimizations are not search-minimal executions.
+Assumptions and Cost Model
+Our optimization algorithm is cost-based and makes statistical assumptions about the query conditions as
+well as about the availability of certain statistical estimates. We describe these assumptions in this section.
+Statistical Parameters:
+We associate the following statistics with each atomic condition
+a. We assume that we may extract these
+statistics from the underlying object repository and its indexes.
+ Selectivity Factor Sel(a): Fraction of objects in the repository that satisfy condition
+ Search Cost
+(a): Cost of retrieving the ids of the objects that satisfy condition
+a using GradeSearch.
+ Probe Cost
+p): Cost of checking condition
+p objects, using the Probe access method.
+The probe cost
+p) depends on
+p, the number of probes that need to be performed. If
+p is large
+enough, it might be cheaper to implement the
+p probes by doing a single search on
+a, at cost
+observation will be the key of the post-optimization step of Section 3.4.
+We now sketch how to estimate these parameters over multimedia repositories for text and image
+attributes. Consider ﬁrst a textual attribute that is handled by a vector-space retrieval system. Typically
+such a system has inverted lists associated with each term in the vocabulary . For each term we
+can extract the number of documents
+d that contain the term, and the added weight
+w of the term in the
+documents that contain it. Thus, we can use the methodology in to estimate the selectivity of an
+atomic ﬁlter condition, as well as the cost of processing the inverted lists that the condition requires.
+Consider now an attribute over an image that is handled with an
+R tree. We can then use the methodology in , which uses the concept of the fractal dimension of a data set to estimate the selectivity of
+atomic conditions, and the expected cost of processing such conditions using the
+Assumptions on Conditions:
+As we mentioned before, we will restrict our discussion to optimizing independent ﬁlter conditions. We
+can compute the selectivities of complex independent ﬁlter conditions using the following two rules as in
+traditional optimization :
+Optimization Algorithm
+In this section, we present the results on optimization of ﬁlter conditions. First, we deﬁne our optimization
+metric over the search-minimal execution space. Next, we sketch how we can use the past work in
+optimizing boolean expressions for the task of determining a strategy for probing. Subsequently, we
+present our algorithm, which is optimal for independent ﬁlter conditions, and discuss how we can adapt it
+for non-independent ﬁlter conditions. We conclude with an NP-hardness result that shows that if the ﬁlter
+condition is not independent, then the complexity of determining an optimal execution is NP-hard.
+Cost of Search Minimal Executions:
+To pick the least expensive search-minimal execution, we need to deﬁne the cost of such executions. As
+we can see from the deﬁnition of the search-minimal executions, the cost of one such execution depends
+on (a) the choice of the search conditions, (b) the probing costs of the remaining conditions, and (c) the
+cost of taking the union of the answer sets. Value (c) dominates only when the selectivity of the ﬁlter
+condition is low. Therefore, to simplify the optimization problem, we focus only on the search and probe
+Given a search-minimal condition set
+m for a ﬁlter condition
+f and an algorithm
+w for probing conditions, we now deﬁne
+m), the cost of searching the conditions in
+m plus the cost of probing the
+other conditions using algorithm
+w, as follows:
+j is the number of objects that satisfy condition
+j) is the cost of probing
+j objects using algorithm
+w. This cost depends on the probing algorithm
+we discuss next. Note that if there are
+O objects in the repository,
+Optimizing Evaluation of Residues:
+Given a residue
+), the task of determining an optimal evaluation for
+) maps to the well
+studied problem of optimizing the execution of selection conditions containing expensive predicates .
+(See also .)
+) is a conjunction of atomic conditions
+n, there is an efﬁcient algorithm
+ﬁnds the optimum probing strategy. Speciﬁcally, it can be shown that the order in which the
+atomic conditions for each object should be probed is given by the rank of each condition
+i, deﬁned as
+if we assume that
+p for some constant
+i and where
+p is the number of objects to
+probe. Then, we can calculate the cost
+p) as follows, assuming for simplicity that
+represents the increasing rank ordering of the conjuncts:
+i. (Note that Sel (a
+p is the number of objects
+that satisfy conditions
+i 1 out of the original
+p objects; we only need to probe these objects for
+i, at a cost of
+i for each object.) This result is well known and was observed in the database
+context by . We can take a similar approach to order the evaluation of a disjunction of atomic
+conditions.
+Example 3.9: Consider the ﬁlter condition
+:5. The increasing rank sequence is then
+2. Then, the
+probing cost for 1000 objects is as follows:
+) is an arbitrary boolean condition, the problem of evaluating it optimally is known to be
+intractable. However, several good heuristics are available . Therefore, we assume that we exploit one
+of these available techniques to optimize the evaluation of residues. As we mentioned above, depending
+on the strategy
+w used to evaluate
+), we can parameterize our cost function. Thus, we denote the
+cost corresponding to evaluation strategy
+w. However, for the rest of the discussion, we assume
+that such a choice of
+w is implicit and therefore omit references to
+Optimality:
+Given that we can compute the cost metric
+m) for any independent ﬁlter condition
+f and condition
+m, our goal is to pick an optimal search-minimal condition set. Let
+) be the set of all searchminimal condition sets for
+Deﬁnition 3.10: A search-minimal condition set
+m for an independent ﬁlter condition
+f is optimal if
+We now describe how we determine the optimal search-minimal condition set for an independent
+ﬁlter condition. The algorithm is implicit in the following inductive deﬁnition. Intuitively, the algorithm
+traverses the condition tree in a bottom-up fashion to create the optimal set of search-minimal conditions.
+Deﬁnition 3.11: Let
+f be a ﬁlter condition and
+0 be a subcondition of
+f. The inductive search-minimal
+condition set for
+0 with respect to
+), is deﬁned inductively as follows:
+fag, where
+a is an atomic condition
+))g (Break ties arbitrarily.)
+Theorem 3.12: Let
+f be an independent ﬁlter condition. Then
+) is an optimal search-minimal
+condition set for
+Before we can prove Theorem 3.12, we need the following auxiliary result.
+Proposition 3.13: Let
+2 be two independent ﬁlter conditions with no atomic conditions in common. Then:
+) if and only if
+) such that
+We will ﬁrst show that
+) (part 1 of the proposition):
+). Then, either
+1 complete for
+1 such that
+2 complete
+2 such that
+m. (Otherwise,
+m would not be complete for
+2.) Assume that
+complete for
+1 such that
+m. Any object that satisﬁes
+2 also satisﬁes
+1, and at least
+one condition of
+1, because
+1 is complete for
+1 is also complete for
+). Therefore,
+). Furthermore, suppose that
+). It is easy to see that
+complete for
+2. To see that
+m is also search-minimal for
+2, consider
+also complete for
+2. Because
+m is search-minimal for
+1, it must be the case that
+complete for
+1. Then, there is an object
+o that satisﬁes
+1 and none of the conditions in
+then we can build a new object
+0 that also satisﬁes
+2, and still does not satisfy any of the conditions
+0, because
+2 do not share any conditions, and
+). However,
+contradict the completeness of
+2. Therefore,
+m is also search-minimal for
+Now, we will show that
+) (part 2 of the proposition).
+2) be the restriction of
+m to conditions in
+1 (resp., in
+It is easy to see that
+). Therefore,
+): Straightforward.
+Proof (Theorem 3.12): From Proposition 3.13 it is clear that
+) is a search-minimal condition
+0. We will use induction on the structure of
+0 to show that
+8 subcondition
+a: Straightforward.
+). Suppose that
+) such that
+m). From Proposition 3.13,
+), for some
+n. From the inductive hypothesis,
+). And from construction of
+). Therefore,
+m), contradicting our choice of
+). Suppose that
+) such that
+m). From Proposition 3.13,
+). From the inductive
+hypothesis,
+n. Therefore, because
+is independent and using the deﬁnition of
+), contradicting our choice of
+Our strategy requires that we compute the cost of each atomic condition at most once, since the cost
+and search-minimal set are computed “bottom-up.”
+The problem of determining an optimal evaluation strategy for a ﬁlter condition as discussed in this
+paper is related to the problem of choosing access paths for traditional selection queries in the presence of
+indexes for a query processor that supports index union and intersection . In this paper, we restrict
+ourselves to search-minimal executions but do allow for probe costs. Please see the related work section
+for additional details.
+The proof of optimality of
+) depends on the fact that the given ﬁlter condition
+f is independent.
+3 Nonetheless, with the following simple modiﬁcation, we can still provide a search-minimal
+condition set in case the given condition is not independent. However, this set is is no longer guaranteed
+to be optimal:
+) assuming
+f is an independent condition and treating each occurrence of a condition
+as a new atomic condition.
+2. Identify a subset
+) that is search minimal for
+Observe that the ﬁrst step ensures completeness whereas the second step ensures that the set
+m is minimal
+and can be determined efﬁciently. However, as the following example shows, such a heuristic does not
+always result in an optimal search-minimal condition set.
+Example 3.14: Assume that the ﬁlter condition is
+c). The ﬁrst step of the algorithm treats every
+instance of
+a as a different condition. So, the query is viewed by Step (1) as
+c). Assume
+that the algorithm determines
+cg. Step (2) of the algorithm does not change
+fag could be a signiﬁcantly better search-minimal condition set. Therefore, the algorithm may
+fail to identify the best search-minimal condition set if the subconditions are not independent, as in this
+The above result is not surprising given that the general optimality problem, where no assumptions
+are made about independence, is intractable even for the very simple cost model where search cost is 1
+and probe cost is 0, as the following theorem shows.
+3Less expensive executions might be possible if independence does not hold and extra information is available during query
+planning. As a simple example, consider a ﬁlter condition
+2 is true every time that
+1 is true. In this case,
+there would be no need to search on
+2 to ﬁnd all objects that match the whole condition.
+Theorem 3.15: The problem of determining an optimal search-minimal condition set for a ﬁlter condition
+is NP-hard.
+Proof: We prove the result by a reduction from the vertex-cover problem. To map an instance of the
+vertex-cover problem
+) to our problem we generate a ﬁlter condition
+F such that
+vertex cover of size
+k or less if and only if there is a processing strategy for
+F that retrieves objects using
+searches over
+k or fewer atomic conditions. We associate a unit cost for every search, and zero cost for
+the probes to complete the proof.
+Given the (undirected) graph
+), we generate the following ﬁlter condition:
+i’s are atomic conditions. We deﬁne
+1 for all the
+i’s. Therefore, the cost of any search-minimal condition set
+m is the number of atomic conditions in
+G has a vertex cover of size
+k or less if and only if there is a search-minimal condition set for
+k conditions or less:
+G has a vertex cover
+k or less. Then, there is a set of atomic conditions
+k or less such that for each subcondition
+(: Assume that there is a search-minimal condition set
+k or fewer conditions. Suppose that there is a subexpression
+j such that
+m. Then suppose that there is an object
+o that satisﬁes only atomic conditions
+j, and none of the others. Then
+o satisﬁes
+F, from the
+construction of
+F, but it does not satisfy any of the conditions in
+m, contradicting the completeness
+m. Therefore, either
+m. Consequently,
+m deﬁnes a vertex cover for
+fewer elements.
+Post-optimization: Beyond Picking a Search-Minimal Set
+While choosing an optimal search-minimal condition set is a key step in selecting an efﬁcient execution
+plan, there are several other opportunities for optimization.
+First, we note that a search-minimal execution for a ﬁlter condition
+f always handles the residue
+of a search condition
+a by probing the condition
+). However, when the number of objects to be
+probed is high, the cost of probing
+) may exceed the cost of searching on the atomic condition
+using GradeSearch. Thus, in case of a conjunctive query, it may be more efﬁcient to use more than one
+condition for searching. In other words, it could be convenient to allow the conditions that are used for
+searching to no longer form a search-minimal condition set. However, our optimization algorithm does
+not consider such a plan.
+To address this lack of ﬂexibility, we introduce a post-optimization step that locally replaces probes
+on one or more conditions by the corresponding searches, as the following example illustrates.
+Example 3.16: Assume that the optimal search-minimal execution for
+3 searches on condition
+1, and probes on conditions
+3. Let the number of objects probed by
+2 be 1000, and the probe
+cost be 1 unit for every probe. Thus, the total cost of probing on
+2 is 1000 units. If the search cost on
+is 800, then we can modify the execution plan a posteriori to search on conditions
+2, and to probe
+In Section 5 we report results on an experimental evaluation of this simple post-optimization step.
+In addition to turning certain probes into searches, our algorithm presents other less critical opportunities for post-optimization. For example, when processing several atomic conditions we could also improve
+how we “merge” the objects retrieved using each of these conditions: (1) An object that is retrieved by
+searches on both
+2, can be probed using either the residue
+) or the residue
+a choice can be cost-based and inﬂuences the order in which we merge results from multiple searches.
+(2) The merging order is also inﬂuenced by the cost of detecting and eliminating duplicate objects, and
+by the size of the answer sets resulting from searches. Evaluating alternatives for this “merging” and
+determining their effect on the execution costs remains as future work.
+Filter Conditions and Ranking Expressions
+In this section, we consider queries each of which consists not only of a ﬁlter condition, but also of a ranking expression. The answer to such queries consists of the top objects for the ranking expression that also
+satisfy the ﬁlter condition. We ﬁrst look at queries consisting only of ranking expressions (Section 4.1).
+Section 4.2 describes an algorithm for processing this type of queries that has been presented in references
+ . Finally, Section 4.3 presents our main result regarding this class of queries. We show that we
+can map a given ranking expression into a ﬁlter condition, and process the ranking expression “almost”
+as if it were a ﬁlter condition. This mapping is central to processing queries with ranking expressions
+applying the techniques of Section 3 for processing ﬁlter conditions. The experimental results of Section 5 show that, in some cases, the number of objects retrieved and probed when processing a ranking
+expression as a ﬁlter condition can be considerably smaller than when processing the ranking expression
+using the algorithm in .
+Ranking Expressions
+A query consisting of only a ranking expression has the form:
+SELECT oid
+FROM Repository
+ORDER [ k] by Ranking expression
+The result of this query is a list of
+k objects in the repository with the highest grade for the given
+ranking expression. The ranking expressions are built from atomic expressions that are combined using
+the Min and Max operators that we deﬁned in Section 2.
+Example 4.1: Consider the ranking expression
+=Max(Grade(ﬁngerprint, F), Grade(proﬁle, P)). Expression
+1 favors objects with either ﬁngerprints matching the given value
+F closely, or with text proﬁles
+matching the given proﬁle
+P closely. Alternatively, consider the ranking expression
+=Min(Grade(ﬁngerprint,
+F), Grade(proﬁle, P)). Expression
+2 favors objects with good matches for both their ﬁngerprints and pro-
+Fagin’s Strategy
+Fagin presented a novel approach to processing a query consisting of a ranking expression in references . In this section we brieﬂy describe his approach. In Section 5, we experimentally
+compare this algorithm against our approach for processing ranking expressions using a modiﬁed version
+of our techniques of Section 3.
+Consider a ranking expression
+), where the
+i’s are independent atomic expressions. Suppose that we are interested in
+k objects with the highest grades for
+R. Fagin’s algorithm uses
+the TopSearch access method to retrieve these objects from the repository. It does so by retrieving the top
+objects from each of the subexpressions
+n, until there are at least
+k objects in the intersection of the
+n streams of objects that he retrieves. (There is one stream per subexpression of
+proved that the set of objects retrieved contains the necessary
+k top objects. Therefore, he can compute
+the ﬁnal grade for
+R of each of the objects retrieved, doing the necessary probes, and output the
+with the highest grades. Fagin has proved the important result that the above algorithm to retrieve
+the best objects for an expression
+R that is a Min of independent atomic expressions is asymptotically
+optimal with arbitrarily high probability.
+Now, consider a ranking expression
+), where the
+i’s are independent atomic
+expressions. Suppose that we are interested in
+k objects with the highest grades for
+R. In this case,
+another algorithm by Fagin requests exactly
+k objects from each of the subexpressions
+with no need to probe any objects. It follows that there are
+k top objects for
+R among these
+n objects.
+Processing Ranking Expressions as Filter Conditions
+As discussed in Section 2, a query may have both a ﬁlter condition as well as a ranking expression. A
+naive query-execution strategy might stage the processing of these two components of the query, leading
+to two alternatives: (a) evaluate the ﬁlter condition ﬁrst using the techniques in Section 3.3, and then rank
+the results by probing on the necessary attributes; (b) use techniques for efﬁcient top-k query processing
+to identify the top-k
+0 objects for the ranking expression (for some
+k), and then ﬁlter out any objects
+that do not satisfy the ﬁlter condition by probing on the necessary attributes. Note that the second strategy requires deriving a value of
+0 from the given
+k by somehow taking into account the selectivity of
+the ﬁlter condition. Both of these alternatives ignore the possible synergy in optimizing the execution of
+queries by considering ﬁlter conditions and ranking expressions simultaneously. Our goal in this section
+is to precisely identify if we could view ﬁltering and ranking in a uniform framework. This brings up the
+challenge of “mapping” ranking expressions into a ﬁlter condition without signiﬁcant loss of efﬁciency as
+compared to using techniques that are optimized for ranking expressions. However, since such mapping
+takes place as part of query optimization, we must depend on estimation techniques to derive a suitable ﬁlter condition. We do so by techniques similar to those adopted for cost estimation in traditional relational
+databases. Thus, our “mapped” ranking expressions are optimized not in an absolute sense but leveraging
+approximate statistics that are available. This is in sharp contrast to the techniques by Fagin 
+that we outlined above, which provide theoretical performance guarantees. However, our mapping technique has the beneﬁt of enabling a smooth integration with the broader class of queries involving ﬁlter
+conditions. Moreover, as our experiments will suggest, our technique compares favorably to Fagin’s.
+Although in this section we show how to process a ranking expression as a ﬁlter condition, the semantics of both the ﬁlter condition and the ranking expression remain distinct. (See Section 2.) We still
+need to specify a ranking expression to get a sorted set of objects. Filter conditions have unordered sets
+as their answers. In the strategy that we describe below, after processing a ranking expression as a ﬁlter
+condition, we will have to compute the grade of the retrieved objects for the ranking expression, and sort
+them before returning them as the answer to the query.
+Given a ranking expression
+R and the number
+k of objects desired, we give an algorithm to assign a
+grade to each atomic expression in
+R, and a ﬁlter condition
+F with the same “structure” as
+R that retrieves
+the top objects according to
+Example 4.2: Consider a ranking expression:
+i is an attribute, and
+i a constant value. We want two objects with the top grades for
+suppose that we can somehow ﬁnd a grade
+G such that there are at least two objects with grade
+or higher for expression
+e. Therefore, if we retrieve all of the objects with grade
+G or higher for
+we can simply order them according to their grades, and return the top two as the result to the query.
+Furthermore, such a grade
+G should be as high as possible, to retrieve as few objects as possible.
+In other words, we can process
+e by processing the following associated ﬁlter condition
+f, followed
+by a sorting step of the answer set for
+By processing
+f using the strategies in Section 3, we obtain all of the objects with grade
+G or higher
+1, and for
+2. Therefore, we obtain all of the objects with grade
+G or higher for the
+ranking expression
+e. If there are enough objects in this set (i.e., if there are at least two objects), then we
+know we have retrieved the top objects that we need to answer the query with ranking expression
+Now, consider a ranking expression:
+= Max(Grade
+i are as before,
+2. We want two objects with the top grades for
+0. If we somehow
+ﬁnd a grade
+0 such that there are at least two objects with grade
+0 or higher for expression
+0 by processing the following ﬁlter condition
+By processing
+0 we retrieve all of the objects having grade
+0 or higher for the ranking expression
+0, with no need to probe any objects. If there are at least two such objects, then we can answer
+returning two objects with the top grades for
+0 from among the set of objects that we retrieved.
+As we have seen in the example above, we can process a ranking expression
+e as a ﬁlter condition
+f followed by a sorting step. The key point in the mapping of the problem from a ranking problem to
+a (modiﬁed) ﬁltering problem lies in ﬁnding the grade
+G to use in
+f, as in the example. Ideally, grade
+G should be the
+th largest grade of any object in the database: the resulting ﬁlter condition
+f that uses
+such a value of
+G would then retrieve exactly the top objects for the query. Unfortunately, such grade is
+unknown at query-optimization time, so we need to rely on estimates to approximate it.
+To determine the grade
+G for the ﬁlter condition
+e, we ﬁnd the largest (or a close-to-largest)
+G such that the selectivity of
+f is at least
+O is the number of objects in the repository.
+If the selectivity estimates used to determine
+G are accurate (see Section 3.2) and the independence
+assumption holds for
+f is likely to retrieve the desired top-k objects, based on cost and cardinality
+estimates derived as in relational-model optimization as described above. However, in a realistic setting
+the selectivity estimates might not be completely accurate, which might result in
+f retrieving fewer or
+k objects. In case the number of objects retrieved is less than
+k, we say that query
+f needs to
+be restarted using a lower value for
+G, and the process repeats until we retrieve at least
+k objects.
+We now present the algorithm Rank, which takes as input the number of objects desired
+k, a ranking
+expression
+e, the desired number of objects
+k, and the number of objects in the database
+O, and produces
+the top-k objects for
+e using selectivity statistics. Rank relies on two auxiliary functions, FilterGrade,
+which ﬁnds a suitable grade
+G for the ﬁlter condition used to compute the query results
+4, and FilterMap,
+which simply maps a ranking expression to a ﬁlter condition that is equivalent “in structure,” for a given
+4In we presented a different strategy for identifying grade
+G; our experimental evaluation of this alternative strategy
+revealed that it is comparable to or less efﬁcient than the version that we present here. Furthermore, the older strategy suffers
+in performance when the distribution of grades varies signiﬁcantly across attributes. Therefore we do not discuss the strategy
+from any further in this paper due to space limitations.
+grade. These two auxiliary functions are deﬁned below.
+Algorithm Rank(ranking expression
+e; objects desired
+k; objects in database
+// Returns top-k objects for
+e among the
+O objects in database.
+k //Number of objects requested; might be adjusted later if restarts needed.
+G=FilterGrade(0;
+) // Identify search grade.
+f=FilterMap(e;
+G) // Build ﬁlter condition equivalent to
+e “in structure” using grade
+4. Use algorithm in Section 3 to ﬁnd set of objects
+M that satisfy ﬁlter condition
+k: // Not enough objects retrieved; need to restart query.
+0: // Some objects retrieved.
+e // Increase number of objects requested, to get lower search grade.
+=FilterGrade(0;
+2 // No objects retrieved; object grades “squeezed” in
+ g // Decrease
+G by at least a small constant
+0, for termination.
+Go to step 3.
+12. Else: Return
+k objects from
+M with highest grade for
+e // Enough objects retrieved; done.
+Steps 5–11 handle the case where the original ﬁlter condition
+f with associated grade
+manage to identify
+k or more objects. In this case, the query needs to be restarted, as explained above.
+This undesirable scenario is due to inaccurate selectivity estimations. We distinguish two cases: (1) If
+0 objects with
+k (steps 6–8), then a new, lower grade
+G is computed by inﬂating the
+number of objects requested proportionally to the
+0 ratio. (2) If
+f matched no objects (step 9), then all
+objects in the database have grades in the
+G) range. The original grade
+G was computed assuming that
+grades were distributed in the
+1] range, so we shrink grade
+G) range by multiplying it by
+G, the new upper bound on the object grades.
+The auxiliary functions FilterMap and FilterGrade are deﬁned next. Given a grade
+G, FilterMap maps
+a ranking expression
+e into a ﬁlter condition
+e’s same basic structure such that
+f matches exactly
+those objects that have a grade of
+G or higher for
+e. FilterGrade implements binary search to ﬁnd a grade
+that yields the desired selectivity for a ﬁlter condition. (Reference followed a similar approach to
+evaluate topk queries over relational databases.)
+Function FilterMap(ranking expression
+e; search grade
+e into a ﬁlter condition
+f with the same structure, such that
+// any objects that satisfy
+f have a grade no lower than
+e is an atomic expression.
+2. Else: //
+e is not an atomic expression.
+(FilterMap
+(FilterMap
+Function FilterGrade(grade-range bounds
+h; ranking expression
+e; objects desired
+objects in database
+// Binary-searches for high grade
+h] range with
+(FilterMap
+1. If selectivity-estimate granularity too coarse to distinguish between
+` //Return
+` rather than
+h to help avoid restarts.
+(FilterMap
+7. Return FilterGrade(`;
+The Rank algorithm maps an arbitrary ranking expression into a ﬁlter condition. Note that when a
+query contains a ﬁlter condition
+F and a ranking expression
+R, the query asks for
+k top objects by the
+ranking expression
+R that satisfy
+F. Using Rank, we can translate the problem of optimizing such a query
+into the problem of optimizing the ﬁlter condition
+0 is the ﬁlter condition associated with
+). We can then apply the query-processing methodology of Section 3 over this composite
+ﬁlter condition. In practice, it is likely that some attribute might appear both in
+R in the original
+query, as in Example 2.1. In such a case, the ﬁlter condition
+0 will not be independent, and hence the
+guarantees of Section 3.3 will not hold. However, the experimental evaluation that we report next shows
+that the ﬁlter-condition processing techniques of Section 3.3 perform well even when the independence
+assumption does not hold and the data set exhibits attribute correlation.
+Experimental Results
+In this section we report an experimental evaluation of the techniques presented in Section 3 and 4, over
+synthetic data. In the “default” setting of our experiments, the number of objects
+O in each generated data
+set is 10,000, and objects have 6 attributes
+6. We vary these and other parameters throughout
+our experiments.
+Individual attribute scores for each object are generated in three different ways:
+ Uniform data set: We assume that attributes are independent of each other; scores are uniformly
+distributed within each attribute (default setting).
+ Correlated data set: We assume that attributes are divided in two groups so that the scores of
+objects for attributes within the same group are correlated; scores are uniformly distributed within
+each attribute. We use this data set to study the performance of our algorithms when independence
+assumptions do not hold.
+ Gaussian data set: We assume that attributes are independent of each other; scores are generated
+via ﬁve overlapping multidimensional Gaussian bells .
+We build exact selectivity estimates over the generated data with information at a grade granularity of
+0.01. We also report experiments over selectivity estimates that do not represent the data accurately.
+For each attribute
+i, the probe cost
+p) to check condition
+i associated with
+is deﬁned to be equal to the number of objects probed
+p times the cost of an individual probe
+i). We assume the search cost
+) to be linear in the number of objects retrieved for
+O is the number of objects in the data set and
+i is the cost
+of retrieving one object. In our default setting, both
+i are chosen randomly from the
+10] range.
+The ﬁlter conditions that we use in our experiments have exactly one atomic condition for each of the
+available attributes; the grade associated with each of these atomic conditions is chosen randomly from
+1] range. The ranking expressions also involve all attributes, and ask for
+10 objects in the
+default setting of the experiments.
+Our default setting for the different experiment parameters is summarized in Table 2. We now report on experimental results for the default setting and when varying the different parameters. For our
+Selectivity Granularity
+Default Value
+Table 2: Default setting of some experiment parameters.
+experiments we measure the cost of processing a query
+q, Cost(q), as:
+) is the overall number of objects retrieved via GradeSearch over attribute
+i (including restarts and counting multiply retrieved objects) and
+) is the number of objects probed
+for attribute
+i (including restarts and assuming we never probe an object on the same condition twice,
+but rather keep this information to save probes).
+Filter Conditions
+In this section we report experimental results on query processing strategies for ﬁlter conditions. Throughout this section, we use a conjunctive ﬁlter condition
+i is an atomic ﬁlter condition
+involving attribute
+i. For our experiments, we ran 1,000 queries and averaged their results. We compare
+the following strategies:
+ Filter: Strategy Filter is the search-minimal algorithm of Section 3.
+ Filter-PostOptimization: Strategy Filter-PostOptimization is the algorithm that results from applying the post-optimization step of Section 3.4 over Filter.
+ Sep: Strategy Sep is determined by ﬁrst choosing the best atomic conditions on which to search,
+considering the search cost and the selectivity of the conditions, but not the probe costs. Then, Sep
+probes the remaining conditions in an optimal order. Filter differs from Sep in that the probing costs
+are taken into account when choosing the conditions on which to search.
+ Exh: Strategy Exh exhaustively considers at query-planning time all possible non-empty subsets of
+the atomic conditions to retrieve the objects, and then probes the remaining conditions optimally
+according to the cost and selectivity statistics. This strategy does not restrict the search space to
+search-minimal executions as do Filter and Sep.
+Figure 1 shows the performance of the four techniques for conjunctive queries for the default parameter setting, on data sets generated using different grade distributions. The correlated data sets consist
+of three different sets in which we divided the attributes into two groups so that an object’s grades for
+attributes within the same group are correlated. The groups are deﬁned as follows: (1, 5): one group
+has one attribute and the other ﬁve attributes; (2, 4): one group has two attributes and the other four
+attributes; and (3, 3): both groups have three attributes. For all data sets, Filter performs better than Sep,
+showing that considering probing costs when evaluating search-minimal executions results in lower query
+costs. Filter-PostOptimization gives results close to the Exh technique, in which all combinations of plans
+are considered. Interestingly, Filter-PostOptimization then allows to have close-to-optimal results without
+considering all execution plans, which can be expensive. Results for the Gaussian distribution are slightly
+better than for the Uniform distribution, since fewer objects tend to satisfy the selection conditions. For
+the correlated data sets –over which the independence assumption underlying the construction of the algorithms does not hold– all techniques have better performance when the attributes are evenly split into
+two groups: this conﬁguration results in fewer probes being performed, as objects can be discarded more
+Filter-PostOptimization
+(a) Comparison of the different techniques for the
+Uniform and Gaussian data sets.
+Filter-PostOptimization
+(b) Comparison of the different techniques for the
+Correlated data sets.
+Figure 1: Comparison of the different techniques for data sets generated using different grade distributions.
+Effect of the Number of Attributes:
+We studied the effect of the number of attributes in the ﬁlter
+condition. As the number of attributes increases, the selectivity of the conjunctive query, which then
+consists of more conditions, decreases. This results in turn in fewer objects being considered and in lower
+query-execution costs. We do not show these plots because of space limitations.
+Filter-PostOptimization
+Figure 2: Effect of the cost ratio
+cost of processing ﬁlter conditions.
+Filter-PostOptimization
+Figure 3: Effect of the condition grades on the
+cost of processing ﬁlter conditions.
+Effect of the Cost Ratio:
+Our algorithms of Section 3.3 rely on cost estimations to select a query
+plan. Additionally, the post-optimization step of Filter-PostOptimization compares the relative cost of
+searching and probing for attributes that do not belong in the search-minimal condition set to make further
+optimization choices. We now study the effect on the query processing cost of the relative values of
+the cost of probing one object, and
+i, the cost of retrieving one object using GradeSearch (Figure 2). The
+probing cost
+i is chosen from
+1], while the range of values of
+i varies from
+expected, when
+i increases, the overall cost of a query increases as well since retrieving objects becomes
+more expensive. When the
+i ratio is high, the cost of retrieving objects dominates: all techniques
+tend to select a plan that minimizes the number of objects retrieved using GradeSearch. Hence probes are
+favored because they are relatively inexpensive. In contrast, when the
+i ratio is low, retrieving objects
+via the GradeSearch interface is less expensive than using probes. Exh and Filter-PostOptimization, both
+of which consider plans with more search attributes than strictly necessary, are then cheaper than Filter
+and Sep, which only consider search-minimal executions.
+Effect of the Condition Grades:
+Figure 3 studies the effect of the selectivity of a query on its cost.
+For these experiments, all atomic conditions in the query have the same associated grade, and we vary
+this grade from 0 to 1. When the grade is low, many objects satisfy the ﬁlter condition and have to be
+processed, resulting in high cost. In contrast, when the grade condition is high, the selectivity of the query
+is low and so is query processing cost.
+A clear conclusion from the experiments above is that Filter is consistently more efﬁcient than Sep:
+this conclusion highlights the beneﬁts of considering the probe costs in addition to the search costs during
+query optimization. Another conclusion is that Filter-PostOptimization is signiﬁcantly more efﬁcient than
+Filter: in fact, its simple post-optimization step makes Filter-PostOptimization almost indistinguishable
+from the exhaustive-search Exh algorithm in our experiments. We have performed experiments over
+disjunctive ﬁlter conditions as well, which we do not report for space limitations: processing such queries
+always involves searching on all atomic conditions via GradeSearch, with no probes. Therefore, the
+techniques in Section 3.3 are all equivalent for disjunctive queries.
+Ranking Expressions
+In this section we report experiments on query-processing strategies for ranking expressions. In Section 4.3 we presented Rank, an algorithm to map the execution of a ranking expression into the execution
+of a ﬁlter condition. We now compare Rank experimentally with Fagin’s algorithm (Section 4.2), to which
+we will refer as FA. For the ﬁlter processing part of the Rank algorithm (Step 4 of the algorithm, in Section 3.3), we use algorithm Filter-PostOptimization. Our experiments use two ranking expressions over
+the six attributes deﬁned above:
+RMax: Max(a
+The goal of this section is to demonstrate that our heuristic technique for mapping ranking expressions
+to a ﬁlter condition compares favorably experimentally to Fagin’s algorithm which carries optimality
+guarantees. Recall that the key strength of our approach is the unifying framework for answering queries
+involving both ﬁlter conditions and ranking expressions.
+Figure 4 presents results for Rank and FA for the default settings over both Uniform and Gaussian
+data sets. We present results for Rank for two different values of the “granularity” of the selectivity
+estimates: 0.01 and 0.001. Figure 4(a) shows that Rank outperforms FA for the
+RMin query. Using detailed
+analysis, we traced the reasons for our efﬁciency. First, Rank uses statistics on selectivity estimates (via
+Filter-PostOptimization) to decide on which conditions to search and on which to probe. This results in
+retrieving fewer objects than FA in these experiments, although the average smallest grades seen by both
+Rank and FA are close (the average grade
+G used by Rank (0.01), including restarts, is 0.67235 while the
+average lowest grade seen by FA for each attribute is 0.685709 (for the Uniform data set). Second, Rank
+Rank (0.01)
+Rank (0.001)
+(a) Comparison of Rank and FA for
+RMin over the
+Uniform and Gaussian data sets.
+Rank (0.01)
+Rank (0.001)
+(b) Comparison of Rank and FA for
+RMax over the
+Uniform and Gaussian data sets.
+Figure 4: Comparison of the techniques for
+RMax over data sets generated using different grade
+distributions.
+tends to use fewer probes than FA: unlike FA, Rank does not compute the complete grade of each object
+retrieved, but rather stops probing an object as soon as the object has failed to satisfy one condition in the
+ﬁlter. This early termination results in signiﬁcant savings in probe costs. These two key aspects of our
+processing explain our performance reported in Figure 4(a). The granularity of the selectivity estimates
+slightly affects Rank’s query cost: a too ﬁne granularity (see results for granularity 0.01) results in more
+restarts and thus higher query costs; we discuss this issue in more details below. Interestingly, Rank’s
+performance on
+RMax functions (Figure 4(b)), which involve searching on all attributes but do not require
+any probing, is very sensitive to the granularity of the selectivity estimates. Speciﬁcally, if the granularity
+of the selectivity estimate is too coarse, the grade that Rank uses to map the ranking expression into a
+ﬁlter condition might result in a condition that matches more than
+k objects. Our experiments conﬁrm
+that Rank (0.01) retrieves more objects than FA for
+RMax: the average lowest grade seen by FA using sorted
+access (0.999003 for the Uniform data set) is slightly higher than the grade
+G used by Rank (0.99 for the
+Uniform data set). Note that the queries in the default setting ask for just top 10 objects, and that 0.99 is
+the highest grade that Rank (0.01) could pick for the default selectivity-estimate granularity of 0.01 used
+in these experiments. The grade
+G associated to Rank (0.001) is 0.999, and the performance of Rank for
+this ﬁner-granularity case is almost identical to that of FA. Figure 5 shows the corresponding experimental
+results for the Correlated data sets.
+Rank (0.01)
+Rank (0.001)
+(a) Comparison of Rank and FA for
+RMin over the
+Correlated data sets.
+Rank (0.01)
+Rank (0.001)
+(b) Comparison of Rank and FA for
+RMax over the
+Correlated data sets.
+Figure 5: Comparison of the techniques for
+RMax over the Correlated data sets.
+(a) Effect of the number of objects requested
+RMin on the query costs of Rank and FA.
+(b) Effect of the number of objects requested
+RMax on the query costs of Rank and FA.
+Figure 6: Effect of the number of objects requested
+RMax on the query costs of Rank and
+Effect of the Number of Objects Requested
+Figure 6 studies the effect of the number of objects
+k on the query costs of FA and Rank. Figure 6(a) shows that the cost of both techniques for
+increases slightly with
+k since more objects are processed to compute the query result. Figure 6(b) shows
+that FA’s performance for
+RMax is linear in the number of objects requested
+k, while Rank’s performance is
+constant for the values of
+k that we tried: the highest grade
+G that Rank can use, given the default setting
+of the selectivity-estimate granularity, generally results in more objects being retrieved than needed, hence
+this “ﬂat” behavior. Note that Rank’s cost will increase in steps each time
+G has to be decreased for
+objects to be retrieved.
+Statistics Granularity
+(a) Effect of the “granularity” of the selectivity estimates for
+RMin on the query costs of Rank.
+Statistics Granularity
+(b) Effect of the “granularity” of the selectivity estimates for
+RMax on the query costs of Rank.
+Figure 7: Effect of the “granularity” of the selectivity estimates for
+RMax on the query costs of
+Effect of the “Granularity” of the Selectivity Estimates:
+Figure 7 studies the effect on the query costs
+of Rank of the “granularity” with which our techniques make selectivity estimates. Figure 7(a) shows that
+the performance of Rank for
+RMin suffers if the granularity is too ﬁne or too coarse: if the granularity is
+too ﬁne, Rank is prone to restarts since a slight error in selectivity estimation might decrease the number
+of objects that satisfy the ﬁlter condition below
+k. (As usual, the costs reported in Figure 7 include the
+costs of “restarts” for Rank, as discussed above.) If the granularity is too coarse, Rank will process more
+objects to identify the top-k objects, since more objects are expected to satisfy the ﬁlter condition. FA
+does not use statistics on data, and is therefore unaffected by variations of the granularity of the selectivity
+estimates. For the setting of this experiment, FA’s cost is higher than 290,000. Rank’s performance is still
+much better than FA’s, for all granularities of the selectivity estimates that we tried. Figure 7(b) shows
+that the performance of Rank for
+RMax improves when the granularity of the selectivity estimates becomes
+ﬁner, as discussed above.
+(a) Effect of data-set noise for
+RMin on the query
+cost of Rank (Gaussian data set).
+Percentage of Queries
+0 restarts
+2 restarts
+3 restarts
+4 restarts
+5+ restarts
+(b) Effect of data-set noise for
+RMin on the number
+of restarts for Rank (Gaussian data set).
+Figure 8: Effect on the query cost and restarts of Rank of the divergence of data sets and their corresponding selectivity estimates, for
+RMin (Gaussian data set).
+(a) Effect of data-set noise for
+RMin on the query
+cost of Rank (Uniform data set).
+(b) Effect of data-set noise for
+RMin on the number
+of restarts for Rank (Uniform data set).
+Figure 9: Effect on the query cost and restarts of Rank of the divergence of data sets and their corresponding selectivity estimates, for
+RMin (Uniform data set).
+Effect of the Selectivity-Estimate Error:
+Rank relies on selectivity estimates to map ranking expressions into ﬁlter conditions. We have already reported on the effect of the “granularity” of such estimates
+on the quality of the mapping. Now, we study the effect of inaccurate estimates on Rank. For this experiment, we use two conﬁgurations. In the ﬁrst conﬁguration, the actual data set is generated using a
+Gaussian distribution with only one bell . The selectivity estimates that Rank uses are then created
+O objects from the actual data set and
+O objects from another data set generated using a Uniform distribution. Thus, when the
+noise is equal to 0, the selectivity estimates are exact,
+while when
+noise is equal to
+1, the selectivity estimates are highly inaccurate and based on a completely
+different data set generated using a different grade distribution. Results for this ﬁrst conﬁguration are
+shown in Figure 8. In the second conﬁguration, the actual data set is generated using a Uniform distribution, and the selectivity estimates are created using
+O objects from the actual data
+O objects from another data set generated using a Gaussian distribution (Figure 9). For
+the ﬁrst conﬁguration, selectivity estimates tend to overestimate the number of objects retrieved for a
+given grade. Figure 8(a) shows that the query cost is affected by the noise, and increases as expected as
+noise value increases (and the data set and its associated selectivity estimates become increasingly
+further apart). However, Rank’s query cost is lower than FA’s, even for high values of data-set noise. Figure 8(b) shows that the number of queries in need of restarts increases as noise increases, and so does the
+number of restarts per query. The increase in the number of restarts results from the selectivity estimates
+overestimating the actual number of objects retrieved for a given grade. However, the vast majority of
+the queries do not need to be restarted more than once, because of the grade adjustment by our “restarts”
+strategy, which is based on query feedback: even when
+1, only 14 % of the queries require to
+be restarted more than once. For the second conﬁguration, selectivity estimates tend to underestimate the
+number of objects retrieved for a given grade, resulting in smaller
+G grades. As seen in Figure 9(a), the
+query cost is moderately affected by the noise, since more objects than needed are being retrieved as
+is lower. Figure 9(b) shows that underestimating the number of object retrieved results in fewer restarts,
+since more objects than estimated are actually retrieved. In summary, these results, together with those
+for varying selectivity-estimate granularities, suggest that Rank works well even with less-than-ideal selectivity estimates, especially in conjunction with our “restarts” strategy (Steps 5-11 of Algorithm Rank),
+which adjusts the search grade based on the query-result feedback from the ﬁrst ﬁlter-condition execution. Figure 10 shows the corresponding experimental results for a Correlated (1,5) data set. For this
+set, there is one group of 5 correlated attributes, and the
+th attribute is negatively correlated with respect
+to the ﬁve-attribute group. The selectivity estimates are created using
+O objects from the
+actual data set and
+O objects from another data set generated using a Gaussian distribution. Since
+some attributes are negatively correlated, even when statistical information is correct, all queries need at
+least one restart. We also ran similar experiments for
+RMax that we do not report here for lack of space,
+and observed that in that case Rank is not signiﬁcantly affected by the divergence of the data set and the
+selectivity estimates, probably because the values of
+k that we tried are smaller than the expected number
+of objects usually retrieved using the ﬁlter condition.
+(a) Effect of data-set noise for
+RMin on the query
+cost of Rank ((1,5) Correlated data set).
+Percentage of Queries
+0 restarts
+2 restarts
+3 restarts
+4 restarts
+5+ restarts
+(b) Effect of data-set noise for
+RMin on the number
+of restarts for Rank ((1,5) Correlated data set).
+Figure 10: Effect on the query cost and restarts of Rank of the divergence of data sets and their corresponding selectivity estimates, for
+RMin ((1,5) Correlated data set).
+Related Work
+Our query model captures the aspects of ﬁltering based on graded search and ranking. The concept of a
+graded match has been used extensively. For example, the query model in allows specifying a grade
+of match as well as ranking. However, the processing of queries in is based on searches (i.e., no
+probes are considered).
+Many database systems have been built and prototyped with varying degrees of support for processing
+user-deﬁned functions . The QBIC system from IBM Almaden allows users to query image
+repositories using a variety of attributes of the images, like color, texture, and shapes. The answer to
+a query is a rank of the images that best match the query values for the attributes. Another example is
+Cypress, a picture retrieval system built using Postgres that allows a ﬁlter condition to be speciﬁed,
+and returns a set of objects as the answer to the ﬁlter condition. Thus, the Cypress model does not support
+ranking. Each object in Cypress has an image, a set of features (e.g., color histogram), an associated text
+and other structured information. The querying interface supports user-deﬁned functions and predicates
+including a set of predeﬁned graded matches (e.g., a predicate “mostly yellow”).
+The problem of optimizing user-deﬁned ﬁlter conditions such as those in Cypress has been addressed
+in the literature. Work in focuses on conjunctive selection conditions. Techniques to
+optimize arbitrary boolean selection conditions have been studied in . Our work draws upon
+the known results in this area. (See Section 3.)
+The problem of determining an optimal set of conditions to search arises naturally when optimizing
+single-table queries with multiple indexes where the problem translates into the task of identifying
+the appropriate set of indexes to union and to intersect
+5. By imposing the search minimality criterion, we
+have eliminated the need to consider index intersection and we always choose a single condition among
+conjuncts on which to search. This imposes implicitly the assumption that search cost is signiﬁcantly
+higher compared to probe cost. On the other hand, we do account for non-zero probe costs, unlike ,
+and are able to prove that our optimization algorithm produces an optimal search-minimal plan with low
+computational overhead if atomic conditions are independent. This optimization problem can also be cast
+as optimization of relational queries that involve joins as well as unions. As above, such a formulation
+fails to capture characteristics that are particular of selection queries, as exploited in our algorithms.
+The information retrieval community has extensively studied the problem of ranking documents according to their expected relevance for a given query. Given a query with terms
+n, a retrieval
+system typically retrieves the inverted lists associated with each of the terms
+i, and ranks the documents
+that appear in these lists . If users are not interested in the entire document ranks, but only in the top
+document matches, some techniques avoid accessing all of the
+n lists associated with the terms .
+In the context of the Garlic project at IBM Almaden , Fagin’s work focuses on how
+to evaluate queries that ask for a few top matches for a ranking expression. (See Section 4.2.) In his
+queries, the notions of true and false are replaced by graded matches, and boolean operators are reinterpreted to give the semantics of composition functions that take two grades of match and produce a
+composite grade (e.g., Min, Max). Thus, our ranking expressions are a special case of Fagin’s queries.
+Under broad assumptions on the cost model, Fagin demonstrates the optimality of his algorithm for a class
+of composition functions. Also, Fagin and Wimmers discuss how to modify the scoring function to
+incorporate user preferences so that, say, an attribute might be twice as important to a user than the other
+attributes mentioned in the query. Finally, Wimmers et al. describe their experience in implementing
+Fagin’s original algorithm on Garlic. Fagin’s algorithm was markedly more efﬁcient in “joining” multiple
+multimedia sources compared to traditional join techniques. However, the paper also points to intrin-
+5The problem of sequencing the order of accesses to subﬁles of transposed ﬁles is also related in a similar way .
+sic difﬁculties arising from heterogeneity of sources that makes establishing object identity difﬁcult and
+describes the steps that were needed in Garlic to overcome these issues.
+The work by Ortega et al. on the MARS system developed a system for supporting ranked retrieval
+over image databases. One of their key contributions is an adaptation of Fagin’s algorithm that has the
+ﬂavor of a “merge-join” algorithm. Top- k query processing over traditional relational data has received
+recent attention .
+In this paper, we have investigated only one aspect of querying, namely that of selecting objects via
+a ﬁlter condition and using the ranking expression to order them. However, querying over multimedia
+repositories has several other dimensions that we have not addressed. For example, capturing the interrelations present in a multimedia document or in a composite multimedia object requires richer semantics
+and retrieval models . Furthermore, modeling uncertainty and vagueness in data and queries is
+a semantic issue that is beyond the scope of this paper.
+In this paper, we addressed the problem of cost-based optimization of queries over multimedia repositories. Over multimedia repositories, specifying conditions on the degree of match between values (e.g.,
+color histograms) is an important aspect of the problem. In many of these repositories, the only way to
+evaluate conditions is through an index. Furthermore, we can use indexes to either evaluate a search condition or to probe a condition. We analyzed the problem of cost-based optimization of ﬁlter conditions in
+this framework. We have implemented a prototype retrieval system based on the ideas that we introduce
+in this paper. We created a sample multimedia repository consisting of objects with images and textual
+captions. We got the captions and images from the Digital Library project at the University of California
+at Berkeley, more speciﬁcally, from the Cypress project there. (See Section 6.)
+We deﬁned a space of search-minimal executions, and presented an efﬁcient algorithm to determine
+the optimal choice of a search-minimal condition set for ﬁlter conditions with independent atomic conditions. Our experimental results indicate that the cost of the strategies can be signiﬁcantly lowered by
+considering search and probe costs, compared to the cost of strategies adopted by optimizing for only
+the search or the probe costs separately. Although search-minimal executions minimize the number of
+conditions to search on, our experiments indicate that through a post-optimization step the quality of our
+plans is almost as good as those obtained over an exhaustive search of the plan space. Furthermore, our al-
+gorithm provides a search-minimal condition set even if the ﬁlter condition is not independent. However,
+optimality in such a scenario requires an exhaustive approach, as indicated by our NP-hardness result.
+Another aspect of querying this type of repositories is that often the user is interested in just a few best
+matches for a ranking expression. A key contribution of our paper has been to show that such a ranking
+expression can be mapped into and executed as a ﬁlter condition with a ﬁnal sorting step over just the top
+objects. Our thorough experimental evaluation indicates that this approach is highly efﬁcient even when
+the selectivity estimates on which it relies are inaccurate, for a variety of data distributions and query
+scenarios.
+Acknowledgments
+We thank Umesh Dayal, Ron Fagin, H´ector Garc´ıa-Molina, Jeff Ullman, and Tak Yan for helpful discussions and comments.

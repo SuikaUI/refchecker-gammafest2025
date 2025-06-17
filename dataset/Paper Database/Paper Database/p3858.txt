@@ -1,0 +1,380 @@
+Deep Convolutional Neural Network for
+Inverse Problems in Imaging
+Kyong Hwan Jin, Michael T. McCann, Member, IEEE, Emmanuel Froustey,
+Michael Unser, Fellow, IEEE
+In this paper, we propose a novel deep convolutional neural network (CNN)-based algorithm for
+solving ill-posed inverse problems. Regularized iterative algorithms have emerged as the standard approach to ill-posed inverse problems in the past few decades. These methods produce excellent results,
+but can be challenging to deploy in practice due to factors including the high computational cost of
+the forward and adjoint operators and the difﬁculty of hyper parameter selection. The starting point
+of our work is the observation that unrolled iterative methods have the form of a CNN (ﬁltering
+followed by point-wise non-linearity) when the normal operator (H∗H, the adjoint of H times H)
+of the forward model is a convolution. Based on this observation, we propose using direct inversion
+followed by a CNN to solve normal-convolutional inverse problems. The direct inversion encapsulates
+the physical model of the system, but leads to artifacts when the problem is ill-posed; the CNN combines
+multiresolution decomposition and residual learning in order to learn to remove these artifacts while
+preserving image structure. We demonstrate the performance of the proposed network in sparse-view
+reconstruction (down to 50 views) on parallel beam X-ray computed tomography in synthetic phantoms
+as well as in real experimental sinograms. The proposed network outperforms total variation-regularized
+iterative reconstruction for the more realistic phantoms and requires less than a second to reconstruct a
+512 × 512 image on the GPU.
+I. INTRODUCTION
+Over the past decades, iterative reconstruction methods have become the dominant approach to solving
+inverse problems in imaging including denoising – , deconvolution , , and interpolation ,
+ . Thanks to robust regularizers such as total variation , , and sparsity , practical algorithms
+have appeared with excellent image quality and reasonable computational complexity. These advances
+K.H. Jin acknowledges the support from the “EPFL Fellows” fellowship program co-funded by Marie Curie from the European
+Unions Horizon 2020 Framework Programme for Research and Innovation under grant agreement 665667.
+K.H. Jin is with the Biomedical Imaging Group, EPFL, Lausanne, Switzerland (e-mail: ).
+Michael McCann is with the Center for Biomedical Imaging, Signal Processing Core and the Biomedical Imaging Group,
+EPFL, Lausanne, Switzerland (e-mail: ).
+E. Froustey is with Dassault Aviation, Saint-Cloud, France, previously with the Biomedical Imaging Group, EPFL, Lausanne,
+Switzerland. (e-mail: ).
+Michael Unser is with the Biomedical Imaging Group, EPFL, Lausanne, Switzerland (e-mail: ).
+November 14, 2016
+ 
+have been particularly inﬂuential in the ﬁeld of biomedical imaging, e.g., in magnetic resonance imaging
+(MRI) , and X-ray computed tomography (CT) , . These devices face an unfavorable
+trade-off between noise and acquisition time. Short acquisitions lead to severe degradations of image
+quality, while long acquisitions may cause motion artifacts, patient discomfort, or even patient harm
+in the case of radiation-based modalities. Iterative reconstruction with regularization provides a way
+to mitigate these problems in software, i.e. without developing new scanners. With the appearance of
+compressed sensing , our theoretical understanding of these approaches evolved further, and, in some
+applications, remarkable outcomes appeared with stable reproducibility , .
+A more recent trend is deep learning , which has arisen as a promising framework providing
+state-of-the-art performance for image classiﬁcation , and segmentation – . Moreover,
+regression-type neural networks demonstrated impressive results on inverse problems with exact models
+such as signal denoising , , deconvolution , and interpolation , . Central to this
+resurgence of neural networks has been the convolutional neural network (CNN) architecture. Whereas
+the classic multilayer perceptron consists of layers that can perform arbitrary matrix multiplications on
+their input, the layers of a CNN are restricted to perform convolutions, greatly reducing the number of
+parameters which must be learned.
+Researchers have begun to investigate the link between conventional approaches and deep learning
+networks – . Gregor and LeCun explored the similarity between the ISTA algorithm and
+a shared layerwise neural network and demonstrated that several layer-wise neural networks act as a fast
+approximated sparse coder. In , a nonlinear diffusion reaction process based on the Perona-Malik
+process was proposed using deep convolutional learning; convolutional ﬁlters from diffusion terms were
+trained instead of using well-chosen ﬁlters like kernels for diffusion gradients, while the reaction terms
+were matched to the gradients of a data ﬁdelity term. In , the authors focused on the relationship
+between l0 penalized-least-squares methods and deep neural networks. In the context of a clustered
+dictionary model, they found that the non-shared layer-wise independent weights and activations of a
+deep neural network provide more performance gain than the layer-wise ﬁxed parameters of an unfolded
+l0 iterative hard thresholding method. The quantitative analysis relied on the restricted isometry property
+(RIP) condition from compressed sensing . Others have investigated learning optimal shrinkage
+operators for deep-layered neural networks , .
+Despite these works, practical and theoretical questions remain regarding the link between iterative
+reconstruction and CNNs. For example, in which problems can CNNs outperform traditional iterative
+reconstructions, and why? Where does this performance come from, and can the same gains be realized
+November 14, 2016
+by learning aspects of the iterative process (e.g. the shrinkage)? Although began to address this
+connection, they only assumed that the ﬁlters learned in the Perona-Malik scheme are modiﬁed gradient
+kernels, with performance gains coming from the increased size of the ﬁlters.
+In this paper, we explore the relationship between CNNs and iterative optimization methods for one
+speciﬁc class of inverse problems: those where the normal operator associated with the forward model
+(H∗H, where H is the forward operator and H∗is the adjoint operator) is a convolution. The class trivially
+includes denoising and deconvolution, but also includes MRI , X-ray CT , , and diffraction
+tomography (DT). Based on this connection, we propose a method for solving these inverse problems
+by combining a fast, approximate solver with a CNN. We demonstrate the approach on low-view CT
+reconstruction, using ﬁltered back projection (FBP) and a CNN that makes use of residual learning 
+and multilevel learning . We use high-view FBP reconstructions for training, meaning that training is
+possible from real data (without oracle knowledge). We compare to a state-of-the art regularized iterative
+reconstruction and show promising results on both synthetic and real CT data. Especially, reconstructed
+images from the proposed network represented well complex textures which are important to diagnosis.
+II. INVERSE PROBLEMS WITH SHIFT-INVARIANT NORMAL OPERATORS
+We begin our discussion by describing the class of inverse problems for which the normal operator is
+a convolution. As we will show, solving problems of this form iteratively requires repeated convolutions
+and point-wise nonlinearities, which suggests that CNNs may offer an alternative solution. The class is
+broad, encompassing at least denoising, deconvolution, and reconstruction of MRI, CT, and diffraction
+tomography images. The underlying convolutional structure is known for MRI and CT and has been
+exploited in the past for the design of fast algorithms (e.g. ). Here, we aim to give a general and
+concise deﬁnition to motivate our method. We go on to discuss the standard direct and iterative approaches
+to solving these problems.
+For the continuous case, let H : L2(Rd1) →L2(Ω) be a linear operator and H∗denote its adjoint,
+where L2(Ω) = {f : Ω→C |
+Ω|f(x)|2dx < +∞}. The range, Ω⊆Rd2, remains general to include
+operators such as the X-ray transform, where the measurements are deﬁned on a circular/spherical domain.
+The following deﬁnitions give the building blocks of a normal shift-invariant operator.
+Deﬁnition 1 (Multiplication). A multiplication, Mm : L2(Ω) →L2(Ω), is a linear operator such that
+Mm{f}(x) = m(x)f(x) with m ∈L2(Ω) for some continuous, bounded function, m : Ω→C.
+November 14, 2016
+Deﬁnition 2 (Convolution). A convolution, Hh : L2(Ω) →L2(Ω), is a linear operator such that Hhf =
+F∗MˆhFf, where F is the Fourier transform, ˆh is the Fourier transform of h, and Mˆh is a multiplication.
+Deﬁnition 3 (Reversible change of variables). A reversible change of variables, Φϕ : L2(Ω1) →L2(Ω2), is
+a linear operator such that Φϕf = f(ϕ(·)) for some φ : Ω2 →Ω1 and such that its inverse, Φ−1
+If Hh is a convolution, then H∗
+hHh is as well (because F∗M∗
+ˆhFF∗MˆhF = F∗M|ˆh|2F), but this is
+true for a wider set of operators. Theorem 1 describes this set.
+Theorem 1 (Normal-convolutional operators). If there exists an isometry, T, a multiplication, Mm,
+and a change of variables, Φϕ, such that H = TMmΦ−1
+ϕ F, then H∗H is a convolution with ˆh =
+| det Jϕ|MΦϕ|m|2, where Jϕ is the Jacobian matrix of ϕ and MΦϕ|m|2 is a suitable multiplication.
+Proof. Given an operator, H, that satisﬁes the conditions of Theorem 1,
+H∗H = F∗(Φ−1
+mT ∗TMmΦ−1
+ϕ )∗M|m|2Φ−1
+= F∗| det Jϕ|MΦϕ|m|2F
+where (a) follows from the deﬁnitions of isometry and multiplication and (b) follows from the deﬁnition
+of a reversible change of variables. Thus, H∗H is a convolution by Deﬁnition 2.
+A version of Theorem 1 also holds in the discrete case; we sketch the result here. Starting with
+a continuous-domain operator, Hc, that satisﬁes the conditions of Theorem 1, we form a discretedomain operator, Hd : l2(Zd0) →l2(Zd1), H = SHcQ, where S and Q are sampling and interpolation,
+respectively. Then, assuming that HcQf is bandlimited, H∗
+dHd is a convolution.
+For example, consider the continuous 2D X-ray transform, R : L2(R2) →L2([0, π) × R), which
+measures every line integral of a function of 2D space, indexed by the slope and intercept of the line.
+Using the Fourier central slice theorem ,
+where Φϕ changes from Cartesian to polar coordinates (i.e. ϕ−1(θ, r) = (r cos θ, r sin θ)) and T is the
+inverse Fourier transform with respect to r (which is an isometry due to Parseval’s theorem). This maps
+a function, f, of space, x, to its Fourier transform, ˆf, which is a function of frequency, ω. Then, it
+November 14, 2016
+performs a change of variables, giving ˆfpolar, which is a function of a polar frequency variables, (θ, r).
+Finally, T inverts the Fourier transform along r, resulting in a sinogram that is a function of θ and a
+polar space variable, y. Theorem 1 states that R∗R is a convolution with ˆh(ω) = | det Jϕ(ω)| = 1/∥ω∥,
+where, again, ω is the frequency variable associated with the 2D Fourier transform, F.
+B. Direct Inversion
+Given a normal-convolutional operator, H, the inverse (or reconstruction) problem is to recover an
+image f from its measurements g = Hf. The theory presented above suggests two methods of direct
+solutions to this problem. The ﬁrst is to apply the inverse of the ﬁlter corresponding to H∗H to the back
+projected measurements,
+f = WhH∗g,
+where Wh is a convolution operator with ˆh(ω) = 1/(|det Jϕ|Φϕ|m(ω)|2). This is exactly equivalent to
+performing a deconvolution in the reconstruction space. The second is to invert the action of H in the
+measurement domain before back projecting,
+f = H∗TMhT ∗g,
+where Mh is a multiplication operator with h(ω) = 1/(| det Jϕ||m(ω)|2). If T is a Fourier transform,
+then this inverse is a ﬁltering operation followed by a back projection; if T is not, the operation remains
+ﬁltering-like in the sense that it is diagonalizable in the transform domain associated with T. Note also
+that if T is not a Fourier transform, then the variable ω no longer refers to frequency. Given the their
+ﬁlter-like form, we refer to these direct inverses as ﬁltered back projection (FBP) , a term borrowed
+from X-ray CT reconstruction.
+Returning to the example of the continuous 2D X-ray transform, the ﬁrst method would be to back
+project the measurements and then apply the ﬁlter with a 2D Fourier transform given by ∥ω∥. The second
+approach would be to apply the ﬁlter with 1D Fourier transform given by ω to each angular measurement
+and then back project the result. In the continuous case, the methods are equivalent, but, in practice, the
+measurements are discrete and applying these involves some approximation. Then, which form is used
+affects the accuracy of the reconstruction (along with the runtime). This type of error can be mitigated
+by formulating the FBP to explicitly include the effects of sampling and interpolation (e.g., as in ).
+The larger problem is that the ﬁlter greatly ampliﬁes noise, thus in practice some amount of smoothing
+is also applied.
+November 14, 2016
+C. Iterative Inversion
+In practice, inverse problems related with imaging are often ill-posed, which prohibits the use of direct
+inversion because measurement noise causes serve perturbations in the solution. Adding regularization
+(e.g., total variation or l1 sparsity as in LASSO ) overcomes this problem. We now adopt the
+discrete, ﬁnite-support notation where the forward model is a matrix, H ∈RNy×Nx and the measurements
+are a vector, y ∈RNy. The typical synthesis form of the inverse problem is then
+2 + λ∥a∥1,
+where a ∈RNa is the vector of transform coefﬁcients of the reconstruction such that x = Wa is the
+desired reconstruction and where W ∈RNx×Na is a transform so that a is sparse. For example, if W is a
+multichannel wavelet transform W =
+ , , then the formulation promotes
+the wavelet-domain sparsity of the solution. And, for many such transforms, W will be shift-invariant
+(a set of convolutions).
+This formulation does not admit a closed form solution, and, therefore, is typically solved iteratively.
+For example, the popular ISTA , algorithm solves Eq. (5) with the iterate
+ak+1 = prox
+LW∗H∗y + (I −1
+LW∗H∗HW)ak
+where Sθ is the soft-thresholding operator by value θ and L ≤eig(W∗H∗HW) is the Lipschitz constant
+of a normal operator. When the forward model is normal-convolutional and when W is a convolution,
+the algorithm consists of iteratively ﬁltering by I −(1/L)W∗H∗HW, adding a bias, (1/L)W∗H∗y,
+and applying a point-wise nonlinearity, Sθ. This is illustrated as a block diagram with unfolded iterates
+in Fig. 1 (b). Many other iterate methods for solving Eq. (5), including ADMM , FISTA , and
+SALSA , also rely on these basic building blocks.
+III. PROPOSED METHOD: FBPCONVNET
+The success of iterative methods consisting of ﬁltering plus pointwise nonlinearities on normalconvolutional inverse problems suggests that CNNs may be a good ﬁt for these problems as well. Based
+on this insight, we propose a new approach to these problems, which we call the FBPConvNet. The
+basic structure of the FBPConvNet algorithm is to apply the discretized FBP from Section II-B to the
+measurements and then use this as the input of a CNN which is trained to regress the FBP result to
+a suitable ground truth image. This approach applies in principle to all normal-convolutional inverse
+problems, but we have focused in this work on CT reconstruction. We now describe the method in detail.
+November 14, 2016
+Fig. 1. Block diagrams about (a) unfolded version of iterative shrinkage method , (b) unfolded version of iterative shrinkage
+method with sparsifying transform (W) and (c) convolutional network with the residual framework. L is the Lipschitz constant,
+x0 is the initial estimates, bi is learned bias, wi is learned convolutional kernel. The broken line boxes in (c) indicate the
+variables to be learned.
+A. Filtered Back Projection
+While it would be possible to train a CNN to regress directly from the measurement domain to the
+reconstruction domain, performing the FBP ﬁrst greatly simpliﬁes the learning. The FBP encapsulates
+our knowledge about the physics of the inverse problem and also provides a warm start to the CNN.
+For example, in the case of CT reconstruction, if the sinogram is used as input, the CNN must encode
+a change between polar and Cartesian coordinates, which is completely avoided when the FBP is used
+as input. We stress again that, while the FBP is speciﬁc to CT, Section II-C shows that efﬁcient, direct
+inversions are always available for normal-convolutional inverse problems.
+B. Deep Convolutional Neural Network Design
+While we were inspired by the general form of the proximal update, (6), to apply a CNN to inverse
+problems of this form, our goal here is not to imitate iterative methods (e.g. by building a network that
+corresponds to an unrolled version of some iterative method), but rather to explore a state-of-the-art
+November 14, 2016
+Fig. 2. Structure of the proposed deep convolutional network for deconvolution.
+CNN architecture. To this end, we base our CNN on the U-net , which was originally designed for
+segmentation. There are several properties of this architecture that recommend it for our purposes.
+Multilevel decomposition. The U-net employs a dyadic scale decomposition based on max pooling,
+so that the effective ﬁlter size in the middle layers is larger than that of the early and late layers. This
+is critical for our application because the ﬁlters corresponding to H∗H (and its inverse) may have noncompact support, e.g. in CT. Thus, a CNN with a small, ﬁxed ﬁlter size may not be able to effectively
+invert H∗H. This decomposition also has a nice analog to the use of multiresolution wavelets in iterative
+approaches.
+Multichannel ﬁltering. U-net employs multichannel ﬁlters, such that there are multiple feature maps
+at each layer. This is the standard approach in CNNs to increase the expressive power of the network
+ . The multiple channels also have an analog in iterative methods: In the ISTA formulation (6), we can
+think of the wavelet coefﬁcient vector a as being partitioned into different channels, with each channel
+corresponding to one wavelet subband , . Or, in ADMM , the split variables can be viewed as
+channels. The CNN architecture greatly generalizes this by allowing ﬁlters to make arbitrary combinations
+of ﬁlters.
+November 14, 2016
+Residual learning. As a reﬁnement of the original U-net, we add a skip connection between input
+and output, which means that the network actually learns the difference between input and output. This
+approach mitigates the vanishing gradient problem during training. This yields a noticeable increase
+in performance compared to the same network without the skip connection.
+Implementation details. We made two additional modiﬁcation to U-net. First, we use zero-padding
+so that the image size does not decrease after each convolution. Second, we replaced the last layer with
+a convolutional layer which reduces the 64 channels to a single output image. This is necessary because
+the original U-net architecture results in two channgels: foreground and background.
+IV. EXPERIMENTS AND RESULTS
+We now describe our experimental setup and results. Though the FBPConvNet algorithm is general,
+we focus here on sparse-view X-ray CT reconstruction. We compare FBPConvNet to FBP alone and
+a state-of-the-art iterative reconstruction method . This method (which we will refer to as the TV
+method for brevity) solves a version of Eq. (5) with the popular TV regularization via ADMM. It exploits
+the convolutional structure of H∗H by using FFT-based ﬁltering in its iterates.
+Our experiments proceed as follows: We begin with a full view sinogram (either synthetically generated
+or from real data). We compute its FBP (standard high quality reconstruction) and take this as the ground
+truth. We then compare the results of applying the TV method to the subsampled sinogram with the
+results of applying the FBPConvNet to the same. This type of sparse-view reconstruction is of particular
+interest for human imaging because, e.g., a twenty times reduction in the number of views corresponds
+to a twenty times reduction in the radiation dose received by the patient.
+A. Data Preparation
+We used three datasets for evaluations of the proposed method. The ﬁrst two are synthetic in that the
+sinograms are computed using a digital forward model, while the last comes from real experiments.
+1) The ellipsoid dataset is a synthetic dataset that comprises 500 images of ellipses of random intensity,
+size, and location. Sinograms for this data are 729 pixels by 1,000 views and are created using the
+analytical expression for the X-ray transform of an ellipse. The Matlab function iradon is used
+2) The biomedical dataset is a synthetic dataset that comprises 500 real in-vivo CT images from the
+Low-dose Grand challenge competition from database made by the Mayo clinic. Sinograms for this
+November 14, 2016
+data are 729 pixels by 1,000 views and are created using the Matlab function radon. iradon is
+again used for FBPs.
+3) The experimental dataset is a real CT dataset that comprises 377 sinograms collected from an
+experiment at the TOMCAT beam line of the Swiss Light Source at the Paul Scherrer Institute
+in Villigen, Switzerland. Each sinogram is 1493 pixels by 721 views and comes from one zslice of a single rat brain. FBPs were computed using our own custom routine which closely
+matches the behavior of iradon while accommodating different sampling steps in the sinogram
+an reconstruction domains.
+To make sparse-view FBP images in synthetic datasets, we uniformly subsampled the sinogram by
+factors of 7 and 20 corresponding to 143 and 50 views, respectively. For the real data, we subsampled
+by factors of 5 and 14 corresponding to 145 and 52 views.
+B. Training Procedure
+FBPConvNet. In case of synthetic data, the total number of training images is 475. The number of
+test images is 25. In the case of the biomedical dataset, the test data is chosen from a different subject
+than the training set. For the real data, the total number of training images is 327. The number of test
+images is 25. The test data are obtained from the last z-slices with the gap of 25 slices left between
+testing and training data. All images are scaled between 0 and 550.
+The CNN part of the FBPConvNet is trained using pairs of low-view FBP images and full-view
+FBP images as input and output, respectively. Note that this training strategy means that the method is
+applicable to real CT reconstructions where we do not have access to an oracle reconstruction.
+We use the MatConvNet toolbox (ver. 20) to implement the FBPConvNet training and evaluation,
+with a slight modiﬁcation: We clip the computed gradients to a ﬁxed range to prevent the divergence of
+the cost function , . We use a Titan Black GPU graphic processor (NVIDIA Corporation) for
+training and evaluation. Total training time is about 15 hours for 101 iterations.
+The hyper parameters for training are as follows: learning rate decreasing logarithmically from 0.01
+to 0.001; batchsize equals 1; momentum equals 0.99; and the clipping value for gradient equals 10−2.
+We use ﬂip-ﬂop data augmentation in both horizontal and vertical directions during the training phase to
+reduce overﬁtting .
+State-of-the-art TV reconstruction. For completeness, we comment on how the iterative method
+used the training and testing data. Though it may be a fairer comparison to require the TV method to
+select its parameters from the training data (as the FBPConvNet does), we instead simply select the
+November 14, 2016
+parameters that optimize performance on the training set (via a golden-section search). We do this with
+the understanding that the parameter is usually tuned by hand in practice and because the correct way
+to learn these parameters from data remains an open question.
+V. EXPERIMENTAL RESULTS
+We use SNR as a quantitative metric. If x is the oracle and ˆx is the reconstructed image, SNR is given
+a,b∈R 20 log
+∥x −aˆx + b∥2
+where a higher SNR value corresponds to a better reconstruction.
+A. Ellipsoidal Dataset
+Fig. 3. Reconstructed images of ellipsoidal dataset from 143 views using FBP, TV regularized convex optimization , and
+the FBPConvNet. The ﬁrst row shows the ROI with full region of image, and the second row shows magniﬁed ROI for the
+appearance of differences. All subsequent ﬁgures keep the same manner.
+Figures 3 and 4 and Table I show the results for the ellisoidal dataset. In the seven times downsampling
+case, Figure 3, the full-view FBP (ground truth) shows nearly artifact-free ellipsoids, while the sparseview FBP shows signiﬁcant line artifacts (most visible in the background). Both the TV and FBPConvNet
+November 14, 2016
+Fig. 4. Reconstructed images of ellipsoidal dataset from 50 views using FBP, TV regularized convex optimization , and the
+FBPConvNet.
+methods signiﬁcantly reduce these artifacts, giving visually indistinguishable results. When the downsampling is increased to twenty times, Figure 4, the line artifacts in the sparse-view FBP reconstruction are
+even more pronounced. Both the TV and FBPConvNet reduce these artifacts, though the FBPConvNet
+retains some of the artifacts. The average SNR on the testing set for the TV method is higher than that
+of the the FBPConvNet. This is a reasonable results given that the phantom is piecewise constant and
+thus the TV regularization should be optimal , .
+COMPARISON OF SNR BETWEEN DIFFERENT RECONSTRUCTION ALGORITHMS FOR NUMERICAL ELLIPSOIDAL DATASET.
+avg. SNR (dB)
+143 views (x7)
+50 views (x20)
+November 14, 2016
+B. Biomedical Dataset
+Figures 5 and 6 and Table II show the results for the biomedical dataset. In Figure 5, again, the
+sparse-view FBP contains line artifacts. Both TV and the proposed method remove streaking artifacts
+satisfactorily; however, the TV reconstruction shows the cartoon-like artifacts that are typical of TV
+reconstructions. This trend is also observed in severe case (x20) in Fig. 6. Quantitatively, the proposed
+method outperforms the TV method.
+Fig. 5. Reconstructed images of biomedical dataset from 143 views using FBP, TV regularized convex optimization , and
+the FBPConvNet.
+COMPARISON OF SNR BETWEEN DIFFERENT RECONSTRUCTION ALGORITHMS FOR BIOMEDICAL DATASET.
+avg. SNR (dB)
+143 views (x7)
+50 views (x20)
+November 14, 2016
+Fig. 6. Reconstructed images of biomedical dataset from 50 views using FBP, TV regularized convex optimization , and
+the FBPConvNet.
+Fig. 7. Reconstructed images of experimental dataset from 145 views using FBP, TV regularized convex optimization , and
+the FBPConvNet.
+November 14, 2016
+Fig. 8. Reconstructed images of experimental dataset from 52 views using FBP, TV regularized convex optimization , and
+the FBPConvNet.
+COMPARISON OF SNR BETWEEN DIFFERENT RECONSTRUCTION ALGORITHMS FOR EXPERIMENTAL DATASET.
+avg. SNR (dB)
+145 views (x5)
+51 views (x14)
+C. Experimental Dataset
+Figures 7 and 8 and Table III show the results for the experimental dataset. The SNRs of all methods
+are signiﬁcantly lower here because of the relatively low contrast of the sinogram. In Fig. 7, we observe
+the same trend as for the biomedical dataset, where the TV method oversmooths and the FBPConvNet
+better preserves ﬁne structures. These trends also appears in twenty times downsampling case (x20) in
+Fig. 8. The FBPConvNet had a higher SNR than the TV method in both settings.
+November 14, 2016
+VI. DISCUSSION
+The experiments provide strong evidence for the feasibility of the FBPConvNet for sparse-view CT reconstruction. The conventional iterative algorithm with TV regularization outperformed the FBPConvNet
+in the ellipsoidal dataset, while the reverse was true for the biomedical and experimental datasets. In
+these more-realistic datasets, the SNR improvement of the FBPConvNet came from its ability to preserve
+ﬁne details in the images. This points to one advantage of the proposed method over iterative methods:
+the iterative methods must explicitly impose regularization, while the FBPConvNet effectively learns a
+regularizer from the data.
+The computation time for the FBPConvNet was about 200 ms for the FBP and 200∼300 ms in GPU
+for the CNN for a 512 × 512 image. This is much faster than the iterative reconstruction, which, in our
+case, requires around 7 minutes even after the regularization parameters have been selected.
+A major limitation of the proposed method is lack of transfer between datasets. For instance, when we
+put FBP images from a twenty-times subsampled sinogram into the network trained on the seven-times
+subsampled sinogram, the results retain many artifacts. Handling datasets of different dimensions or subsampling factors requires retraining the network. Future work could address strategies for heterogeneous
+Our theory suggests that the methodology proposed here is applicable to all problems where the normal
+operator is shift-invariant; however, we have focused here on X-ray CT reconstruction. We expect that
+adapting the method to, e.g., MRI reconstruction will be non-trivial experimentally, because it will require
+large sets of training data (either from a high-quality forward model or real data) and a high-quality
+iterative reconstruction algorithm for comparison. Furthermore, because MRI and DT involve complex
+values (both in the measurement and reconstruction domains), we need a CNN architecture that correctly
+handles complex values. Therefore, we leave experimentation on other modalities to future work.
+VII. CONCLUSION
+In this paper, we proposed a deep convolutional network for inverse problems with a focus on
+biomedical imaging. The proposed method, which we call the FBPConvNet combines FBP with a
+multiresolution CNN. The structure of the CNN is based on U-net, with the addition of residual learning.
+This approach was motivated by the convolutional structure of several biomedical inverse problems,
+including CT, MRI, and DT. Speciﬁcally, we showed conditions on a linear operator that ensure that
+its normal operator is a convolution. This results suggests that CNNs are well-suited to this subclass of
+inverse problems.
+November 14, 2016
+The proposed method demonstrated compelling results on synthetic and real data. It compared favorably
+to state-of-the-art iterative reconstruction on the two more realistic datasets. Furthermore, after training,
+the computation time of the proposed network per one image is under a second.
+ACKNOWLEDGMENT
+The authors would like to thank Dr. Cynthia McCollough, the Mayo Clinic, the American Association
+of Physicists in Medicine, and grants EB017095 and EB017185 from the National Institute of Biomedical
+Imaging and Bioengineering for giving opportunities to use real-invivo CT DICOM images (Fig. 5-6).
+The authors also thank thank Dr. Marco Stampanoni, Swiss Light Source, Paul Scherrer Institute, Villigen,
+Switzerland, for providing real CT sinograms (Fig. 7-8).
+November 14, 2016

@@ -1,0 +1,453 @@
+DeepAR: Probabilistic Forecasting with
+Autoregressive Recurrent Networks
+David Salinas, Valentin Flunkert, Jan Gasthaus
+Amazon Research
+<dsalina,flunkert, >
+Probabilistic forecasting, i.e. estimating the probability distribution of a time series’ future given its past, is a key enabler for optimizing business processes. In
+retail businesses, for example, forecasting demand is crucial for having the right
+inventory available at the right time at the right place. In this paper we propose
+DeepAR, a methodology for producing accurate probabilistic forecasts, based on
+training an auto-regressive recurrent network model on a large number of related
+time series. We demonstrate how by applying deep learning techniques to forecasting, one can overcome many of the challenges faced by widely-used classical
+approaches to the problem. We show through extensive empirical evaluation on
+several real-world forecasting data sets accuracy improvements of around 15%
+compared to state-of-the-art methods.
+Introduction
+Forecasting plays a key role in automating and optimizing operational processes in most businesses
+and enables data driven decision making. In retail for example, probabilistic forecasts of product
+supply and demand can be used for optimal inventory management, staff scheduling and topology
+planning , and are more generally a crucial technology for most aspects of supply chain optimization.
+The prevalent forecasting methods in use today have been developed in the setting of forecasting
+individual or small groups of time series. In this approach, model parameters for each given time
+series are independently estimated from past observations. The model is typically manually selected
+to account for different factors, such as autocorrelation structure, trend, seasonality, and other explanatory variables. The ﬁtted model is then used to forecast the time series into the future according
+to the model dynamics, possibly admitting probabilistic forecasts through simulation or closed-form
+expressions for the predictive distributions. Many methods in this class are based on the classical
+Box-Jenkins methodology , exponential smoothing techniques, or state space models .
+In recent years, a new type of forecasting problem has become increasingly important in many applications. Instead of needing to predict individual or a small number of time series, one is faced with
+forecasting thousands or millions of related time series. Examples include forecasting the energy
+consumption of individual households, forecasting the load for servers in a data center, or forecasting the demand for all products that a large retailer offers. In all these scenarios, a substantial amount
+of data on past behavior of similar, related time series can be leveraged for making a forecast for an
+individual time series. Using data from related time series not only allows ﬁtting more complex (and
+hence potentially more accurate) models without overﬁtting, it can also alleviate the time and labor
+intensive manual feature engineering and model selection steps required by classical techniques.
+In this work we present DeepAR, a forecasting method based on autoregressive recurrent networks,
+which learns such a global model from historical data of all time series in the data set. Our method
+ 
+builds upon previous work on deep learning for time series data , and tailors a similar
+LSTM-based recurrent neural network architecture to the probabilistic forecasting problem.
+One challenge often encountered when attempting to jointly learn from multiple time series in realworld forecasting problems is that the magnitudes of the time series differ widely, and the distribution of the magnitudes is strongly skewed. This issue is illustrated in Fig. 1, which shows the
+distribution of sales velocity (i.e. average weekly sales of an item) across millions of items sold by
+Amazon. The distribution is over a few orders of magnitude an approximate power-law. This observation is to the best of our knowledge new (although maybe not surprising) and has fundamental
+implications for forecasting methods that attempt to learn global models from such datasets. The
+scale-free nature of the distribution makes it difﬁcult to divide the data set into sub-groups of time series with a certain velocity band and learn separate models for them, as each such velocity sub-group
+would have a similar skew. Further, group-based regularization schemes, such as the one proposed
+by Chapados , may fail, as the velocities will be vastly different within each group. Finally, such
+skewed distributions make the use of certain commonly employed normalization techniques, such
+input standardization or batch normalization , less effective.
+log number of sales
+log number of items
+Log-log histogram of the
+number of items versus number of sales
+for the 500K time series of ec, showing the scale-free nature (approximately
+straight line) present in the ec dataset
+(axis labels omitted due to the nonpublic nature of the data).
+The main contributions of the paper are twofold: (1)
+we propose an RNN architecture for probabilistic forecasting, incorporating a negative Binomial likelihood for
+count data as well as special treatment for the case when
+the magnitudes of the time series vary widely; (2) we
+demonstrate empirically on several real-world data sets
+that this model produces accurate probabilistic forecasts
+across a range of input characteristics, thus showing that
+modern deep learning-based approaches can effective address the probabilistic forecasting problem, which is in
+contrast to common belief in the ﬁeld and the mixed results reported in .
+In addition to providing better forecast accuracy than previous methods, our approach has a number key advantages compared to classical approaches and other global
+methods: (i) As the model learns seasonal behavior and
+dependencies on given covariates across time series, minimal manual feature engineering is needed to capture
+complex, group-dependent behavior; (ii) DeepAR makes
+probabilistic forecasts in the form of Monte Carlo samples that can be used to compute consistent quantile estimates for all sub-ranges in the prediction
+horizon; (iii) By learning from similar items, our method is able to provide forecasts for items with
+little or no history at all, a case where traditional single-item forecasting methods fail; (vi) Our approach does not assume Gaussian noise, but can incorporate a wide range of likelihood functions,
+allowing the user to choose one that is appropriate for the statistical properties of the data.
+Points (i) and (iii) are what set DeepAR apart from classical forecasting approaches, while (ii)
+and (iv) pertain to producing accurate, calibrated forecast distributions learned from the historical
+behavior of all of the time series jointly, which is not addressed by other global methods (see Sec.
+2). Such probabilistic forecasts are of crucial importance in many applications, as they—in contrast
+to point forecasts—enable optimal decision making under uncertainty by minimizing risk functions,
+i.e. expectations of some loss function under the forecast distribution.
+Related Work
+Due to the immense practical importance of forecasting, a vast variety of different forecasting methods have been developed. Prominent examples of methods for forecasting individual time series
+include ARIMA models and exponential smoothing methods; Hyndman et al. provide a
+unifying review of these and related techniques.
+Especially in the demand forecasting domain, one is often faced with highly erratic, intermittent or
+bursty data which violate core assumptions of many classical techniques, such as Gaussian errors,
+stationarity, or homoscedasticity of the time series. Since data preprocessing methods (e.g. )
+zi,t−2, xi,t−1
+ℓ(zi,t−1|θi,t−1)
+zi,t−1, xi,t
+ℓ(zi,t|θi,t)
+zi,t, xi,t+1
+ℓ(zi,t+1|θi,t+1)
+˜zi,t−2, xi,t−1
+ℓ(zi,t−1|θi,t−1)
+˜zi,t−1, xi,t
+ℓ(zi,t|θi,t)
+˜zi,t, xi,t+1
+ℓ(zi,t+1|θi,t+1)
+˜z ∼ℓ(·|θ)
+Summary of the model. Training (left): At each time step t, the inputs to the network
+are the covariates xi,t, the target value at the previous time step zi,t−1, as well as the previous
+network output hi,t−1. The network output hi,t = h(hi,t−1, zi,t−1, xi,t, Θ) is then used to compute
+the parameters θi,t = θ(hi,t, Θ) of the likelihood ℓ(z|θ), which is used for training the model
+parameters. For prediction, the history of the time series zi,t is fed in for t < t0, then in the
+prediction range (right) for t ≥t0 a sample ˆzi,t ∼ℓ(·|θi,t) is drawn and fed back for the next
+point until the end of the prediction range t = t0 + T generating one sample trace. Repeating this
+prediction process yields many traces representing the joint predicted distribution.
+often do not alleviate these conditions, forecasting methods have also incorporated more suitable
+likelihood functions, such as the zero-inﬂated Poisson distribution, the negative binomial distribution
+ , a combination of both , or a tailored multi-stage likelihood .
+Sharing information across time series can improve the forecast accuracy, but is difﬁcult to accomplish in practice, because of the often heterogeneous nature of the data. Matrix factorization methods
+(e.g. the recent work of Yu et al. ), as well as Bayesian methods that share information via hierarchical priors have been proposed as mechanisms for learning across multiple related time
+series and leveraging hierarchical structure .
+Neural networks have been investigated in the context of forecasting for a long time (see e.g. the
+numerous references in the survey , or for more recent work considering LSTM cells).
+More recently, Kourentzes applied neural networks speciﬁcally to intermittent data but obtained mixed results. Neural networks in forecasting have been typically applied to individual time
+series, i.e. a different model is ﬁtted to each time series independently . On the other hand,
+outside of the forecasting community, time series models based on recurrent neural networks have
+been very successfully applied to other applications, such as natural language processing ,
+audio modeling or image generation . Two main characteristics make the forecasting setting that we consider here different: First, in probabilistic forecasting one is interested in the full
+predictive distribution, not just a single best realization, to be used in downstream decision making
+systems. Second, to obtain accurate distributions for (unbounded) count data, we use a negative Binomial likelihood, which improves accuracy but precludes us from directly applying standard data
+normalization techniques.
+Denoting the value of time series i at time t by zi,t, our goal is to model the conditional distribution
+P(zi,t0:T |zi,1:t0−1, xi,1:T )
+[zi,t0, zi,t0+1, . . . , zi,T ]
+past [zi,1, . . . , zi,t0−2, zi,t0−1] := zi,1:t0−1, where t0 denotes the time point from which we
+assume zi,t to be unknown at prediction time, and xi,1:T are covariates that are assumed to be
+known for all time points. To prevent confusion we avoid the ambiguous terms “past” and “future”
+and will refer to time ranges [1, t0 −1] and [t0, T] as the conditioning range and prediction range,
+respectively. During training, both ranges have to lie in the past so that the zi,t are observed, but
+during prediction zi,t is only available in the conditioning range. Note that the time index t is
+relative, i.e. t = 1 can correspond to a different actual time period for each i.
+Our model, summarized in Fig. 2, is based on an autoregressive recurrent network architecture
+ . We assume that our model distribution QΘ(zi,t0:T |zi,1:t0−1, xi,1:T ) consists of a product of
+likelihood factors
+QΘ(zi,t0:T |zi,1:t0−1, xi,1:T ) =
+t=t0 QΘ(zi,t|zi,1:t−1, xi,1:T ) =
+t=t0 ℓ(zi,t|θ(hi,t, Θ))
+parametrized by the output hi,t of an autoregressive recurrent network
+hi,t = h (hi,t−1, zi,t−1, xi,t, Θ) ,
+where h is a function implemented by a multi-layer recurrent neural network with LSTM cells.1 The
+model is autoregressive, in the sense that it consumes the observation at the last time step zi,t−1 as
+an input, as well as recurrent, i.e. the previous output of the network hi,t−1 is fed back as an input at
+the next time step. The likelihood ℓ(zi,t|θ(hi,t)) is a ﬁxed distribution whose parameters are given
+by a function θ(hi,t, Θ) of the network output hi,t (see below).
+Information about the observations in the conditioning range zi,1:t0−1 is transferred to the prediction
+range through the initial state hi,t0−1. In the sequence-to-sequence setup, this initial state is the output of an encoder network. While in general this encoder network can have a different architecture,
+in our experiments we opt for using the same architecture for the model in the conditioning range and
+the prediction range (corresponding to the encoder and decoder in a sequence-to-sequence model).
+Further, we share weights between them, so that the initial state for the decoder hi,t0−1 is obtained
+by computing (1) for t = 1, . . . , t0 −1, where all required quantities are observed. The initial state
+of the encoder hi,0 as well as zi,0 are initialized to zero.
+parameters
+QΘ(zi,t0:T |zi,1:t0−1, xi,1:T ) through ancestral sampling: First, we obtain hi,t0−1 by computing (1) for t = 1, . . . , t0. For t = t0, t0 + 1, . . . , T we sample ˜zi,t ∼ℓ(·|θ(˜hi,t, Θ)) where
+˜hi,t = h (hi,t−1, ˜zi,t−1, xi,t, Θ) initialized with ˜hi,t0−1 = hi,t0−1 and ˜zi,t0−1 = zi,t0−1. Samples
+from the model obtained in this way can then be used to compute quantities of interest, e.g. quantiles
+of the distribution of the sum of values for some time range in the future.
+Likelihood model
+The likelihood ℓ(z|θ) determines the “noise model”, and should be chosen to match the statistical
+properties of the data. In our approach, the network directly predicts all parameters θ (e.g. mean
+and variance) of the probability distribution for the next time point.
+For the experiments in this paper, we consider two choices, Gaussian likelihood for real-valued
+data, and negative-binomial likelihood for positive count data. Other likelihood models can also
+readily be used, e.g. beta likelihood for data in the unit interval, Bernoulli likelihood for binary
+data, or mixtures in order to handle complex marginal distributions, as long as samples from the
+distribution can cheaply be obtained, and the log-likelihood and its gradients wrt. the parameters
+can be evaluated. We parametrize the Gaussian likelihood using its mean and standard deviation,
+θ = (µ, σ), where the mean is given by an afﬁne function of the network output, and the standard
+deviation is obtained by applying an afﬁne transformation followed by a softplus activation in order
+to ensure σ > 0:
+ℓG(z|µ, σ) = (2πσ2)−1
+2 exp(−(z −µ)2/(2σ2))
+µ(hi,t) = wT
+µ hi,t + bµ
+σ(hi,t) = log(1 + exp(wT
+σ hi,t + bσ)) .
+For modeling time series of positive count data, the negative binomial distribution is a commonly
+used choice . We parameterize the negative binomial distribution by its mean µ ∈R+ and a
+shape parameter α ∈R+,
+ℓNB(z|µ, α) =
+Γ(z + 1)Γ( 1
+µ(hi,t) = log(1 + exp(wT
+µ hi,t + bµ))
+α(hi,t) = log(1 + exp(wT
+αhi,t + bα)) ,
+where both parameters are obtained from the network output by a fully-connected layer with softplus activation to ensure positivity. In this parameterization of the negative binomial distribution
+the shape parameter α scales the variance relative to the mean, i.e. Var[z] = µ + µ2α. While
+other parameterizations are possible, we found this particular one to be especially conducive to fast
+convergence in preliminary experiments.
+1Details of the architecture and hyper-parameters are given in the supplementary material.
+Given a data set of time series {zi,1:T }i=1,...,N and associated covariates xi,1:T , obtained by choosing a time range such that zi,t in the prediction range is known, the parameters Θ of the model,
+consisting of the parameters of the RNN h(·) as well as the parameters of θ(·), can be learned by
+maximizing the log-likelihood
+log ℓ(zi,t|θ(hi,t)) .
+As hi,t is a deterministic function of the input, all quantities required to compute (2) are observed,
+so that—in contrast to state space models with latent variables—no inference is required, and (2)
+can be optimized directly via stochastic gradient descent by computing gradients with respect to Θ.
+In our experiments, where the encoder model is the same as the decoder, the distinction between
+encoder and decoder is somewhat artiﬁcial during training, so that we also include the likelihood
+terms for t = 0, . . . , t0 −1 in (2) (or, equivalently, set t0 = 0).
+For each time series in the dataset, we generate multiple training instances by selecting windows with
+different starting points from the original time series. In practice, we keep the total length T as well
+as the relative length of the conditioning and prediction ranges ﬁxed for all training examples. For
+example, if the total available range for a given time series ranges from 2013-01-01 to 2017-01-01,
+we can create training examples with t = 1 corresponding to 2013-01-01, 2013-01-02, 2013-01-03,
+and so on. When choosing these windows we ensure that entire prediction range is always covered
+by the available ground truth data, but we may chose t = 1 to lie before the start of the time series,
+e.g. 2012-12-01 in the example above, padding the unobserved target with zeros. This allows the
+model to learn the behavior of “new” time series taking into account all other available features.
+By augmenting the data using this windowing procedure, we ensure that information about absolute
+time is only available to the model through covariates, but not through the relative position of zi,t in
+the time series.
+Bengio et al. noted that, due to the autoregressive nature of such models, optimizing (2) directly
+causes a discrepancy between how the model is used during training and when obtaining predictions
+from the model: during training, the values of zi,t are known in the prediction range and can be
+used to compute hi,t; during prediction however, zi,t is unknown for t ≥t0, and a single sample
+˜zi,t ∼ℓ(·|θ(hi,t)) from the model distribution is used in the computation of hi,t according to (1)
+instead. While it has been shown that this disconnect poses a severe problem for e.g. NLP tasks, we
+have not observed adverse effects from this in the forecasting setting. Preliminary experiments with
+variants of scheduled sampling did not show any signiﬁcant accuracy improvements (but slowed
+convergence).
+Scale handling
+Applying the model to data that exhibits a power-law of scales as depicted in Fig. 1 presents two
+challenges. Firstly, due to the autoregressive nature of the model, both the autoregressive input zi,t−1
+as well as the output of the network (e.g. µ) directly scale with the observations zi,t, but the nonlinearities of the network in between have a limited operating range. Without further modiﬁcations,
+the network thus has to learn to scale the input to an appropriate range in the input layer, and then
+to invert this scaling at the output. We address this issue by dividing the autoregressive inputs
+zi,t (or ˜zi,t) by an item-dependent scale factor νi, and conversely multiplying the scale-dependent
+likelihood parameters by the same factor. For instance, for the negative binomial likelihood we use
+µ = νi log(1 + exp(oµ)) and α = log(1 + exp(oα))/√νi where oµ, oα are the outputs of the
+network for these parameters. Note that while for real-valued data one could alternatively scale the
+input in a preprocessing step, this is not possible for count distributions. Choosing an appropriate
+scale factor might in itself be challenging (especially in the presence of missing data or large withinitem variances). However, scaling by the average value νi = 1 + 1
+t=1 zi,t, as we do in our
+experiments, is a heuristic that works well in practice.
+Secondly, due to the imbalance in the data, a stochastic optimization procedure that picks training
+instances uniformly at random will visit the small number time series with a large scale very infrequently, which result in underﬁtting those time series. This could be especially problematic in the
+demand forecasting setting, where high-velocity items can exhibit qualitatively different behavior
+Figure 3: Example time series of ec. The vertical line separates the conditioning period from the
+prediction period. The black line shows the true target. In the prediction range we plot the p50 as
+a blue line (mostly zero for the three slow items) and the 80% conﬁdence interval (shaded). The
+model learns accurate seasonality patterns and uncertainty estimates for items of different velocity
+than low-velocity items, and having an accurate forecast for high-velocity items might be more important for meeting certain business objectives. To counteract this effect, we sample the examples
+non-uniformly during training. In particular, in our weighted sampling scheme, the probability of
+selecting a window from an example with scale νi is proportional to νi. This sampling scheme is
+simple, yet effectively compensates for the skew in Fig. 1.
+The covariates xi,t can be item-dependent, time-dependent, or both.2 They can be used to provide
+additional information about the item or the time point (e.g. week of year) to the model. They can
+also be used to include covariates that one expects to inﬂuence the outcome (e.g. price or promotion
+status in the demand forecasting setting), as long as the features’ values are available also in the
+prediction range. In all experiments we use an “age” feature, i.e., the distance to the ﬁrst observation
+in that time series. We also add day-of-the-week and hour-of-the-day for hourly data, week-of-year
+for weekly data and month-of-year for monthly data.3 Further, we include a single categorical item
+feature, for which an embedding is learned by the model. In the retail demand forecasting data sets,
+the item feature corresponds to a (coarse) product category (e.g. “clothing”), while in the smaller
+data sets it corresponds to the item’s identity, allowing the model to learn item-speciﬁc behavior. We
+standardize all covariates to have zero mean and unit variance.
+Applications and Experiments
+We implement our model using MXNet, and use a single p2.xlarge AWS instance containing 4 CPUs
+and 1 GPU to run all experiments. On this hardware, a full training & prediction run on the large
+ec dataset containing 500K time series can be completed in less than 10 hours. While prediction is
+already fast, is can easily parallelized if necessary. A description of the (simple) hyper-parameter
+tuning procedure, the obtained hyper-parameter values, as well as statistics of datasets and running
+time are given in supplementary material.
+Datasets – We use ﬁve datasets for our evaluations. The ﬁrst three–parts, electricity, and
+traffic–are public datasets; parts consists of 1046 aligned time series of 50 time steps each,
+representing monthly sales for different items of a US automobile company ; electricity
+contains hourly time series of the electricity consumption of 370 customers ; traffic, also
+used in , contains the hourly occupancy rate, between 0 and 1, of 963 car lanes of San Francisco
+bay area freeways. For the parts dataset, we use the 42 ﬁrst months as training data and report
+error on the remaining 8. For electricity we train with data between 2014-01-01 and 2014-09-
+01, for traffic we train all the data available before 2008-06-15. The results for electricity and
+traffic are computed using rolling window predictions done after the last point seen in training as
+described in . We do not retrain our model for each window, but use a single model trained on
+the data before the ﬁrst prediction window. The remaining two datasets ec and ec-sub are weekly
+item sales from Amazon used in . We predict 52 weeks and evaluation is done on the year
+following 2014-09-07. The time series in these two datasets are very diverse and erratic, ranging
+2Covariates xi,t that do not depend on time are handled by repeating them along the time dimension.
+3Instead of using dummy variables to encode these, we simply encode them as increasing numeric values.
+sum-demand
+sum-stddevs ISSM
+sum-stddevs DeepAR
+80% interval ISSM
+80% interval DeepAR
+Figure 4: Uncertainty growth over time for ISSM
+and DeepAR models. Unlike the ISSM, which
+postulates a linear growth of uncertainty, the behavior of uncertainty is learned from the data, resulting in a non-linear growth with a (plausibly)
+higher uncertainty around Q4. The aggregate is
+calculated over the entire ec dataset.
+percentile
+lead-time/span = (3, 1)
+percentile
+lead-time/span = (3, 12)
+DeepAR-shuﬄed
+Figure 5: Coverage for two spans on the ec-sub
+The left panel shows the coverage for
+a single time-step interval, while the right panel
+shows these metrics for a larger time interval with
+9 time-steps. When correlation in the prediction
+sample paths is destroyed by shufﬂing the samples
+for each time step, correlation is destroyed and
+the forecast becomes less calibrated. This shuf-
+ﬂed prediction also has a 10% higher 0.9-risk.
+Snyder (baseline)
+rnn-gaussian
+rnn-negbin
+ISSM (baseline)
+rnn-gaussian
+rnn-negbin
+ISSM (baseline)
+rnn-gaussian
+rnn-negbin
+Table 1: Accuracy metrics relative to the strongest previously published method (baseline). Best
+results are marked in bold (lower is better).
+from very fast to very slow moving items, and contains “new” products introduced in the weeks
+before the forecast time 2014-09-07, see Fig. 3. Further, item velocities in this data set have a
+power-law distribution, as shown in Fig. 1.
+Accuracy comparison
+For the parts and ec/ec-sub datasets we compare with the following baselines which represent
+the state-of-the-art on demand integer datasets to the best of our knowledge:
+• Croston: the Croston method developed for intermittent demand forecasting from R package 
+• ETS: the ETS model from R package with automatic model selection. Only additive
+models are used as multiplicative models shows numerical issues on some time series.
+• Snyder the negative-binomial autoregressive method of 
+• ISSM the method of using an innovative state space model with covariates features
+In addition, we compare to two baseline RNN models to see the effect of our contributions:
+• rnn-gaussian uses the same architecture as DeepAR with a Gaussian likelihood; however,
+it uses uniform sampling, and a simpler scaling mechanism, where time series zi are divided
+by νi and outputs are multiplied by νi
+• rnn-negbin uses a negative binomial distribution, but does not scale inputs and outputs of
+the RNN and training instances are drawn uniformly rather than using weighted sampling.
+As in , we use ρ-risk metrics (quantile loss) that quantify the accuracy of a quantile ρ of the
+predictive distribution; the exact deﬁnition of these metric is given in supplementary material. The
+metrics are evaluated for a certain spans [L, L + S) in the prediction range, where L is a lead
+time after the forecast start point. Table 1 shows the 0.5-risk and 0.9-risk and for different lead
+times and spans. Here all(K) denotes the average risk of the marginals [L, L + 1) for L < K. We
+normalize all reported metrics with respect to the strongest previously published method (baseline).
+DeepAR performs signiﬁcantly better than all other methods on these datasets. The results also show
+the importance of modeling these data sets with a count distribution, as rnn-gaussian performs
+signiﬁcantly worse. The ec and ec-sub data sets exhibit the power law behavior discussed above,
+and without scaling and weighted sampling accuracy is decreased (rnn-negbin). On the parts
+data set, which does not exhibit the power-law behavior, rnn-negbin performs similar to DeepAR.
+electricity
+Table 2: Comparison with MatFact
+In Table 2 we compare point forecast accuracy on the
+electricity and traffic datasets against the matrix
+factorization technique (MatFact) proposed in . We
+consider the same metrics namely Normalized Deviation
+(ND) and Normalized RMSE (NRMSE) whose deﬁnition
+are given in the supplementary material. The results show
+that DeepAR outperforms MatFact on both datasets.
+Qualitative analysis
+Figure 3 shows example predictions from the ec data set. In Fig. 4, we show aggregate sums of
+different quantiles of the marginal predictive distribution for DeepAR and ISSM on the ec dataset.
+In contrast to ISSM models such as , where a linear growth of uncertainty is part of the modeling assumptions, the uncertainty growth pattern is learned from the data. In this case, the model
+does learn an overall growth of uncertainty over time. However, this is not simply linear growth:
+uncertainty (correctly) increases during Q4, and decreases again shortly afterwards.
+The calibration of the forecast distribution is depicted in Fig. 5. Here we show, for each percentile
+p the Coverage(p), which is deﬁned as the fraction of time series in the dataset for which the ppercentile of the predictive distribution is larger than the the true target. For a perfectly calibrated
+prediction it holds that Coverage(p) = p, which corresponds to the diagonal. Compared to the ISSM
+model, calibration is improved overall.
+To assess the effect of modeling correlations in the output, i.e., how much they differ from independent distributions for each time-point, we plot the calibration curves for a shufﬂed forecast, where
+for each time point the realizations of the original forecast have been shufﬂed, destroying any correlation between time steps. For the short lead-time span (left) which consists of just one time-point,
+this has no impact, because it is just the marginal distribution. For the longer lead-time span (right),
+however, destroying the correlation leads to a worse calibration, showing that important temporal
+correlations are captured between the time steps.
+Conclusion
+We have shown that forecasting approaches based on modern deep learning techniques can drastically improve forecast accuracy over state of the art forecasting methods on a wide variety of
+data sets. Our proposed DeepAR model effectively learns a global model from related time series,
+handles widely-varying scales through rescaling and velocity-based sampling, generates calibrated
+probabilistic forecasts with high accuracy, and is able to learn complex patterns such as seasonality
+and uncertainty growth over time from the data.
+Interestingly, the method works with little or no hyperparameter tuning on a wide variety of datasets,
+and in is applicable to medium-size datasets containing only a few hundred time series.
+Supplementary materials
+Error metrics
+ρ-risk metric
+The aggregated target value of an item i in a span is denoted as Zi(L, S) = Pt0+L+S
+t=t0+L zi,t. For a
+given quantile ρ ∈(0, 1) we denote the predicted ρ-quantile for Zi(L, S) by ˆZρ
+i (L, S). To obtain
+such a quantile prediction from a set of sample paths, each realization is ﬁrst summed in the given
+span. The samples of these sums then represent the estimated distribution for Zi(L, S) and we can
+take the ρ-quantile from the empirical distribution.
+The ρ-quantile loss is then deﬁned as
+Lρ(Z, ˆZρ) = 2( ˆZ −Z)
+Zρ>Z −(1 −ρ)I ˆ
+In order to summarize the quantile losses for a given span across all items, we consider a normalized
+sum of quantile losses
+i Lρ(Zi, ˆZρ
+i Zi), which we call the ρ-risk.
+ND and RMSE metrics
+ND and RMSE metrics are deﬁned as follow:
+i,t |zi,t −ˆzi,t|
+i,t |zi,t|
+i,t(zi,t −ˆzi,t)2
+i,t |zi,t|
+where ˆzi,t is the predicted median value for item i at time t and the sums are over all items and all
+time points in the prediction period.
+Experiment details
+We use MxNet as our neural network framework . Experiments are run on a laptop for parts
+and with a single AWS p2.xlarge instance (four core machine with a single GPU) for other datasets.
+Note that predictions can be done in all datasets end to end in a matter of hours even with a single
+machine. We use ADAM optimizer with early stopping and standard LSTM cells with a forget
+bias set to 1.0 in all experiment and 200 samples are drawn from our decoder to generate predictions.
+For parts dataset, we use the 42 ﬁrst months as training data and report error on the remaining 8.
+For the other datasets electricity, traffic, ec-sub and ec the set of possible training instances
+is sub-sampled to the number indicated in table 3. The scores of electricity and traffic are
+reported using the rolling window operation described in , note that we do not retrain our model
+but reuse the same one for predicting across the different time windows instead. Running times
+measures an end to end evaluation, e.g. processing features, training the neural network, drawing
+samples and evaluating produced distributions.
+For each dataset, a grid-search is used to ﬁnd the best value for the hyper-parameters item output
+embedding dimension and # LSTM nodes (e.g. hidden number of units). To do so, the data before
+the forecast start time is used as training set and split into two partitions. For each hyper-parameter
+electricity
+# time series
+time granularity
+encoder length
+decoder length
+# training examples
+item input embedding dimension
+item output embedding dimension
+batch size
+learning rate
+# LSTM layers
+# LSTM nodes
+running time
+Table 3: Datasets statistics and RNN parameters
+candidate, we ﬁt our model on the ﬁrst partition of the training set containing 90% of the data and
+we pick the one that has the minimal negative log-likelihood on the remaining 10%. Once the
+best set of hyper-parameters is found, the evaluation metrics (0.5-risk, 0.9-risk, ND and RMSE)
+are then evaluated on the test set, e.g. the data coming after the forecast start time. Note that this
+procedure could lead to over-ﬁtting the hyper-parameters to the training set but this would then also
+degrades the metric we report. A better procedure would be to ﬁt parameters and evaluate negative
+log-likelihood not only on different windows but also on non-overlapping time intervals. As for
+the learning rate, it is tuned manually for every dataset and is kept ﬁxed in hyper-parameter tuning.
+Other parameters such as encoder length, decoder length and item input embedding are considered
+domain dependent and are not ﬁtted. Batch size is increased on larger datasets to beneﬁt more from
+GPU’s parallelization. Finally, running times measures an end to end evaluation, e.g. processing
+features, training the neural network, drawing samples and evaluating produced distributions.
+Missing Observations
+In some forecasting settings, the target values zi,t might be missing (or unobserved) for a subset of
+the time points. For instance, in the context of demand forecasting, an item may be out-of-stock at a
+certain time, in which case the demand for the item cannot be observed. Not explicitly modeling such
+missing observations (e.g. by assuming that the observed sales correspond to the demand even when
+an item is out of stock), can, in the best case, lead to systematic forecast underbias, and, in a worst
+case in the larger supply chain context, can lead to a disastrous downward spiral where an out-ofstock situation leads to a lower demand forecast, lower re-ordering and more out-of-stock-situations.
+In our model, missing observations can easily be handled in a principled way by replacing each
+unobserved value zi,t by a sample ˜zi,t ∼ℓ(·|θ(hi,t)) from the conditional predictive distribution
+when computing (1), and excluding the likelihood term corresponding to the missing observation
+from (2).We omitted experimental results in this setting from the paper, as doing a proper evaluation
+in the light of missing data in the prediction range requires non-standard adjusted metrics that are
+hard to compare across studies (see e.g. ).

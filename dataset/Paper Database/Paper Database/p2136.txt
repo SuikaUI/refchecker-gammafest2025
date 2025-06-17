@@ -1,0 +1,675 @@
+Using Simulation and Domain Adaptation to Improve
+Efﬁciency of Deep Robotic Grasping
+Konstantinos Bousmalis∗,1, Alex Irpan∗,1, Paul Wohlhart∗,2, Yunfei Bai2, Matthew Kelcey1, Mrinal Kalakrishnan2,
+Laura Downs1, Julian Ibarz1, Peter Pastor2, Kurt Konolige2, Sergey Levine1, Vincent Vanhoucke1
+Abstract— Instrumenting and collecting annotated visual
+grasping datasets to train modern machine learning algorithms
+can be extremely time-consuming and expensive. An appealing
+alternative is to use off-the-shelf simulators to render synthetic
+data for which ground-truth annotations are generated automatically. Unfortunately, models trained purely on simulated
+data often fail to generalize to the real world. We study how
+randomized simulated environments and domain adaptation
+methods can be extended to train a grasping system to grasp
+novel objects from raw monocular RGB images. We extensively
+evaluate our approaches with a total of more than 25,000
+physical test grasps, studying a range of simulation conditions
+and domain adaptation methods, including a novel extension
+of pixel-level domain adaptation that we term the GraspGAN.
+We show that, by using synthetic data and domain adaptation,
+we are able to reduce the number of real-world samples
+needed to achieve a given level of performance by up to 50
+times, using only randomly generated simulated objects. We
+also show that by using only unlabeled real-world data and
+our GraspGAN methodology, we obtain real-world grasping
+performance without any real-world labels that is similar to
+that achieved with 939,777 labeled real-world samples.
+I. INTRODUCTION
+Grasping is one of the most fundamental robotic manipulation problems. For virtually any prehensile manipulation
+behavior, the ﬁrst step is to grasp the object(s) in question.
+Grasping has therefore emerged as one of the central areas
+of study in robotics, with a range of methods and techniques
+from the earliest years of robotics research to the present day.
+A central challenge in robotic manipulation is generalization:
+can a grasping system successfully pick up diverse new
+objects that were not seen during the design or training of the
+system? Analytic or model-based grasping methods can
+achieve excellent generalization to situations that satisfy their
+assumptions. However, the complexity and unpredictability
+of unstructured real-world scenes has a tendency to confound these assumptions, and learning-based methods have
+emerged as a powerful complement , , , , .
+Learning a robotic grasping system has the beneﬁt of
+generalization to objects with real-world statistics, and can
+beneﬁt from the advances in computer vision and deep
+learning. Indeed, many of the grasping systems that have
+shown the best generalization in recent years incorporate
+convolutional neural networks into the grasp selection process , , , . However, learning-based approaches
+also introduce a major challenge: the need for large labeled
+datasets. These labels might consist of human-provided grasp
+*Authors contributed equally, 1Google Brain, 2X
+Fig. 1: Bridging the reality gap: our proposed pixel-level
+domain adaptation model takes as input (a) synthetic images
+produced by our simulator and produces (b) adapted images
+that look similar to (c) real-world ones produced by the
+camera over the physical robot’s shoulder. We then train a
+deep vision-based grasping network with adapted and real
+images, which we further reﬁne with feature-level adaptation.
+points , or they might be collected autonomously , .
+In both cases, there is considerable cost in both time and
+money, and recent studies suggest that the performance of
+grasping systems might be strongly inﬂuenced by the amount
+of data available .
+A natural avenue to overcome these data requirements
+is to look back at the success of analytic, model-based
+grasping methods , which incorporate our prior knowledge
+of physics and geometry. We can incorporate this prior
+knowledge into a learning-based grasping system in two
+ways. First, we could modify the design of the system
+to use a model-based grasping method, for example as a
+scoring function for learning-based grasping . Second, we
+could use our prior knowledge to construct a simulator, and
+generate synthetic experience that can be used in much the
+same way as real experience. The second avenue, which we
+explore in this work, is particularly appealing because we
+can use essentially the same learning system. However, incorporating simulated images presents challenges: simulated
+data differs in systematic ways from real-world data, and
+simulation must have sufﬁciently general objects. Addressing
+these two challenges is the principal subject of our work.
+Our work has three main contributions. (a) Substantial
+ 
+improvement in grasping performance from monocular RGB
+images by incorporating synthetic data: We propose approaches for incorporating synthetic data into end-to-end
+training of vision-based robotic grasping that we show
+achieves substantial improvement in performance, particularly in the lower-data and no-data regimes. (b) Detailed
+experimentation for simulation-to-real world transfer: Our
+experiments involved 25,704 real grasps of 36 diverse test
+objects and consider a number of dimensions: the nature of
+the simulated objects, the kind of randomization used in simulation, and the domain adaptation technique used to adapt
+simulated images to the real world. (c) The ﬁrst demonstration of effective simulation-to-real-world transfer for purely
+monocular vision-based grasping: To our knowledge, our
+work is the ﬁrst to demonstrate successful simulation-to-realworld transfer for grasping, with generalization to previously
+unseen natural objects, using only monocular RGB images.
+II. RELATED WORK
+Robotic grasping is one of the most widely explored
+areas of manipulation. While a complete survey of grasping
+is outside the scope of this work, we refer the reader to
+standard surveys on the subject for a more complete treatment . Grasping methods can be broadly categorized into
+two groups: geometric methods and data-driven methods.
+Geometric methods employ analytic grasp metrics, such
+as force closure or caging . These methods often
+include appealing guarantees on performance, but typically
+at the expense of relatively restrictive assumptions. Practical applications of such approaches typically violate one
+or more of their assumptions. For this reason, data-driven
+grasping algorithms have risen in popularity in recent years.
+Instead of relying exclusively on an analytic understanding
+of the physics of an object, data-driven methods seek to
+directly predict either human-speciﬁed grasp positions 
+or empirically estimated grasp outcomes , . A number
+of methods combine both ideas, for example using analytic
+metrics to label training data , .
+Simulation-to-real-world transfer in robotics is an important goal, as simulation can be a source of practically
+inﬁnite cheap data with ﬂawless annotations. For this reason,
+a number of recent works have considered simulation-toreal world transfer in the context of robotic manipulation.
+Saxena et al. used rendered objects to learn a visionbased grasping model. Gulatieri et al. and Viereck et al. ,
+ have considered simulation-to-real world transfer using
+depth images. Depth images can abstract away many of
+the challenging appearance properties of real-world objects.
+However, not all situations are suitable for depth cameras,
+and coupled with the low cost of simple RGB cameras, there
+is considerable value in studying grasping systems that solely
+use monocular RGB images.
+A number of recent works have also examined using randomized simulated environments , for simulationto-real world transfer for grasping and grasping-like manipulation tasks, extending on prior work on randomization for
+robotic mobility . These works apply randomization in
+the form of random textures, lighting, and camera position
+to their simulator. However, unlike our work, these prior
+methods considered grasping in relatively simple visual
+environments, consisting of cubes or other basic geometric
+shapes, and have not yet been demonstrated on grasping
+diverse, novel real-world objects of the kind considered in
+our evaluation.
+Domain adaptation is a process that allows a machine
+learning model trained with samples from a source domain to
+generalize to a target domain. In our case the source domain
+is the simulation, whereas the target is the real world. There
+has recently been a signiﬁcant amount of work on domain
+adaptation, particularly for computer vision , . Prior
+work can be grouped into two main types: feature-level and
+pixel-level adaptation. Feature-level domain adaptation focuses on learning domain-invariant features, either by learning a transformation of ﬁxed, pre-computed features between
+source and target domains , , , or by learning
+a domain-invariant feature extractor, often represented by a
+convolutional neural network (CNN) , , . Prior
+work has shown the latter is empirically preferable on a
+number of classiﬁcation tasks , . Domain-invariance
+can be enforced by optimizing domain-level similarity metrics like maximum mean discrepancy , or the response
+of an adversarially trained domain discriminator . Pixellevel domain adaptation focuses on re-stylizing images from
+the source domain to make them look like images from
+the target domain , , , . To our knowledge,
+all such methods are based on image-conditioned generative
+adversarial networks (GANs) . In this work, we compare
+a number of different domain adaptation regimes. We also
+present a new method that combines both feature-level and
+pixel-level domain adaptation for simulation-to-real world
+transfer for vision-based grasping.
+III. BACKGROUND
+Our goal in this work is to show the effect of using simulation and domain adaptation in conjunction with a tested
+data-driven, monocular vision-based grasping approach. To
+this effect, we use such an approach, as recently proposed
+by Levine et al. . In this section we will concisely
+discuss this approach, and the two main domain adaptation
+techniques , , our method is based on.
+A. Deep Vision-Based Robotic Grasping
+The grasping approach we use in this work consists of
+two components. The ﬁrst is a grasp prediction convolutional neural network (CNN) C(xi,vi) that accepts a tuple
+of visual inputs xi = {xi0,xic} and a motion command vi, and
+outputs the predicted probability that executing vi will result
+in a successful grasp. xi0 is an image recorded before the
+robot becomes visible and starts the grasp attempt, and xic
+is an image recorded at the current timestep. vi is speciﬁed
+in the frame of the base of the robot and corresponds to
+a relative change of the end-effector’s current position and
+rotation about the vertical axis. We consider only top-down
+pinch grasps, and the motion command has, thus, 5 dimensions: 3 for position, and 2 for a sine-cosine encoding of the
+rotation. The second component of the method is a simple,
+manually designed servoing function that uses the grasp
+probabilities predicted by C to choose the motor command
+vi that will continuously control the robot. We can train
+the grasp prediction network C using standard supervised
+learning objectives, and so it can be optimized independently
+from the servoing mechanism. In this work, we focus on
+extending the ﬁrst component to include simulated data in
+the training set for the grasp prediction network C, leaving
+the other parts of the system unchanged.
+The datasets for training the grasp prediction CNN C are
+collections of visual episodes of robotic arms attempting to
+grasp various objects. Each grasp attempt episode consists of
+T time steps which result in T distinct training samples. Each
+sample i includes xi,vi, and the success label yi of the entire
+grasp sequence. The visual inputs are 640×512 images that
+are randomly cropped to a 472×472 region during training
+to encourage translation invariance.
+The central aim of our work is to compare different
+training regimes that combine both simulated and real-world
+data for training C. Although we do consider training entirely
+with simulated data, as we discuss in Section IV-A, most of
+the training regimes we consider combine medium amounts
+of real-world data with large amounts of simulated data.
+To that end, we use the self-supervised real-world grasping
+dataset collected by Levine et al. using 6 physical Kuka
+IIWA arms. The goal of the robots was to grasp any object
+within a speciﬁed goal region. Grasping was performed using
+a compliant two-ﬁnger gripper picking objects out of a metal
+bin, with a monocular RGB camera mounted behind the arm.
+The full dataset includes about 1 million grasp attempts on
+approximately 1,100 different objects, resulting in about 9.4
+million real-world images. About half of the dataset was
+collected using random grasps, and the rest using iteratively
+retrained versions of C. Aside from the variety of objects,
+each robot differed slightly in terms of wear-and-tear, as well
+as the camera pose. The outcome of the grasp attempt was
+determined automatically. The particular objects in front of
+each robot were regularly rotated to increase the diversity
+of the dataset. Some examples of grasping images from the
+camera’s viewpoint are shown in Figure 2d.
+When trained on the entire real dataset, the best CNN used
+in the approach outlined above achieved successful grasps
+67.65% of the time. Levine et al. reported an additional
+increase to 77.18% from also including 2.7 million images
+from a different robot. We excluded this additional dataset
+for the sake of a more controlled comparison, so as to avoid
+additional confounding factors due to domain shift within
+the real-world data. Starting from the Kuka dataset, our
+experiments study the effect of adding simulated data and
+of reducing the number of real world data points by taking
+subsets of varying size (down to only 93,841 real world
+images, which is 1% of the original set).
+(a) Simulated World
+(b) Real World
+(c) Simulated Samples
+(d) Real Samples
+Fig. 2: Top Row: The setup we used for collecting the (a)
+simulated and (b) real-world datasets. Bottom Row: Images
+used during training of (c) simulated grasping experience
+with procedurally generated objects; and of (d) real-world
+experience with a varied collection of everyday physical
+objects. In both cases, we see the pairs of image inputs for
+our grasp success prediction model C: the images at t = 0
+and the images at the current timestamp.
+B. Domain Adaptation
+As part of our proposed approach we use two domain
+adaptation
+techniques:
+domain-adversarial
+pixel-level
+adaptation.
+introduced domain–adversarial neural networks (DANNs),
+an architecture trained to extract domain-invariant yet
+expressive features. DANNs were primarily tested in the
+unsupervised domain adaptation scenario, in the absence
+of any labeled target domain samples, although they also
+showed promising results in the semi-supervised regime .
+Their model’s ﬁrst few layers are shared by two modules:
+the ﬁrst predicts task-speciﬁc labels when provided with
+source data while the second is a separate domain classiﬁer
+trained to predict the domain ˆd of its inputs. The DANN
+loss is the cross-entropy loss for the domain prediction task:
+LDANN = ∑Ns+Nt
+di log ˆdi + (1−di)log(1−ˆdi)
+di ∈{0,1} is the ground truth domain label for sample i,
+and Ns,Nt are the number of source and target samples.
+The shared layers are trained to maximize LDANN, while
+the domain classiﬁer is trained adversarially to minimize it.
+This minimax optimization is implemented by a gradient
+reversal layer (GRL). The GRL has the same output as the
+identity function, but negates the gradient during backprop.
+This lets us compute the gradient for both the domain classiﬁer and the shared feature extractor in a single backward
+pass. The task loss of interest is simultaneously optimized
+with respect to the shared layers, which grounds the shared
+features to be relevant to the task.
+While DANN makes the features extracted from both
+domains similar, the goal in pixel-level domain adaptation
+ , , , is to learn a generator function G
+that maps images from a source to a target domain at the
+input level. This approach decouples the process of domain
+adaptation from the process of task-speciﬁc predictions, by
+adapting the images from the source domain to make them
+appear as if they were sampled from the target domain. Once
+the images are adapted, they can replace the source dataset
+and the relevant task model can be trained as if no domain
+adaptation were required. Although all these methods are
+similar in spirit, we use ideas primarily from PixelDA 
+and SimGAN , as they are more suitable for our task.
+These models are particularly effective if the goal is to
+maintain the semantic map of original and adapted synthetic
+images, as the transformations are primarily low-level: the
+methods make the assumption that the differences between
+the domains are primarily low-level (due to noise, resolution,
+illumination, color) rather than high-level (types of objects,
+geometric variations, etc).
+More formally, let Xs = {xs
+i=0 represent a dataset of
+Ns samples from the source domain and let Xt = {xt
+represent a dataset of Nt samples from the target domain. The
+generator function G(xs;θ G) →x f , parameterized by θ G,
+maps a source image xs ∈Xs to an adapted, or fake, image
+xf . This function is learned with the help of an adversary, a
+discriminator function D(x;θ D) that outputs the likelihood d
+that a given image x is a real-world sample. Both G and D are
+trained using the standard adversarial objective . Given
+the learned generator function G, it is possible to create a new
+dataset X f = {G(xs),ys}. Finally, given an adapted dataset
+X f , the task-speciﬁc model can be trained as if the training
+and test data were from the same distribution.
+PixelDA was evaluated in simulation-to-real-world transfer. However, the 3D models used by the renderer in 
+were very high-ﬁdelity scans of the objects in the real-world
+dataset. In this work we examine for the ﬁrst time how
+such a technique can be applied in situations where (a) no
+3D models for the objects in the real-world are available
+and (b) the system is supposed to generalize to yet another
+set of previously unseen objects in the actual real-world
+grasping task. Furthermore, we use images of 472 × 472,
+more than double the resolution in , . This makes
+learning the generative model G a much harder task and
+requires signiﬁcant changes compared to previous work: the
+architecture of both G and D, the GAN training objective,
+and the losses that aid with training the generator (contentsimilarity and task losses) are different from the original
+implementations, resulting in a novel model evaluated under
+these new conditions.
+IV. OUR APPROACH
+One of the aims of our work is to study how ﬁnal
+grasping performance is affected by the 3D object models
+our simulated experience is based on, the scene appearance
+and dynamics in simulation, and the way simulated and real
+experience is integrated for maximal transfer. In this section
+we outline, for each of these three factors, our proposals for
+effective simulation-to-real-world transfer for our task.
+A. Grasping in Simulation
+A major difﬁculty in constructing simulators for robotic
+learning is to ensure diversity sufﬁcient for effective generalization to real-world settings. In order to evaluate simulationto-real world transfer, we used one dataset of real-world
+grasp attempts (see Sect. III-A), and multiple such datasets in
+simulation. For the latter, we built a basic virtual environment
+based on the Bullet physics simulator and the simple renderer
+that is shipped with it . The environment emulates the
+Kuka hardware setup by simulating the physics of grasping
+and by rendering what a camera mounted looking over the
+Kuka shoulder would perceive: the arm, the bin that contains
+the object, and the objects to grasp in scenes similar to the
+ones the robot encounters in the real world.
+A central question here is regarding the realism of the
+3D models used for the objects to grasp. To answer it, we
+evaluate two different sources of objects in our experiments:
+(a) procedurally generated random geometric shapes and
+(b) realistic objects obtained from the publicly-available
+ShapeNet 3D model repository. We procedurally generated 1,000 objects by attaching rectangular prisms at
+random locations and orientations, as seen in Fig. 3a. We
+then converted the set of prisms to a mesh using an offthe-shelf renderer, Blender, and applied a random level of
+smoothing. Each object was given UV texture coordinates
+and random colors. For our Shapenet-based datasets, we
+used the ShapeNetCore.v2 collection of realistic object
+models, shown in Figure 3b. This particular collection contains 51,300 models in 55 categories of household objects,
+furniture, and vehicles. We rescaled each object to a random
+graspable size with a maximum extent between 12cm and
+23cm (real-world objects ranged from 4cm to 20cm in length
+along the longest axis) and gave it a random mass between
+10g and 500g, based on the approximate volume of the
+Once the models were imported into our simulator, we
+collected our simulation datasets via a similar process to
+the one in the real world, with a few differences. As
+mentioned above, the real-world dataset was collected by
+using progressively better grasp prediction networks. These
+networks were swapped for better versions manually and
+rather infrequently . In contrast to the 6 physical Kuka
+IIWA robots that were used to collect data in the real world,
+we used 1,000 to 2,000 simulated arms at any given time
+to collect our synthetic data, and the models that were used
+to collect the datasets were being updated continuously by
+an automated process. This resulted in datasets that were
+(a) Procedural
+(b) ShapeNet 
+Fig. 3: Comparison of (a) some of our 1,000 procedural,
+(b) some of the 51,300 ShapeNet objects, both used for data
+collection in simulation, and the (c) 36 objects we used only
+for evaluating grasping in the real-world, that were not seen
+during training. The variety of shapes, sizes, and material
+properties makes the test set very challenging.
+collected by grasp prediction networks of varying performance, which added diversity to the collected samples. After
+training our grasping approach in our simulated environment,
+the simulated robots were successful on 70%-90% of the
+simulated grasp attempts. Note that all of the grasp success
+prediction models used in our experiments were trained from
+scratch using these simulated grasp datasets.
+B. Virtual Scene Randomization
+Another important question is whether randomizing the
+visual appearance and dynamics in the scene affects grasp
+performance and in what way. One of the ﬁrst kind of
+diversities we considered was the addition of ε cm, where
+ε ∼N (0,1), to the horizontal components of the motor
+command. This improved real grasp success in early experiments, so we added this kind of randomization for all
+simulated samples. Adding this noise to real data did not
+help. To further study the effects of virtual scene randomization, we built datasets with four different kinds of scene
+randomization: (a) No randomization: Similar to real-world
+data collection, we only varied camera pose, bin location,
+and used 6 different real-world images as backgrounds; (b)
+Visual Randomization: We varied tray texture, object texture
+and color, robot arm color, lighting direction and brightness;
+(c) Dynamics Randomization: We varied object mass, and
+object lateral/rolling/spinning friction coefﬁcients; and (d)
+All: both visual and dynamics randomization.
+C. Domain Adaptation for Vision-Based Grasping
+As mentioned in Sect. II, there are two primary types of
+methods used for domain adaptation: feature-level, and pixellevel. Here we propose a feature-level adaptation method and
+a novel pixel-level one, which we call GraspGAN. Given
+original synthetic images, GraspGAN produces adapted images that look more realistic. We subsequently use the trained
+generator from GraspGAN as a ﬁxed module that adapts our
+synthetic visual input, while performing feature-level domain
+adaptation on extracted features that account for both the
+transferred images and synthetic motor command input.
+For our feature-level adaptation technique we use a DANN
+loss on the last convolutional layer of our grasp success
+prediction model C, as shown in Fig. 4c. In preliminary
+experiments we found that using the DANN loss on this layer
+yielded superior performance compared to applying it at the
+activations of other layers. We used the domain classiﬁer
+proposed in . One of the early research questions we
+faced was what the interaction of batch normalization (BN)
+ with the DANN loss would be, as this has not been
+examined in previous work. We use BN in every layer of C
+and in a na¨ıve implementation of training models with data
+from two domains, a setting we call na¨ıve mixing, batch
+statistics are calculated without taking the domain labels
+of each sample into account. However, the two domains
+are bound to have different statistics, which means that
+calculating and using them separately for simulated and
+real-world data while using the same parameters for C
+might be beneﬁcial. We call this way of training data from
+two domains domain-speciﬁc batch normalization (DBN)
+mixing, and show it is a useful tool for domain adaptation,
+even when a DANN loss is not used.
+In our pixel-level domain adaptation model, Grasp-
+GAN, shown in Fig. 4, G is a convolutional neural network
+that follows a U-Net architecture , and uses average
+pooling for downsampling, bilinear upsampling, concatenation and 1×1 convolutions for the U-Net skip connections,
+and instance normalization . Our discriminator D is a
+patch-based CNN with 5 convolutional layers, with an
+effective input size of 70 × 70. It is fully convolutional on
+3 scales (472 × 472, 236 × 236, and 118 × 118) of the two
+input images, xs
+c, stacked into a 6 channel input,
+producing domain estimates for all patches which are then
+combined to compute the joint discriminator loss. This novel
+multi-scale patch-based discriminator design can learn to
+assess both global consistency of the generated image, as
+well as realism of local textures. Stacking the channels of
+the two input images enables the discriminator to recognize
+relationships between the two images, so it can encourage
+the generator to respect them (e.g., paint the tray with the
+same texture in both images, but insert realistic shadows for
+the arm). Our task model C is the grasp success prediction
+CNN from .
+To train GraspGAN, we employ a least-squares generative adversarial objective (LSGAN) to encourage G
+to produce realistic images. During training, our generator
+G(xs;θ G) →xf maps synthetic images xs to adapted images
+xf , by individually passing xs
+c through two instances
+of the generator network displayed in Figure 4. Similar
+to traditional GAN training, we perform optimization in
+alternating steps by minimizing the following loss terms w.r.t.
+the parameters of each sub-network:
+λgLgen(G,D)+λtgLtask(G,C)+λcLcontent(G)
+λdLdiscr(G,D)+λtdLtask(G,C),
+where Lgen and Ldiscr are the LSGAN generator and discriminator losses, Ltask is the task loss, Lcontent is the
+content-similarity loss, and λg, λd, λtg, λtd, λc, the respective
+weights. The LSGAN discriminator loss is the L2 distance
+between its likelihood output ˆd and the domain labels d = 0
+Fig. 4: Our proposed approach: (a) Overview of our pixel-level domain adaptation model, GraspGAN. Tuples of images
+from the simulation xs are fed into the generator G to produce realistic versions xf . The discriminator D gets unlabeled
+real world images xt and xf and is trained to distinguish them. Real and adapted images are also fed into the grasp success
+prediction network C, trained in parallel (motion commands v are not shown to reduce clutter). G, thus, gets feedback from
+D and C to make adapted images look real and maintain the semantic information. (b) Architectures for G and D. Blue boxes
+denote convolution/normalization/activation-layers, where n64s2:IN:relu means 64 ﬁlters, stride 2, instance normalization
+IN and relu activation. Unless speciﬁed all convolutions are 3×3 in G and 4×4 in D. (c) DANN model: C1 has 7 conv
+layers and C2 has 9 conv layers. Further details can be found in . Domain classiﬁer uses GRL and two 100 unit layers.
+for fake and d = 1 for real images, while for the generator
+loss the label is ﬂipped, such that there is a high loss if the
+disciminator predicts ˆd = 0 for a generated image. The task
+loss measures how well the network C predicts grasp success
+on transferred and real examples by calculating the binomial
+cross-entropy of the labels yi.
+It is of utmost importance that the GraspGAN generator,
+while making the input image look like an image from the
+real world scenario, does not change the semantics of the
+simulated input, for instance by drawing the robot’s arm or
+the objects in different positions. Otherwise, the information
+we extract from the simulation in order to train the task network would not correspond anymore to the generated image.
+We thus devise several additional loss terms, accumulated in
+Lcontent, to help anchor the generated image to the simulated
+one on a semantic level. The most straightforward restriction
+is to not allow the generated image to deviate much from
+the input. To that effect we use the PMSE loss, also used
+by . We also leverage the fact that we can have semantic
+information about every pixel in the synthetic images by
+computing segmentation masks mf of the corresponding
+rendered images for the background, the tray, robot arm, and
+the objects. We use these masks by training our generator G
+to also produce mf as an additional output for each adapted
+image, with a standard L2 reconstruction loss. Intuitively, it
+forces the generator to extract semantic information about all
+the objects in the scene and encode them in the intermediate
+latent representations. This information is then available
+during the generation of the output image as well. Finally,
+we additionally implement a loss term that provides more
+dense feedback from the task tower than just the single bit of
+information about grasp success. We encourage the generated
+image to provide the same semantic information to the task
+network as the corresponding simulated one by penalizing
+differences in activations of the ﬁnal convolutional layer of
+C for the two images. This is similar in principle to the
+perceptual loss that uses the activations of an ImageNetpretrained VGG model as a way to anchor the restylization
+of an input image. In contrast, here C is trained at the same
+time, the loss is speciﬁc to our goal, and it helps preserve the
+semantics in ways that are relevant to our prediction task.
+V. EVALUATION
+This section aims to answer the following research questions: (a) is the use of simulated data from a low quality
+simulator aiding in improving grasping performance in the
+real world? (b) is the improvement consistent with varying
+amounts of real-world labeled samples? (c) how realistic
+do graspable objects in simulation need to be? (d) does
+randomizing the virtual environment affect simulation-to-real
+world transfer, and what are the randomization attributes
+that help most? (e) does domain adaptation allow for better
+utilization of simulated grasping experience?
+In order to answer these questions, we evaluated a number
+of different ways for training a grasp success prediction
+model C with simulated data and domain adaptation1. When
+simulated data was used, the number of simulated samples
+was always approximately 8 million. We follow the grasp
+success evaluation protocol described by Levine et al. .
+We used 6 Kuka IIWA robots for our real-world experiments
+1Visit for our supplementary video.
+Fig. 5: The effect of using 8 million simulated samples
+of procedural objects with no randomization and various
+amounts of real data, for the best technique in each class.
+TABLE I: The effect of our choices for simulated objects
+and randomization in terms of grasp success. We compared the performance of models trained jointly on grasps of
+procedural vs ShapeNet objects with 10% of the real data.
+Models were trained with DANN and DBN mixing.
+Randomization
+Procedural
+and a test set consisting of the objects shown in Fig. 3c, the
+same used in , with 6 different objects in each bin for
+each robot. These objects were not included in the real-world
+training set and were not used in any way when creating our
+simulation datasets. Each robot executes 102 grasps, for a
+total of 612 test grasps for each evaluation. During execution,
+each robot picks up objects from one side of the bin and
+drops them on the other, alternating every 3 grasps. This
+prevents the model from repeatedly grasping the same object.
+Optimal models were selected by using the accuracy of C on
+a held-out validation set of 94,000 real samples.
+The ﬁrst conclusion from our results is that simulated
+data from an off-the-shelf simulator always aids in improving vision-based real-world grasping performance. As
+one can see in Fig. 5, which shows the real grasp success
+gains by incorporating simulated data from our procedurallygenerated objects, using our simulated data signiﬁcantly and
+consistently improves real-world performance regardless of
+the number of real-world samples.
+We also observed that we do not need realistic 3D models
+to obtain these gains. We compared the effect of using
+random, procedurally-generated shapes and ShapeNet objects
+in combination with 10% of the real-world data, under all
+randomization scenarios. As shown in Table I we found that
+using procedural objects is the better choice in all cases.
+This ﬁnding has interesting implications for simulation to
+real-world transfer, since content creation is often a major
+bottleneck in producing generalizable simulated data. Based
+on these results, we decided to use solely procedural objects
+for the rest of our experiments.
+Table III shows our main results: the grasp success performance for different combinations of simulated data generation and domain adaptation methods, and with different
+quantities of real-world samples. The different settings are:
+Real-Only, in which the model is given only real data; Na¨ıve
+Mixing (Na¨ıve Mix): Simulated samples generated with
+no virtual scene randomization are mixed with real-world
+samples such that half of each batch consists of simulated
+images; DBN Mixing & Randomization (Rand.): The simulated dataset is generated with visual-only randomization.
+The simulated samples are mixed with real-world samples
+as in the naive mixing case, and the models use DBN; DBN
+Mixing & DANN (DANN): Simulated samples are generated
+with no virtual scene randomization and the model is trained
+with a domain-adversarial method with DBN; DBN Mixing,
+DANN & Randomization (DANN-R): Simulated samples are
+generated with visual randomization and the model is trained
+with a domain-adversarial method with DBN; GraspGAN,
+TABLE II: Real grasp performance when no labeled real
+examples are available. Method names explained in the text.
+TABLE III: Success of grasping 36 diverse and unseen physical objects of all our methods trained on different amounts
+of real-world samples and 8 million simulated samples with
+procedural objects. Method names are explained in the text.
+Na¨ıve Mix.
+DBN Mixing & DANN (GraspGAN): The non-randomized
+simulated data is ﬁrst reﬁned with a GraspGAN generator,
+and the reﬁned data is used to train a DANN with DBN
+mixing. The generator is trained with the same real dataset
+size used to train the DANN. See Figure 1b for examples.
+Table III shows that using visual randomization with DBN
+mixing improved upon na¨ıve mixing with no randomization
+experiments across the board. The effect of visual, dynamics, and combined randomization for both procedural and
+ShapeNet objects was evaluated by using 10% of the real data
+available. Table I shows that using only visual randomization
+slightly improved grasp performance for procedural objects,
+but the differences were generally not conclusive.
+In terms of domain adaptation techniques, our proposed
+hybrid approach of combining our GraspGAN and DANN
+performs the best in most cases, and shows the most gains
+in the lower real-data regimes. Using DANNs with DBN
+Mixing performed better than na¨ıve mixing in most cases.
+However the effect of DANNs on Randomized data was not
+conclusive, as the equivalent models produced worse results
+in 3 out of 5 cases. We believe the most interesting results
+however, are the ones from our experiments with no labeled
+real data. We compared the best domain adaptation method
+(GraspGAN), against a model trained on simulated data with
+and without randomization. We trained a GraspGAN on all 9
+million real samples, without using their labels. Our grasping
+model was then trained only on data reﬁned by G. Results
+in Table II show that the unsupervised adaptation model
+outperformed not only sim-only models with and without
+randomization but also a real-only model with 939,777
+labeled real samples.
+Although our absolute grasp success numbers are consistent with the ones reported in , some previous grasping
+work reports higher absolute grasp success. However, we
+note the following: (a) our goal in this work is not to
+show that we can train the best possible grasping system,
+but that for the same amount of real-world data, the inclusion of synthetic data can be helpful; we have relied
+on previous work for the grasping approach used; (b)
+our evaluation was conducted on a diverse and challenging
+range of objects, including transparent bottles, small round
+objects, deformable objects, and clutter; and (c) the method
+uses only monocular RGB images from an over-the-shoulder
+viewpoint, without depth or wrist-mounted cameras. These
+make our setup considerably harder than most standard ones.
+VI. CONCLUSION
+In this paper, we examined how simulated data can be
+incorporated into a learning-based grasping system to improve performance and reduce data requirements. We study
+grasping from over-the-shoulder monocular RGB images, a
+particularly challenging setting where depth information and
+analytic 3D models are not available. This presents a challenging setting for simulation-to-real-world transfer, since
+simulated RGB images typically differ much more from real
+ones compared to simulated depth images. We examine the
+effects of the nature of the objects in simulation, of randomization, and of domain adaptation. We also introduce a novel
+extension of pixel-level domain adaptation that makes it suitable for use with high-resolution images used in our grasping
+system. Our results indicate that including simulated data can
+drastically improve the vision-based grasping system we use,
+achieving comparable or better performance with 50 times
+fewer real-world samples. Our results also suggest that it is
+not as important to use realistic 3D models for simulated
+training. Finally, our experiments indicate that our method
+can provide plausible transformations of synthetic images,
+and that including domain adaptation substantially improves
+performance in most cases.
+Although our work demonstrates very large improvements
+in the grasp success rate when training on smaller amounts of
+real world data, there are a number of limitations. Both of the
+adaptation methods we consider focus on invariance, either
+transforming simulated images to look like real images, or
+regularizing features to be invariant across domains. These
+features incorporate both appearance and action, due to the
+structure of our network, but no explicit reasoning about
+physical discrepancies between the simulation and the real
+world is done. We did consider randomization of dynamics
+properties, and show it is indeed important. Several recent
+works have looked at adapting to physical discrepancies
+explicitly , , , and incorporating these ideas
+into grasping is an exciting avenue for future work. Our
+approach for simulation to real world transfer only considers
+monocular RGB images, though extending this method to
+stereo and depth images would be straightforward. Finally,
+the success rate reported in our experiments still has room
+for improvement, and we expect further research in this area
+will lead to even better results. The key insight from our
+work comes from the comparison of the different methods:
+we are not aiming to propose a novel grasping system, but
+rather to study how incorporating simulated data can improve
+an existing one.
+ACKNOWLEDGMENTS
+The authors thank John-Michael Burke for overseeing the
+robot operations. The authors also thank Erwin Coumans,
+Ethan Holly, Dmitry Kalashnikov, Deirdre Quillen, and Ian
+Wilkes for contributions to the development of our grasping
+system and supporting infrastructure.

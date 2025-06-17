@@ -1,0 +1,551 @@
+PointRend: Image Segmentation as Rendering
+Alexander Kirillov
+Kaiming He
+Ross Girshick
+Facebook AI Research (FAIR)
+We present a new method for efﬁcient high-quality
+image segmentation of objects and scenes. By analogizing
+classical computer graphics methods for efﬁcient rendering
+with over- and undersampling challenges faced in pixel
+labeling tasks, we develop a unique perspective of image
+segmentation as a rendering problem. From this vantage,
+we present the PointRend (Point-based Rendering) neural
+network module:
+a module that performs point-based
+segmentation predictions at adaptively selected locations
+based on an iterative subdivision algorithm.
+can be ﬂexibly applied to both instance and semantic
+segmentation tasks by building on top of existing state-ofthe-art models. While many concrete implementations of
+the general idea are possible, we show that a simple design
+already achieves excellent results. Qualitatively, PointRend
+outputs crisp object boundaries in regions that are oversmoothed by previous methods. Quantitatively, PointRend
+yields signiﬁcant gains on COCO and Cityscapes, for both
+instance and semantic segmentation. PointRend’s efﬁciency
+enables output resolutions that are otherwise impractical
+in terms of memory or computation compared to existing
+approaches. Code has been made available at https://
+github.com/facebookresearch/detectron2/
+tree/master/projects/PointRend.
+1. Introduction
+Image segmentation tasks involve mapping pixels sampled on a regular grid to a label map, or a set of label maps,
+on the same grid. For semantic segmentation, the label map
+indicates the predicted category at each pixel. In the case of
+instance segmentation, a binary foreground vs. background
+map is predicted for each detected object. The modern tools
+of choice for these tasks are built on convolutional neural
+networks (CNNs) .
+CNNs for image segmentation typically operate on regular grids: the input image is a regular grid of pixels, their
+hidden representations are feature vectors on a regular grid,
+and their outputs are label maps on a regular grid. Regular grids are convenient, but not necessarily computation-
+Mask R-CNN
++ PointRend
+Figure 1: Instance segmentation with PointRend. We introduce
+the PointRend (Point-based Rendering) module that makes predictions at adaptively sampled points on the image using a new pointbased feature representation (see Fig. 3). PointRend is general and
+can be ﬂexibly integrated into existing semantic and instance segmentation systems. When used to replace Mask R-CNN’s default
+mask head (top-left), PointRend yields signiﬁcantly more detailed results (top-right). (bottom) During inference, PointRend iterative computes its prediction. Each step applies bilinear upsampling in smooth regions and makes higher resolution predictions
+at a small number of adaptively selected points that are likely to
+lie on object boundaries (black points). All ﬁgures in the paper are
+best viewed digitally with zoom. Image source: .
+ally ideal for image segmentation.
+The label maps predicted by these networks should be mostly smooth, i.e.,
+neighboring pixels often take the same label, because highfrequency regions are restricted to the sparse boundaries between objects. A regular grid will unnecessarily oversample
+the smooth areas while simultaneously undersampling object boundaries. The result is excess computation in smooth
+regions and blurry contours (Fig. 1, upper-left). Image segmentation methods often predict labels on a low-resolution
+regular grid, e.g., 1/8-th of the input for semantic segmentation, or 28×28 for instance segmentation, as a
+compromise between undersampling and oversampling.
+Analogous sampling issues have been studied for
+decades in computer graphics.
+For example, a renderer
+maps a model (e.g., a 3D mesh) to a rasterized image, i.e. a
+ 
+Figure 2: Example result pairs from Mask R-CNN with its standard mask head (left image) vs. with PointRend (right image),
+using ResNet-50 with FPN . Note how PointRend predicts masks with substantially ﬁner detail around object boundaries.
+regular grid of pixels. While the output is on a regular grid,
+computation is not allocated uniformly over the grid. Instead, a common graphics strategy is to compute pixel values at an irregular subset of adaptively selected points in the
+image plane. The classical subdivision technique of , as
+an example, yields a quadtree-like sampling pattern that ef-
+ﬁciently renders an anti-aliased, high-resolution image.
+The central idea of this paper is to view image segmentation as a rendering problem and to adapt classical
+ideas from computer graphics to efﬁciently “render” highquality label maps (see Fig. 1, bottom-left).
+We encapsulate this computational idea in a new neural network
+module, called PointRend, that uses a subdivision strategy
+to adaptively select a non-uniform set of points at which
+to compute labels.
+PointRend can be incorporated into
+popular meta-architectures for both instance segmentation
+(e.g., Mask R-CNN ) and semantic segmentation (e.g.,
+FCN ).
+Its subdivision strategy efﬁciently computes
+high-resolution segmentation maps using an order of magnitude fewer ﬂoating-point operations than direct, dense
+computation.
+PointRend is a general module that admits many possible implementations.
+Viewed abstractly, a PointRend
+module accepts one or more typical CNN feature maps
+f(xi, yi) that are deﬁned over regular grids, and outputs
+high-resolution predictions p(x′
+i) over a ﬁner grid. Instead of making excessive predictions over all points on the
+output grid, PointRend makes predictions only on carefully
+selected points.
+To make these predictions, it extracts a
+point-wise feature representation for the selected points by
+interpolating f, and uses a small point head subnetwork to
+predict output labels from the point-wise features. We will
+present a simple and effective PointRend implementation.
+We evaluate PointRend on instance and semantic segmentation tasks using the COCO and Cityscapes 
+benchmarks. Qualitatively, PointRend efﬁciently computes
+sharp boundaries between objects, as illustrated in Fig. 2
+and Fig. 8. We also observe quantitative improvements even
+though the standard intersection-over-union based metrics
+for these tasks (mask AP and mIoU) are biased towards
+object-interior pixels and are relatively insensitive to boundary improvements. PointRend improves strong Mask R-
+CNN and DeepLabV3 models by a signiﬁcant margin.
+2. Related Work
+Rendering algorithms in computer graphics output a regular grid of pixels. However, they usually compute these
+pixel values over a non-uniform set of points. Efﬁcient procedures like subdivision and adaptive sampling 
+reﬁne a coarse rasterization in areas where pixel values
+have larger variance. Ray-tracing renderers often use oversampling , a technique that samples some points more
+densely than the output grid to avoid aliasing effects. Here,
+we apply classical subdivision to image segmentation.
+Non-uniform grid representations. Computation on regular grids is the dominant paradigm for 2D image analysis, but this is not the case for other vision tasks. In 3D
+shape recognition, large 3D grids are infeasible due to cubic scaling. Most CNN-based approaches do not go beyond coarse 64×64×64 grids . Instead, recent works
+consider more efﬁcient non-uniform representations such as
+meshes , signed distance functions , and octrees . Similar to a signed distance function, PointRend
+can compute segmentation values at any point.
+Recently, Marin et al. propose an efﬁcient semantic
+segmentation network based on non-uniform subsampling
+of the input image prior to processing with a standard semantic segmentation network. PointRend, in contrast, focuses on non-uniform sampling at the output. It may be
+possible to combine the two approaches, though is currently unproven for instance segmentation.
+Instance segmentation methods based on the Mask R-
+CNN meta-architecture occupy top ranks in recent
+challenges . These region-based architectures typically predict masks on a 28×28 grid irrespective of object size. This is sufﬁcient for small objects, but for large
+objects it produces undesirable “blobby” output that oversmooths the ﬁne-level details of large objects (see Fig. 1,
+top-left). Alternative, bottom-up approaches group pixels
+to form object masks . These methods can produce more detailed output, however, they lag behind regionbased approaches on most instance segmentation benchmarks . TensorMask , an alternative slidingwindow method, uses a sophisticated network design to
+predict sharp high-resolution masks for large objects, but
+its accuracy also lags slightly behind.
+In this paper, we
+show that a region-based segmentation model equipped
+with PointRend can produce masks with ﬁne-level details
+while improving the accuracy of region-based approaches.
+Semantic segmentation. Fully convolutional networks
+(FCNs) are the foundation of modern semantic segmentation approaches. They often predict outputs that have
+lower resolution than the input grid and use bilinear upsampling to recover the remaining 8-16× resolution. Results
+may be improved with dilated/atrous convolutions that replace some subsampling layers at the expense of more
+memory and computation.
+Alternative approaches include encoder-decoder achitectures that subsample the grid representation
+in the encoder and then upsample it in the decoder, using
+skip connections to recover ﬁltered details. Current
+approaches combine dilated convolutions with an encoderdecoder structure to produce output on a 4× sparser
+grid than the input grid before applying bilinear interpolation. In our work, we propose a method that can efﬁciently
+predict ﬁne-level details on a grid as dense as the input grid.
+coarse prediction
+point features
+point predictions
+CNN backbone
+fine-grained
+Figure 3: PointRend applied to instance segmentation. A standard network for instance segmentation (solid red arrows) takes
+an input image and yields a coarse (e.g. 7×7) mask prediction for
+each detected object (red box) using a lightweight segmentation
+head. To reﬁne the coarse mask, PointRend selects a set of points
+(red dots) and makes prediction for each point independently with
+a small MLP. The MLP uses interpolated features computed at
+these points (dashed red arrows) from (1) a ﬁne-grained feature
+map of the backbone CNN and (2) from the coarse prediction
+mask. The coarse mask features enable the MLP to make different predictions at a single point that is contained by two or more
+boxes. The proposed subdivision mask rendering algorithm (see
+Fig. 4 and §3.1) applies this process iteratively to reﬁne uncertain
+regions of the predicted mask.
+We analogize image segmentation (of objects and/or
+scenes) in computer vision to image rendering in computer
+graphics. Rendering is about displaying a model (e.g., a
+3D mesh) as a regular grid of pixels, i.e., an image. While
+the output representation is a regular grid, the underlying
+physical entity (e.g., the 3D model) is continuous and its
+physical occupancy and other attributes can be queried at
+any real-value point on the image plane using physical and
+geometric reasoning, such as ray-tracing.
+Analogously, in computer vision, we can think of an image segmentation as the occupancy map of an underlying
+continuous entity, and the segmentation output, which is a
+regular grid of predicted labels, is “rendered” from it. The
+entity is encoded in the network’s feature maps and can be
+accessed at any point by interpolation. A parameterized
+function, that is trained to predict occupancy from these interpolated point-wise feature representations, is the counterpart to physical and geometric reasoning.
+Based on this analogy, we propose PointRend (Pointbased Rendering) as a methodology for image segmentation using point representations. A PointRend module accepts one or more typical CNN feature maps of C channels f ∈RC×H×W , each deﬁned over a regular grid (that
+is typically 4× to 16× coarser than the image grid), and
+outputs predictions for the K class labels p ∈RK×H′×W ′
+over a regular grid of different (and likely higher) resolution. A PointRend module consists of three main components: (i) A point selection strategy chooses a small number
+of real-value points to make predictions on, avoiding excessive computation for all pixels in the high-resolution output
+grid. (ii) For each selected point, a point-wise feature representation is extracted. Features for a real-value point are
+computed by bilinear interpolation of f, using the point’s 4
+nearest neighbors that are on the regular grid of f. As a result, it is able to utilize sub-pixel information encoded in the
+channel dimension of f to predict a segmentation that has
+higher resolution than f. (iii) A point head: a small neural network trained to predict a label from this point-wise
+feature representation, independently for each point.
+The PointRend architecture can be applied to instance
+segmentation (e.g., on Mask R-CNN ) and semantic
+segmentation (e.g., on FCNs ) tasks. For instance segmentation, PointRend is applied to each region. It computes masks in a coarse-to-ﬁne fashion by making predictions over a set of selected points (see Fig. 3). For semantic segmentation, the whole image can be considered as a
+single region, and thus without loss of generality we will
+describe PointRend in the context of instance segmentation.
+We discuss the three main components in more detail next.
+3.1. Point Selection for Inference and Training
+At the core of our method is the idea of ﬂexibly and
+adaptively selecting points in the image plane at which to
+predict segmentation labels. Intuitively, these points should
+be located more densely near high-frequency areas, such as
+object boundaries, analogous to the anti-aliasing problem in
+ray-tracing. We develop this idea for inference and training.
+Inference. Our selection strategy for inference is inspired
+by the classical technique of adaptive subdivision in
+computer graphics. The technique is used to efﬁciently render high resolutions images (e.g., via ray-tracing) by computing only at locations where there is a high chance that
+the value is signiﬁcantly different from its neighbors; for all
+other locations the values are obtained by interpolating already computed output values (starting from a coarse grid).
+For each region, we iteratively “render” the output mask
+in a coarse-to-ﬁne fashion. The coarsest level prediction is
+made on the points on a regular grid (e.g., by using a standard coarse segmentation prediction head). In each iteration, PointRend upsamples its previously predicted segmentation using bilinear interpolation and then selects the N
+most uncertain points (e.g., those with probabilities closest
+to 0.5 for a binary mask) on this denser grid. PointRend then
+computes the point-wise feature representation (described
+shortly in §3.2) for each of these N points and predicts their
+labels. This process is repeated until the segmentation is upsampled to a desired resolution. One step of this procedure
+prediction
+Figure 4: Example of one adaptive subdivision step. A prediction on a 4×4 grid is upsampled by 2× using bilinear interpolation. Then, PointRend makes prediction for the N most ambiguous points (black dots) to recover detail on the ﬁner grid. This
+process is repeated until the desired grid resolution is achieved.
+a) regular grid
+b) uniform
+c) mildly biased
+k = 3, β = 0.75
+d) heavily biased
+k = 10, β = 0.75
+k = 1, β = 0.0
+Figure 5: Point sampling during training. We show N=142
+points sampled using different strategies for the same underlying
+coarse prediction. To achieve high performance only a small number of points are sampled per region with a mildly biased sampling
+strategy making the system more efﬁcient during training.
+is illustrated on a toy example in Fig. 4.
+With a desired output resolution of M×M pixels and a
+starting resolution of M0×M0, PointRend requires no more
+than N log2
+M0 point predictions. This is much smaller
+than M×M, allowing PointRend to make high-resolution
+predictions much more effectively. For example, if M0 is
+7 and the desired resolutions is M=224, then 5 subdivision
+steps are preformed. If we select N=282 points at each
+step, PointRend makes predictions for only 282·4.25 points,
+which is 15 times smaller than 2242. Note that fewer than
+M0 points are selected overall because in the ﬁrst
+subdivision step only 142 points are available.
+Training. During training, PointRend also needs to select
+points at which to construct point-wise features for training the point head. In principle, the point selection strategy
+can be similar to the subdivision strategy used in inference.
+However, subdivision introduces sequential steps that are
+less friendly to training neural networks with backpropagation. Instead, for training we use a non-iterative strategy
+based on random sampling.
+The sampling strategy selects N points on a feature map to train on.1
+It is designed to bias selection towards uncertain regions, while also retaining
+some degree of uniform coverage, using three principles.
+(i) Over generation: we over-generate candidate points by
+1The value of N can be different for training and inference selection.
+randomly sampling kN points (k>1) from a uniform distribution. (ii) Importance sampling: we focus on points with
+uncertain coarse predictions by interpolating the coarse
+prediction values at all kN points and computing a taskspeciﬁc uncertainty estimate (deﬁned in §4 and §5). The
+most uncertain βN points (β ∈ ) are selected from
+the kN candidates. (iii) Coverage: the remaining (1 −β)N
+points are sampled from a uniform distribution. We illustrate this procedure with different settings, and compare it
+to regular grid selection, in Fig. 5.
+At training time, predictions and loss functions are only
+computed on the N sampled points (in addition to the coarse
+segmentation), which is simpler and more efﬁcient than
+backpropagation through subdivision steps. This design is
+similar to the parallel training of RPN + Fast R-CNN in a
+Faster R-CNN system , whose inference is sequential.
+3.2. Point-wise Representation and Point Head
+PointRend constructs point-wise features at selected
+points by combining (e.g., concatenating) two feature types,
+ﬁne-grained and coarse prediction features, described next.
+Fine-grained features. To allow PointRend to render ﬁne
+segmentation details we extract a feature vector at each sampled point from CNN feature maps. Because a point is a
+real-value 2D coordinate, we perform bilinear interpolation
+on the feature maps to compute the feature vector, following standard practice . Features can be extracted
+from a single feature map (e.g., res2 in a ResNet); they can
+also be extracted from multiple feature maps (e.g., res2 to
+res5, or their feature pyramid counterparts) and concatenated, following the Hypercolumn method .
+Coarse prediction features. The ﬁne-grained features enable resolving detail, but are also deﬁcient in two regards.
+First, they do not contain region-speciﬁc information and
+thus the same point overlapped by two instances’ bounding boxes will have the same ﬁne-grained features. Yet, the
+point can only be in the foreground of one instance. Therefore, for the task of instance segmentation, where different
+regions may predict different labels for the same point, additional region-speciﬁc information is needed.
+Second, depending on which feature maps are used for
+the ﬁne-grained features, the features may contain only relatively low-level information (e.g., we will use res2 with
+DeepLabV3). In this case, a feature source with more contextual and semantic information can be helpful. This issue
+affects both instance and semantic segmentation.
+Based on these considerations, the second feature type is
+a coarse segmentation prediction from the network, i.e., a
+K-dimensional vector at each point in the region (box) representing a K-class prediction. The coarse resolution, by
+design, provides more globalized context, while the channels convey the semantic classes. These coarse predictions
+are similar to the outputs made by the existing architectures,
+and are supervised during training in the same way as existing models. For instance segmentation, the coarse prediction can be, for example, the output of a lightweight 7×7
+resolution mask head in Mask R-CNN. For semantic segmentation, it can be, for example, predictions from a stride
+16 feature map.
+Point head. Given the point-wise feature representation
+at each selected point, PointRend makes point-wise segmentation predictions using a simple multi-layer perceptron (MLP). This MLP shares weights across all points (and
+all regions), analogous to a graph convolution or a
+PointNet . Since the MLP predicts a segmentation label for each point, it can be trained by standard task-speciﬁc
+segmentation losses (described in §4 and §5).
+4. Experiments: Instance Segmentation
+Datasets. We use two standard instance segmentation
+datasets: COCO and Cityscapes . We report the
+standard mask AP metric using the median of 3 runs
+for COCO and 5 for Cityscapes (it has higher variance).
+COCO has 80 categories with instance-level annotation.
+We train on train2017 (∼118k images) and report results
+on val2017 (5k images). As noted in , the COCO
+ground-truth is often coarse and AP for the dataset may not
+fully reﬂect improvements in mask quality. Therefore we
+supplement COCO results with AP measured using the 80
+COCO category subset of LVIS , denoted by AP⋆. The
+LVIS annotations have signiﬁcantly higher quality. Note
+that for AP⋆we use the same models trained on COCO
+and simply re-evaluate their predictions against the higherquality LVIS annotations using the LVIS evaluation API.
+Cityscapes is an ego-centric street-scene dataset with
+8 categories, 2975 train images, and 500 validation images. The images are higher resolution compared to COCO
+ and have ﬁner, more pixel-accurate
+ground-truth instance segmentations.
+Architecture. Our experiments use Mask R-CNN with a
+ResNet-50 + FPN backbone. The default mask
+head in Mask R-CNN is a region-wise FCN, which we denote by “4× conv”.2 We use this as our baseline for comparison. For PointRend, we make appropriate modiﬁcations
+to this baseline, as described next.
+Lightweight, coarse mask prediction head. To compute
+the coarse prediction, we replace the 4× conv mask head
+with a lighter weight design that resembles Mask R-CNN’s
+box head and produces a 7×7 mask prediction. Speciﬁcally, for each bounding box, we extract a 14×14 feature
+2Four layers of 3×3 convolutions with 256 output channels are applied
+to a 14×14 input feature map. Deconvolution with a 2×2 kernel transforms this to 28×28. Finally, a 1×1 convolution predicts mask logits.
+map from the P2 level of the FPN using bilinear interpolation. The features are computed on a regular grid inside the
+bounding box (this operation can seen as a simple version of
+RoIAlign). Next, we use a stride-two 2×2 convolution layer
+with 256 output channels followed by ReLU , which
+reduces the spatial size to 7×7. Finally, similar to Mask
+R-CNN’s box head, an MLP with two 1024-wide hidden
+layers is applied to yield a 7×7 mask prediction for each of
+the K classes. ReLU is used on the MLP’s hidden layers
+and the sigmoid activation function is applied to its outputs.
+PointRend. At each selected point, a K-dimensional feature vector is extracted from the coarse prediction head’s
+output using bilinear interpolation. PointRend also interpolates a 256-dimensional feature vector from the P2 level of
+the FPN. This level has a stride of 4 w.r.t. the input image.
+These coarse prediction and ﬁne-grained feature vectors are
+concatenated. We make a K-class prediction at selected
+points using an MLP with 3 hidden layers with 256 channels. In each layer of the MLP, we supplement the 256 output channels with the K coarse prediction features to make
+the input vector for the next layer. We use ReLU inside the
+MLP and apply sigmoid to its output.
+Training. We use the standard 1× training schedule and
+data augmentation from Detectron2 by default (full details are in the appendix). For PointRend, we sample 142
+points using the biased sampling strategy described in the
+§3.1 with k=3 and β=0.75. We use the distance between
+0.5 and the probability of the ground truth class interpolated from the coarse prediction as the point-wise uncertainty measure. For a predicted box with ground-truth class
+c, we sum the binary cross-entropy loss for the c-th MLP
+output over the 142 points. The lightweight coarse prediction head uses the average cross-entropy loss for the mask
+predicted for class c, i.e., the same loss as the baseline 4×
+conv head. We sum all losses without any re-weighting.
+During training, Mask R-CNN applies the box and mask
+heads in parallel, while during inference they run as a cascade. We found that training as a cascade does not improve
+the baseline Mask R-CNN, but PointRend can beneﬁt from
+it by sampling points inside more accurate boxes, slightly
+improving overall performance (∼0.2% AP, absolute).
+Inference. For inference on a box with predicted class c,
+unless otherwise speciﬁed, we use the adaptive subdivision
+technique to reﬁne the coarse 7×7 prediction for class c to
+the 224×224 in 5 steps. At each step, we select and update
+(at most) the N=282 most uncertain points based on the
+absolute difference between the predictions and 0.5.
+4.1. Main Results
+We compare PointRend to the default 4× conv head in
+Mask R-CNN in Table 1. PointRend outperforms the default head on both datasets. The gap is larger when evaluatoutput
+Cityscapes
+resolution
+36.1 (+0.9)
+39.2 (+1.6)
+35.5 (+2.5)
+36.3 (+1.1)
+39.7 (+2.1)
+35.8 (+2.8)
+Table 1: PointRend vs. the default 4× conv mask head for Mask
+R-CNN . Mask AP is reported. AP⋆is COCO mask AP evaluated against the higher-quality LVIS annotations (see text
+for details). A ResNet-50-FPN backbone is used for both COCO
+and Cityscapes models. PointRend outperforms the standard 4×
+conv mask head both quantitively and qualitatively. Higher output
+resolution leads to more detailed predictions, see Fig. 2 and Fig. 6.
+Figure 6: PointRend inference with different output resolutions. High resolution masks align better with object boundaries.
+output resolution
+# activations
+Table 2: FLOPs (multiply-adds) and activation counts for a
+224×224 output resolution mask. PointRend’s efﬁcient subdivision makes 224×224 output feasible in contrast to the standard
+4× conv mask head modiﬁed to use an RoIAlign size of 112×112.
+ing the COCO categories using the LVIS annotations (AP⋆)
+and for Cityscapes, which we attribute to the superior annotation quality in these datasets. Even with the same output
+resolution PointRend outperforms the baseline. The difference between 28×28 and 224×224 is relatively small because AP uses intersection-over-union and, therefore,
+is heavily biased towards object-interior pixels and less sensitive to the boundary quality. Visually, however, the difference in boundary quality is obvious, see Fig. 6.
+Subdivision inference allows PointRend to yield a high
+resolution 224×224 prediction using more than 30 times
+less compute (FLOPs) and memory than the default 4×
+conv head needs to output the same resolution (based on
+taking a 112×112 RoIAlign input), see Table 2. PointRend
+makes high resolution output feasible in the Mask R-CNN
+framework by ignoring areas of an object where a coarse
+# points per
+Cityscapes
+output resolution
+subdivision step
+Table 3: Subdivision inference parameters. Higher output resolution improves AP. Although improvements saturate quickly (at
+underlined values) with the number of points sampled at each subdivision step, qualitative results may continue to improve for complex objects. AP⋆is COCO mask AP evaluated against the higherquality LVIS annotations (see text for details).
+Figure 7: Anti-aliasing with PointRend. Precise object delineation requires output mask resolution to match or exceed the resolution of the input image region that the object occupies.
+prediction is sufﬁcient (e.g., in the areas far away from object boundaries). In terms of wall-clock runtime, our unoptimized implementation outputs 224×224 masks at ∼13 fps,
+which is roughly the same frame-rate as a 4× conv head
+modiﬁed to output 56×56 masks (by doubling the default
+RoIAlign size), a design that actually has lower COCO AP
+compared to the 28×28 4× conv head (34.5% vs. 35.2%).
+Table 3 shows PointRend subdivision inference with different output resolutions and number of points selected at
+each subdivision step. Predicting masks at a higher resolution can improve results. Though AP saturates, visual
+improvements are still apparent when moving from lower
+(e.g., 56×56) to higher (e.g., 224×224) resolution outputs,
+see Fig. 7. AP also saturates with the number of points sampled in each subdivision step because points are selected in
+the most ambiguous areas ﬁrst. Additional points may make
+predictions in the areas where a coarse prediction is already
+sufﬁcient. For objects with complex boundaries, however,
+using more points may be beneﬁcial.
+Cityscapes
+selection strategy
+regular grid
+uniform (k=1, β=0.0)
+mildly biased (k=3, β=0.75)
+heavily biased (k=10, β=1.0)
+Table 4: Training-time point selection strategies with 142 points
+per box. Mildly biasing sampling towards uncertain regions performs the best. Heavily biased sampling performs even worse than
+uniform or regular grid sampling indicating the importance of coverage. AP⋆is COCO mask AP evaluated against the higher-quality
+LVIS annotations (see text for details).
+38.2 (+1.0)
+41.5 (+2.0)
+39.8 (+1.2)
+43.5 (+2.1)
+40.9 (+1.4)
+44.9 (+2.8)
+Larger models and a longer 3× schedule .
+PointRend beneﬁts from more advanced models and the longer
+training. The gap between PointRend and the default mask head
+in Mask R-CNN holds. AP⋆is COCO mask AP evaluated against
+the higher-quality LVIS annotations (see text for details).
+4.2. Ablation Experiments
+We conduct a number of ablations to analyze PointRend.
+In general we note that it is robust to the exact design of the
+point head MLP. Changes of its depth or width do not show
+any signiﬁcant difference in our experiments.
+Point selection during training. During training we select
+142 points per object following the biased sampling strategy (§3.1). Sampling only 142 points makes training computationally and memory efﬁcient and we found that using
+more points does not improve results. Surprisingly, sampling only 49 points per box still maintains AP, though we
+observe an increased variance in AP.
+Table 4 shows PointRend performance with different selection strategies during training.
+Regular grid selection
+achieves similar results to uniform sampling. Whereas biasing sampling toward ambiguous areas improves AP. However, a sampling strategy that is biased too heavily towards
+boundaries of the coarse prediction (k>10 and β close to
+1.0) decreases AP. Overall, we ﬁnd a wide range of parameters 2<k<5 and 0.75<β<1.0 delivers similar results.
+Larger models, longer training. Training ResNet-50 +
+FPN (denoted R50-FPN) with the 1× schedule under-ﬁts
+on COCO. In Table 5 we show that the PointRend improvements over the baseline hold with both longer training
+schedule and larger models (see the appendix for details).
+Mask R-CNN + 4 conv
+Mask R-CNN + PointRend
+DeeplabV3 + PointRend
+Figure 8: Cityscapes example results for instance and semantic segmentation. In instance segmentation larger objects beneﬁt more
+from PointRend ability to yield high resolution output. Whereas for semantic segmentation PointRend recovers small objects and details.
+5. Experiments: Semantic Segmentation
+PointRend is not limited to instance segmentation and
+can be extended to other pixel-level recognition tasks. Here,
+we demonstrate that PointRend can beneﬁt two semantic
+segmentation models: DeeplabV3 , which uses dilated
+convolutions to make prediction on a denser grid, and SemanticFPN , a simple encoder-decoder architecture.
+Dataset. We use the Cityscapes semantic segmentation
+set with 19 categories, 2975 training images, and 500 validation images. We report the median mIoU of 5 trials.
+Implementation details. We reimplemented DeeplabV3
+and SemanticFPN following their respective papers. SemanticFPN uses a standard ResNet-101 , whereas
+DeeplabV3 uses the ResNet-103 proposed in .3 We follow the original papers’ training schedules and data augmentation (details are in the appendix).
+We use the same PointRend architecture as for instance segmentation. Coarse prediction features come from
+the (already coarse) output of the semantic segmentation
+model. Fine-grained features are interpolated from res2 for
+DeeplabV3 and from P2 for SemanticFPN. During training
+we sample as many points as there are on a stride 16 feature map of the input . We use the same k=3, β=0.75 point selection
+strategy. During inference, subdivision uses N=8096 until reaching the input image resolution. To measure prediction uncertainty we use the same strategy during training and inference: the difference between the most
+conﬁdent and second most conﬁdent class probabilities.
+DeeplabV3. In Table 6 we compare DeepLabV3 to
+DeeplabV3 with PointRend. The output resolution can also
+be increased by 2× at inference by using dilated convolutions in res4 stage, as described in . Compared to both,
+3It replaces the ResNet-101 res1 7×7 convolution with three 3×3 convolutions (hence “ResNet-103”).
+output resolution
+DeeplabV3-OS-16
+DeeplabV3-OS-8
+77.8 (+0.6)
+DeeplabV3-OS-16 + PointRend
+78.4 (+1.2)
+Table 6: DeeplabV3 with PointRend for Cityscapes semantic
+segmentation outperforms baseline DeepLabV3. Dilating the res4
+stage during inference yields a larger, more accurate prediction,
+but at much higher computational and memory costs; it is still inferior to using PointRend.
+PointRend inference for semantic segmentation.
+PointRend reﬁnes prediction scores for areas where a coarser prediction is not sufﬁcient. To visualize the scores at each step we
+take arg max at given resolution without bilinear interpolation.
+output resolution
+SemanticFPN P2-P5
+SemanticFPN P2-P5 + PointRend
+78.6 (+0.9)
+SemanticFPN P3-P5
+SemanticFPN P3-P5 + PointRend
+78.5 (+1.1)
+Table 7: SemanticFPN with PointRend for Cityscapes semantic
+segmentation outperform the baseline SemanticFPN.
+PointRend has higher mIoU. Qualitative improvements are
+also evident, see Fig. 8. By sampling points adaptively,
+PointRend reaches 1024×2048 resolution (i.e. 2M points)
+by making predictions for only 32k points, see Fig. 9.
+SemanticFPN. Table 7 shows that SemanticFPN with
+PointRend improves over both 8× and 4× output stride
+variants without PointRend.
+Appendix A. Instance Segmentation Details
+We use SGD with 0.9 momentum; a linear learning rate
+warmup over 1000 updates starting from a learning rate
+of 0.001 is applied; weight decay 0.0001 is applied; horizontal ﬂipping and scale train-time data augmentation; the
+batch normalization (BN) layers from the ImageNet
+pre-trained models are frozen (i.e., BN is not used); no testtime augmentation is used.
+COCO : 16 images per mini-batch; the training schedule is 60k / 20k / 10k updates at learning rates of 0.02 / 0.002
+/ 0.0002 respectively; training images are resized randomly
+to a shorter edge from 640 to 800 pixels with a step of 32
+pixels and inference images are resized to a shorter edge
+size of 800 pixels.
+Cityscapes : 8 images per mini-batch the training
+schedule is 18k / 6k updates at learning rates of 0.01 /
+0.001 respectively; training images are resized randomly to
+a shorter edge from 800 to 1024 pixels with a step of 32 pixels and inference images are resized to a shorter edge size
+of 1024 pixels.
+Longer schedule: The 3× schedule for COCO is 210k /
+40k / 20k updates at learning rates of 0.02 / 0.002 / 0.0002,
+respectively; all other details are the same as the setting described above.
+Appendix B. Semantic Segmentation Details
+DeeplabV3 : We use SGD with 0.9 momentum with 16
+images per mini-batch cropped to a ﬁxed 768×768 size;
+the training schedule is 90k updates with a poly learning
+rate update strategy, starting from 0.01; a linear learning rate warmup over 1000 updates starting from a
+learning rate of 0.001 is applied; the learning rate for ASPP
+and the prediction convolution are multiplied by 10; weight
+decay of 0.0001 is applied; random horizontal ﬂipping and
+scaling of 0.5× to 2.0× with a 32 pixel step is used as training data augmentation; BN is applied to 16 images minibatches; no test-time augmentation is used;
+SemanticFPN : We use SGD with 0.9 momentum
+with 32 images per mini-batch cropped to a ﬁxed 512×1024
+size; the training schedule is 40k / 15k / 10k updates at
+learning rates of 0.01 / 0.001 / 0.0001 respectively; a linear
+learning rate warmup over 1000 updates starting from
+a learning rate of 0.001 is applied; weight decay 0.0001 is
+applied; horizontal ﬂipping, color augmentation , and
+crop bootstrapping are used during training; scale traintime data augmentation resizes an input image from 0.5×
+to 2.0× with a 32 pixel step; BN layers are frozen (i.e., BN
+is not used); no test-time augmentation is used.
+Appendix C. AP⋆Computation
+The ﬁrst version (v1) of this paper on arXiv has an error in COCO mask AP evaluated against the LVIS annotations (AP⋆). The old version used an incorrect list of
+the categories not present in each evaluation image, which
+resulted in lower AP⋆values.

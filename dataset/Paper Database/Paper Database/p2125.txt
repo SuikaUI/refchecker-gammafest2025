@@ -1,0 +1,883 @@
+Mon. Not. R. Astron. Soc. 000, 1–14 
+Printed 26 November 2024
+(MN LATEX style ﬁle v2.2)
+MULTINEST: an efﬁcient and robust Bayesian inference tool for
+cosmology and particle physics
+F. Feroz⋆, M.P. Hobson and M. Bridges
+Astrophysics Group, Cavendish Laboratory, JJ Thomson Avenue, Cambridge CB3 0HE, UK
+Accepted —. Received —; in original form 26 November 2024
+We present further development and the ﬁrst public release of our multimodal nested sampling algorithm, called MULTINEST. This Bayesian inference tool calculates the evidence,
+with an associated error estimate, and produces posterior samples from distributions that
+may contain multiple modes and pronounced (curving) degeneracies in high dimensions.
+The developments presented here lead to further substantial improvements in sampling ef-
+ﬁciency and robustness, as compared to the original algorithm presented in Feroz & Hobson , which itself signiﬁcantly outperformed existing MCMC techniques in a wide
+range of astrophysical inference problems. The accuracy and economy of the MULTINEST
+algorithm is demonstrated by application to two toy problems and to a cosmological inference problem focussing on the extension of the vanilla ΛCDM model to include spatial curvature and a varying equation of state for dark energy. The MULTINEST software,
+which is fully parallelized using MPI and includes an interface to CosmoMC, is available at
+ It will also be released
+as part of the SuperBayeS package, for the analysis of supersymmetric theories of particle
+physics, at 
+Key words: methods: data analysis – methods: statistical
+INTRODUCTION
+Bayesian analysis methods are already widely used in astrophysics
+and cosmology, and are now beginning to gain acceptance in particle physics phenomenology. As a consequence, considerable effort
+has been made to develop efﬁcient and robust methods for performing such analyses. Bayesian inference is usually considered to divide into two categories: parameter estimation and model selection.
+Parameter estimation is typically performed using Markov chain
+Monte Carlo (MCMC) sampling, most often based on the standard
+Metropolis–Hastings algorithm or its variants, such as Gibbs’ or
+Hamiltonian sampling . Such methods can
+be very computationally intensive, however, and often experience
+problems in sampling efﬁciently from a multimodal posterior distribution or one with large (curving) degeneracies between parameters, particularly in high dimensions. Moreover, MCMC methods
+often require careful tuning of the proposal distribution to sample efﬁciently, and testing for convergence can be problematic.
+Bayesian model selection has been further hindered by the even
+greater computational expense involved in the calculation to sufﬁcient precision of the key ingredient, the Bayesian evidence (also
+called the marginalized likelihood or the marginal density of the
+data). As the average likelihood of a model over its prior proba-
+⋆E-mail: 
+bility space, the evidence can be used to assign relative probabilities to different models . The existing preferred evidence evaluation method, again based on MCMC techniques, is thermodynamic
+integration , which is extremely computationally intensive but has been used successfully
+in astronomical applications . Some fast approximate methods have been used for evidence
+evaluation, such as treating the posterior as a multivariate Gaussian
+centred at its peak , but this approximation is clearly a poor one for multimodal posteriors (except perhaps
+if one performs a separate Gaussian approximation at each mode).
+The Savage–Dickey density ratio has also been proposed as an exact, and potentially faster, means of evaluating evidences, but is restricted to the special case of nested hypotheses
+and a separable prior on the model parameters. Various alternative
+information criteria for astrophysical model selection are discussed
+by Liddle , but the evidence remains the preferred method.
+Nested sampling is a Monte Carlo method targetted at the efﬁcient calculation of the evidence, but also produces
+posterior inferences as a by-product. In cosmological applications,
+Mukherjee et al. showed that their implementation of the
+method requires a factor of ∼100 fewer posterior evaluations
+c⃝2008 RAS
+F. Feroz, M.P. Hobson & M. Bridges
+than thermodynamic integration. To achieve an improved acceptance ratio and efﬁciency, their algorithm uses an elliptical bound
+containing the current point set at each stage of the process to restrict the region around the posterior peak from which new samples
+are drawn. Shaw et al. point out that this method becomes
+highly inefﬁcient for multimodal posteriors, and hence introduce
+the notion of clustered nested sampling, in which multiple peaks
+in the posterior are detected and isolated, and separate ellipsoidal
+bounds are constructed around each mode. This approach signiﬁcantly increases the sampling efﬁciency. The overall computational
+load is reduced still further by the use of an improved error calculation on the ﬁnal evidence result that produces
+a mean and standard error in one sampling, eliminating the need
+for multiple runs. In our previous paper , we built on the work of Shaw et al. by
+pursuing further the notion of detecting and characterising multiple modes in the posterior from the distribution of nested samples,
+and presented a number of innovations that resulted in a substantial
+improvement in sampling efﬁciency and robustness, leading to an
+algorithm that constituted a viable, general replacement for traditional MCMC sampling techniques in astronomical data analysis.
+In this paper, we present further substantial development of
+the method discussed in FH08 and make the ﬁrst public release of
+the resulting Bayesian inference tool, called MULTINEST. In particular, we propose fundamental changes to the ‘simultaneous ellipsoidal sampling’ method described in FH08, which result in a substantially improved and fully parallelized algorithm for calculating the evidence and obtaining posterior samples from distributions
+with (an unkown number of) multiple modes and/or pronounced
+(curving) degeneracies between parameters. The algorithm also
+naturally identiﬁes individual modes of a distribution, allowing for
+the evaluation of the ‘local’ evidence and parameter constraints associated with each mode separately.
+The outline of the paper is as follows. In Section 2, we brieﬂy
+review the basic aspects of Bayesian inference for parameter estimation and model selection. In Section 3, we introduce nested
+sampling and discuss the use of ellipsoidal bounds in Section 4.
+In Section 5, we present the MULTINEST algorithm. In Section 6,
+we apply our new algorithms to two toy problems to demonstrate
+the accuracy and efﬁciency of the evidence calculation and parameter estimation as compared with other techniques. In Section 7,
+we consider the use of our new algorithm for cosmological model
+selection focussed on the extension of the vanilla ΛCDM model to
+include spatial curvature and a varying equation of state for dark
+energy. We compare the efﬁciency of MULTINEST and standard
+MCMC techniques for cosmological parameter estimation in Section 7.3. Finally, our conclusions are presented in Section 8.
+BAYESIAN INFERENCE
+Bayesian inference methods provide a consistent approach to the
+estimation of a set parameters Θ in a model (or hypothesis) H for
+the data D. Bayes’ theorem states that
+Pr(Θ|D, H) = Pr(D| Θ, H) Pr(Θ|H)
+where Pr(Θ|D, H) ≡P(Θ) is the posterior probability distribution of the parameters, Pr(D|Θ, H) ≡L(Θ) is the likelihood,
+Pr(Θ|H) ≡π(Θ) is the prior, and Pr(D|H) ≡Z is the Bayesian
+In parameter estimation, the normalising evidence factor is
+usually ignored, since it is independent of the parameters Θ, and
+inferences are obtained by taking samples from the (unnormalised)
+posterior using standard MCMC sampling methods, where at equilibrium the chain contains a set of samples from the parameter
+space distributed according to the posterior. This posterior constitutes the complete Bayesian inference of the parameter values, and
+can be marginalised over each parameter to obtain individual parameter constraints.
+In contrast to parameter estimation problems, in model selection the evidence takes the central role and is simply the factor required to normalize the posterior over Θ:
+L(Θ)π(Θ)dDΘ,
+where D is the dimensionality of the parameter space. As the average of the likelihood over the prior, the evidence automatically
+implements Occam’s razor: a simpler theory with compact parameter space will have a larger evidence than a more complicated one,
+unless the latter is signiﬁcantly better at explaining the data. The
+question of model selection between two models H0 and H1 can
+then be decided by comparing their respective posterior probabilities given the observed data set D, as follows
+Pr(H0|D) = Pr(D|H1) Pr(H1)
+Pr(D|H0) Pr(H0) = Z1
+where Pr(H1)/ Pr(H0) is the a priori probability ratio for the two
+models, which can often be set to unity but occasionally requires
+further consideration.
+Evaluation of the multidimensional integral (2) is a challenging numerical task. The standard technique of thermodynamic integration draws MCMC samples not from the posterior directly but
+from Lλπ where λ is an inverse temperature that is slowly raised
+from ≈0 to 1 according to some annealing schedule. It is possible to obtain accuracies of within 0.5 units in log-evidence via
+this method, but in cosmological model selection applications it
+typically requires of order 106 samples per chain (with around 10
+chains required to determine a sampling error). This makes evidence evaluation at least an order of magnitude more costly than
+parameter estimation.
+NESTED SAMPLING
+Nested sampling is a Monte Carlo technique aimed
+at efﬁcient evaluation of the Bayesian evidence, but also produces posterior inferences as a by-product. A full discussion of the
+method is given in FH08, so we give only a brieﬂy description here,
+following the notation of FH08.
+Nested sampling exploits the relation between the likelihood
+and prior volume to transform the multidimensional evidence integral (Eq. 2) into a one-dimensional integral. The ‘prior volume’ X
+is deﬁned by dX = π(Θ)dDΘ, so that
+where the integral extends over the region(s) of parameter space
+contained within the iso-likelihood contour L(Θ) = λ. The evidence integral (Eq. 2) can then be written as
+where L(X), the inverse of Eq. 4, is a monotonically decreasing
+c⃝2008 RAS, MNRAS 000, 1–14
+MULTINEST: efﬁcient and robust Bayesian inference
+Figure 1. Cartoon illustrating (a) the posterior of a two dimensional problem; and (b) the transformed L(X) function where the prior volumes Xi
+are associated with each likelihood Li.
+function of X. Thus, if one can evaluate the likelihoods Li =
+L(Xi), where Xi is a sequence of decreasing values,
+0 < XM < · · · < X2 < X1 < X0 = 1,
+as shown schematically in Fig. 1, the evidence can be approximated
+numerically using standard quadrature methods as a weighted sum
+In the following we will use the simple trapezium rule, for which
+the weights are given by wi = 1
+2(Xi−1 −Xi+1). An example of
+a posterior in two dimensions and its associated function L(X) is
+shown in Fig. 1.
+The summation (Eq. 7) is performed as follows. The iteration counter is ﬁrst set to i = 0 and N ‘active’ (or ‘live’) samples are drawn from the full prior π(Θ) (which is often simply
+the uniform distribution over the prior range), so the initial prior
+volume is X0 = 1. The samples are then sorted in order of their
+likelihood and the smallest (with likelihood L0) is removed from
+the active set (hence becoming ‘inactive’) and replaced by a point
+drawn from the prior subject to the constraint that the point has
+a likelihood L > L0. The corresponding prior volume contained
+within this iso-likelihood contour will be a random variable given
+by X1 = t1X0, where t1 follows the distribution Pr(t) = NtN−1
+(i.e. the probability distribution for the largest of N samples drawn
+uniformly from the interval ). At each subsequent iteration i,
+the removal of the lowest likelihood point Li in the active set, the
+drawing of a replacement with L > Li and the reduction of the
+corresponding prior volume Xi = tiXi−1 are repeated, until the
+entire prior volume has been traversed. The algorithm thus travels
+through nested shells of likelihood as the prior volume is reduced.
+The mean and standard deviation of log t, which dominates the geometrical exploration, are E[log t] = −1/N and σ[log t] = 1/N.
+Since each value of log t is independent, after i iterations the prior
+volume will shrink down such that log Xi ≈−(i ±
+i)/N. Thus,
+one takes Xi = exp(−i/N).
+The algorithm is terminated on determining the evidence to
+some speciﬁed precision (we use 0.5 in log-evidence): at iteration
+i, the largest evidence contribution that can be made by the remaining portion of the posterior is ∆Zi = LmaxXi, where Lmax is
+the maximum likelihood in the current set of active points. The
+evidence estimate (Eq. 7) may then be reﬁned by adding a ﬁnal
+increment from the set of N active points, which is given by
+where wM+j = XM/N for all j. The ﬁnal uncertainty on the calculated evidence may be straightforwardly estimated from a single
+run of the nested sampling algorithm by calculating the relative entropy of the full sequence of samples (see FH08).
+Once the evidence Z is found, posterior inferences can be easily generated using the full sequence of (inactive and active) points
+generated in the nested sampling process. Each such point is simply
+assigned the weight
+where the sample index j runs from 1 to N = M + N, the total
+number of sampled points. These samples can then be used to calculate inferences of posterior parameters such as means, standard
+deviations, covariances and so on, or to construct marginalised posterior distributions.
+ELLIPSOIDAL NESTED SAMPLING
+The most challenging task in implementing the nested sampling
+algorithm is drawing samples from the prior within the hard constraint L > Li at each iteration i. Employing a naive approach that
+draws blindly from the prior would result in a steady decrease in
+the acceptance rate of new samples with decreasing prior volume
+(and increasing likelihood).
+Ellipsoidal nested sampling tries to
+overcome the above problem by approximating the iso-likelihood
+contour L = Li by a D-dimensional ellipsoid determined from the
+covariance matrix of the current set of active points. New points
+are then selected from the prior within this ellipsoidal bound (usually enlarged slightly by some user-deﬁned factor) until one is obtained that has a likelihood exceeding that of the removed lowestlikelihood point. In the limit that the ellipsoid coincides with the
+true iso-likelihood contour, the acceptance rate tends to unity.
+Ellipsoidal nested sampling as described above is efﬁcient for
+simple unimodal posterior distributions without pronounced degeneracies, but is not well suited to multimodal distributions. As advocated by Shaw et al. and shown in Fig. 2, the sampling ef-
+ﬁciency can be substantially improved by identifying distinct clusters of active points that are well separated and constructing an individual (enlarged) ellipsoid bound for each cluster. In some problems, however, some modes of the posterior may exhibit a pronounced curving degeneracy so that it more closely resembles a
+(multi–dimensional) ‘banana’. Such features are problematic for all
+sampling methods, including that of Shaw et al. .
+In FH08, we made several improvements to the sampling
+method of Shaw et al. , which signiﬁcantly improved its efﬁciency and robustness. Among these, we proposed a solution to the
+above problem by partitioning the set of active points into as many
+sub–clusters as possible to allow maximum ﬂexibility in following
+the degeneracy. These clusters are then enclosed in ellipsoids and
+a new point is then drawn from the set of these ‘overlapping’ ellipsoids, correctly taking into account the overlaps. Although this
+sub-clustering approach provides maximum efﬁciency for highly
+degenerate distributions, it can result in lower efﬁciencies for relatively simpler problems owing to the overlap between the ellipsoids. Also, the factor by which each ellipsoid was enlarged was
+chosen arbitrarily. Another problem with the our previous approach
+was in separating modes with elongated curving degeneracies. We
+now propose solutions to all these problems, along with some additional modiﬁcations to improve efﬁciency and robustness still furc⃝2008 RAS, MNRAS 000, 1–14
+F. Feroz, M.P. Hobson & M. Bridges
+Figure 2. Cartoon of ellipsoidal nested sampling from a simple bimodal distribution. In (a) we see that the ellipsoid represents a good bound to the active
+region. In (b)-(d), as we nest inward we can see that the acceptance rate will rapidly decrease as the bound steadily worsens. Figure (e) illustrates the increase
+in efﬁciency obtained by sampling from each clustered region separately.
+ther, in the MULTINEST algorithm presented in the following section.
+THE MULTINEST ALGORITHM
+The MULTINEST algorithm builds upon the ‘simultaneous ellipsoidal nested sampling method’ presented in FH08, but incorporates a number of improvements. In short, at each iteration i of the
+nested sampling process, the full set of N active points is partitioned and ellipsoidal bounds constructed using a new algorithm
+presented in Section 5.2 below. This new algorithm is far more ef-
+ﬁcient and robust than the method used in FH08 and automatically
+accommodates elongated curving degeneracies, while maintaining
+high efﬁciency for simpler problems. This results in a set of (possibly overlapping) ellipsoids. The lowest-likelihood point from the
+full set of N active points is then removed (hence becoming ‘inactive’) and replaced by a new point drawn from the set of ellipsoids,
+correctly taking into account any overlaps. Once a point becomes
+inactive it plays no further part in the nested sampling process, but
+its details remain stored. We now discuss the MULTINEST algorithm in detail.
+Unit hypercube sampling space
+The new algorithm for partitioning the active points into clusters
+and constructing ellipsoidal bounds requires the points to be uniformly distributed in the parameter space. To satisfy this requirement, the MULTINEST ‘native’ space is taken as a D-dimensional
+unit hypercube (each parameter value varies from 0 to 1) in which
+samples are drawn uniformly. All partitioning of points into clusters, construction of ellipsoidal bounds and sampling are performed
+in the unit hypercube.
+In order to conserve probability mass, the point u
+(u1, u2, · · · , uD) in the unit hypercube should be transformed to
+the point Θ = (θ1, θ2, · · · , θD) in the ‘physical’ parameter space,
+π(θ1, θ2, · · · , θD) dθ1 dθ2 · · · dθD =
+du1du2 · · · duD.
+In the simple case that the prior π(Θ) is separable
+π(θ1, θ2, · · · , θD) = π1(θ1)π2(θ2) · · · πD(θD),
+one can satisfy Eq. 10 by setting
+πj(θj)dθj = duj.
+Therefore, for a given value of uj, the corresponding value of θj
+can be found by solving
+In the more general case in which the prior π(Θ) is not separable,
+one instead writes
+π(θ1, θ2, · · · , θD) = π1(θ1)π2(θ2|θ1) · · · πD(θD|θ1, θ2 · · · θD−1)
+where we deﬁne
+πj(θj|θ1, · · · , θj−1)
+π(θ1, · · · , θj−1, θj, θj+1, · · · , θD) dθj+1 · · · dθD. (15)
+The physical parameters Θ corresponding to the parameters u in
+the unit hypercube can then be found by replacing the distributions
+πj in Eq. 13 with those deﬁned in Eq. 15 and solving for θj. The
+corresponding physical parameters Θ are then used to calculate the
+likelihood value of the point u in the unit hypercube.
+It is worth mentioning that in many problems the prior π(Θ)
+is uniform, in which case the unit hypercube and the physical parameter space coincide. Even when this is not so, one is often
+able to solve Eq. 13 analytically, resulting in virtually no computational overhead. For more complicated problems, two alternative
+approaches are possible. First, one may solve Eq. 13 numerically,
+most often using look-up tables to reduce the computational cost.
+Alternatively, one can re-cast the inference problem, so that the
+conversion between the unit hypercube and the physical parameter space becomes trivial. This is straightforwardly achieved by, for
+example, deﬁning the new ‘likelihood’ L′(Θ) ≡L(Θ)π(Θ) and
+‘prior’ π′(Θ) ≡constant. The latter approach does, however, have
+the potential to be inefﬁcient since it does not make use of the true
+prior π(Θ) to guide the sampling of the active points.
+Partitioning and construction of ellipsoidal bounds
+In FH08, the partitioning of the set of N active points at each iteration was performed in two stages. First, X-means was used to partition the set into the number of clusters that
+optimised the Bayesian Information Criterion (BIC). Second, to
+accommodate modes with elongated, curving degeneracies, each
+cluster identiﬁed by X-means was divided into sub-clusters to follow the degeneracy. To allow maximum ﬂexibility, this was performed using a modiﬁed, iterative k-means algorithm with k = 2
+to produce as many sub-clusters as possible consistent with there
+being at least D + 1 points in any sub-cluster, where D is the dimensionality of the parameter space. As mentioned above, however, this approach can lead to inefﬁciencies for simpler problems
+in which the iso-likelihood contour is well described by a few (wellseparated) ellipsoidal bounds, owing to large overlaps between the
+ellipsoids enclosing each sub-cluster. Moreover, the factor f by
+which each ellipsoid was enlarged was chosen arbitrarily.
+We now address these problems by using a new method to partition the active points into clusters and simultaneously construct
+c⃝2008 RAS, MNRAS 000, 1–14
+MULTINEST: efﬁcient and robust Bayesian inference
+the ellipsoidal bound for each cluster (this also makes redundant the
+notion of sub-clustering). At the ith iteration of the nested sampling
+process, an ‘expectation-maximization’ (EM) approach is used to
+ﬁnd the optimal ellipsoidal decomposition of N active points distributed uniformly in a region enclosing prior volume Xi, as set out
+Let us begin by denoting the set of N active points in the
+unit hypercube by S = {u1, u2, · · · , uN} and some partitioning of
+the set into K clusters (called the set’s K-partition) by {Sk}K
+where K ⩾1 and ∪K
+k=1Sk = S. For a cluster (or subset) Sk
+containing nk points, a reasonably accurate and computationally
+efﬁcient approximation to its minimum volume bounding ellipsoid
+is given by
+Ek = {u ∈RD|uT (fkCk)−1u ⩽1},
+(uj −µk)(uj −µk)T
+is the empirical covariance matrix of the subset Sk and µk =
+j=1 uj is its center of the mass. The enlargement factor fk ensures that Ek is a bounding ellipsoid for the subset Sk. The volume of this ellipsoid, denoted by V (Ek), is then proportional to
+det(fkCk).
+Suppose for the moment that we know the volume V (S) of
+the region from which the set S is uniformly sampled and let us
+deﬁne the function
+The minimisation of F(S), subject to the constraint F(S) ⩾1,
+with respect to K-partitionings {Sk}K
+k=1 will then yield an ‘optimal’ decomposition into K ellipsoids of the original sampled region. The minimisation of F(S) is most easily performed using
+an ‘expectation-minimization’ scheme as set out below. This approach makes use of the result that for uniformly
+distributed points, the variation in F(S) resulting from reassigning
+a point with position u from the subset Sk to the subset Sk′ is given
+∆F(S)k,k′ ≈γ
+„V (Ek′)d(u, Sk′)
+−V (Ek)d(u, Sk)
+where γ is a constant,
+d(u, Sk) = (u −µk)T (fkCk)−1(u −µk)
+is the Mahalanobis distance from u to the centroid µk of ellipsoid
+Ek deﬁned in Eq. 16, and
+V (Sk) = nkV (S)
+may be considered as the true volume from which the subset of
+points Sk were drawn uniformly. The approach we have adopted in
+fact differs slightly from that outlined above, since we make further
+use of Eq. 21 to impose the constraint that the volume V (Ek) of
+the kth ellipsoid should never be less than the ‘true’ volume V (Sk)
+occupied by the subset Sk. This can be easily achieved by enlarging
+the ellipsoid Ek by a factor fk, such that its volume V (Ek) =
+max[V (Ek), V (Sk)], before evaluating Eqs. 18 and 19.
+In our case, however, at each iteration i of the nested sampling
+process, V (S) corresponds to the true remaining prior volume Xi,
+which is not known. Nonetheless, as discussed in Section 3, we do
+know the expectation value of this random variable. We thus take
+V (S) = exp(−i/N) which, in turn, allows us to deﬁne V (Sk)
+according to Eq. 21.
+From Eq. 19, we see that deﬁning
+hk(u) = V (Ek)d(u, Sk)
+for a point u ∈S and assigning u ∈Sk to Sk′ only if hk(u) <
+hk′(u), ∀k ̸= k′, is equivalent to minimizing F(S) using the variational formula (Eq. 19). Thus, a weighted Mahalanobis metric can
+be used in the k-means framework to optimize the functional F(S).
+In order to ﬁnd out the optimal number of ellipsoids, K, a recursive scheme can be used which starts with K = 2, optimizes this
+2-partition using the metric in Eq. 22 and recursively partitions the
+resulting ellipsoids. For each iteration of this recursion, we employ
+this optimization scheme in Algorithm 1.
+Algorithm 1 Minimizing F(S), subject to F(S) ⩾1, for points
+S = {u1, u2, · · · , uN} uniformly distributed in a volume V (S).
+1: calculate bounding ellipsoid E and its volume V (E)
+2: enlarge E so that V (E) = max[V (E), V (S)].
+3: partition S into S1 and S2 containing n1 and n2 points respectively by applying k−means clustering algorithm with K = 2.
+4: calculate E1, E2 and their volumes V (E1) and V (E2) respectively.
+5: enlarge Ek (k = 1, 2) so that V (Ek) = max[V (Ek), V (Sk)].
+6: for all u ∈S do
+assign u to Sk such that hk(u) = min[h1(x), h2(x)].
+8: end for
+9: if no point has been reassigned then
+go to step 14.
+go to step 4.
+13: end if
+14: if V (E1) + V (E2) < V (E) or V (E) > 2V (S) then
+partition S into S1 and S2 and repeat entire algorithm for
+each subset S1 and S2.
+return E as the optimal ellipsoid of the point set S.
+18: end if
+In step 14 of Algorithm 1 we partition the point set S with
+ellipsoidal volume V (E) into subsets S1 and S2 with ellipsoidal
+volumes V (E1) and V (E2) even if V (E1) + V (E2) > V (E),
+provided V (E) > 2V (S). This is required since, as discussed in
+Lu et al. , the minimizer of F(S) can be over-conservative
+and the partition should still be performed if the ellipsoidal volume
+is greater than the true volume by some factor (we use 2).
+The above EM algorithm can be quite computationally expensive, especially in higher dimensions, due to the number of
+eigenvalue and eigenvector evaluations required to calculate ellipsoidal volumes. Fortunately, MULTINEST does not need to
+perform the full partitioning algorithm at each iteration of the
+nested sampling process. Once partitioning of the active points
+and construction of the ellipsoidal bounds has been performed
+using Algorithm 1, the resulting ellipsoids can then be evolved
+through scaling at subsequent iterations so that their volumes are
+max[V (Ek), Xi+1nk/N], where with Xi+1 is the remaining prior
+volume in the next nested sampling iteration and nk is number of
+c⃝2008 RAS, MNRAS 000, 1–14
+F. Feroz, M.P. Hobson & M. Bridges
+Figure 3. Illustrations of the ellipsoidal decompositions returned by Algorithm 1: the points given as input are overlaid on the resulting ellipsoids.
+1000 points were sampled uniformly from: (a) two non-intersecting ellipsoids; and (b) a torus.
+points in the subset Sk at the end of ith iteration. As the MULTI-
+NEST algorithm moves to higher likelihood regions, one would
+expect the ellipsoidal decomposition calculated at some earlier iteration to become less optimal. We therefore perform a full repartitioning of the active points using Algorithm 1 if F(S) ⩾h;
+we typically use h = 1.1.
+The approach outlined above allows maximum ﬂexibility and
+sampling efﬁciency by breaking up a posterior mode resembling
+a Gaussian into relatively few ellipsoids, but a mode possesses a
+pronounced curving degeneracy into a relatively large number of
+small ‘overlapping’ ellipsoids. In Fig. 3 we show the results of applying Algorithm 1 to two different problems in three dimensions:
+in (a) the iso-likelihood surface consists of two non-overlapping
+ellipsoids, one of which contains correlations between the parameters; and in (b) the iso-likelihood surface is a torus. In each case,
+1000 points were uniformly generated inside the iso-likelihood surface are used as the starting set S in Algorithm 1. In case (a), Algorithm 1 correctly partitions the point set in two non-overlapping
+ellipsoids with F(S) = 1.1, while in case (b) the point set is partitioned into 23 overlapping ellipsoids with F(S) = 1.2.
+In our nested sampling application, it is possible that the ellipsoids found by Algorithm 1 might not enclose the entire isolikelihood contour, even though the sum of their volumes is constrained to exceed the prior volume X This is because the ellipsoidal approximation to a region in the prior space might not be
+perfect. It might therefore be desirable to sample from a region with
+volume greater than the prior volume. This can easily be achieved
+by using X/e as the desired minimum volume in Algorithm 1,
+where X is the prior volume and e the desired sampling efﬁciency
+(1/e is the enlargement factor). We also note that if the desire sampling efﬁciency e is set to be greater than unity, then the prior can
+be under-sampled. Indeed, setting e > 1 can be useful if one is not
+interested in the evidence values, but wants only to have a general
+idea of the posterior structure in relatively few likelihood evaluations. We note that, regardless of the value of e, it is always ensured that the ellipsoids Ek enclosing the subsets Sk are always
+the bounding ellipsoids.
+Sampling from overlapping ellipsoids
+Once the ellipsoidal bounds have been constructed at some iteration
+of the nested sampling process, one must then draw a new point
+uniformly from the union of these ellipsoids, many of which may be
+overlapping. This is achieved using the method presented in FH08,
+which is summarised below for completeness.
+Suppose at iteration i of the nested sampling algorithm, one
+has K ellipsoids {Ek}. One ellipsoid is then chosen with probability pk equal to its volume fraction
+pk = V (Ek)/Vtot,
+where Vtot = PK
+k=1 V (Ek). Samples are then drawn uniformly
+from the chosen ellipsoid until a sample is found for which the hard
+constraint L > Li is satisﬁed, where Li is the lowest-likelihood
+value among all the active points at that iteration. There is, of
+course, a possibility that the chosen ellipsoid overlaps with one or
+more other ellipsoids. In order to take an account of this possibility, we ﬁnd the number of ellipsoids, ne, in which the sample lies
+and only accept the sample with probability 1/ne. This provides a
+consistent sampling procedure in all cases.
+Decreasing the number of active points
+For highly multimodal problems, the nested sampling algorithm
+would require a large number N of active points to ensure that
+all the modes are detected. This would consequently result in very
+slow convergence of the algorithm. In such cases, it would be desirable to decrease the number of active points as the algorithm
+proceeds to higher likelihood levels, since the number of isolated
+regions in the iso-likelihood surface is expected to decrease with increasing likelihood. modes Fortunately, nested sampling does not
+require the number of active points to remain constant, provided
+the fraction by which the prior volume is decreased after each iteration is adjusted accordingly. Without knowing anything about
+the posterior, we can use the largest evidence contribution that can
+be made by the remaining portion of the posterior at the ith iteration ∆Zi = LmaxXi, as the guide in reducing the number of active
+points by assuming that the change in ∆Z is linear locally. We thus
+c⃝2008 RAS, MNRAS 000, 1–14
+MULTINEST: efﬁcient and robust Bayesian inference
+set the number of active points Ni at the ith iteration to be
+Ni = Ni−1 −Nmin ∆Zi−1 −∆Zi
+subject to the constraint Nmin ⩽Ni ⩽Ni−1, where Nmin is the
+minimum number of active points allowed and tol is the tolerance
+on the ﬁnal evidence used in the stopping criterion.
+Parallelization
+Even with the enlargement factor e set to unity (see Section 5.2),
+the typical sampling efﬁciency obtained for most problems in astrophysics and particle physics is around 20–30 per cent for two main
+reasons. First, the ellipsoidal approximation to the iso-likelihood
+surface at any iteration is not perfect and there may be regions of the
+parameter space lying inside the union of the ellipsoids but outside
+the true iso-likelihood surface; samples falling in such regions will
+be rejected, resulting in a sampling efﬁciency less than unity. Second, if the number of ellipsoids at any given iteration is greater than
+one, then they may overlap, resulting in some samples with L > Li
+falling inside a region shared by ne ellipsoids; such points are accepted only with probability 1/ne, which consequently lowers the
+sampling efﬁciency. Since the sampling efﬁciency is typically less
+than unity, the MULTINEST algorithm can be usefully (and easily) parallelized by, at each nested sampling iteration, drawing a
+potential replacement point on each of NCPU processors, where
+1/NCPU is an estimate of the sampling efﬁciency.
+Identiﬁcation of modes
+As discussed in FH08, for multimodal posteriors it can prove useful to identify which samples ‘belong’ to which mode. There is
+inevitably some arbitrariness in this process, since modes of the
+posterior necessarily sit on top of some general ‘background’ in
+the probability distribution. Moreover, modes lying close to one
+another in the parameter space may only ‘separate out’ at relatively high likelihood levels. Nonetheless, for well-deﬁned, ‘isolated’ modes, a reasonable estimate of the posterior mass that each
+contains (and hence the associated ‘local’ evidence) can be deﬁned,
+together with the posterior parameter constraints associated with
+each mode. To perform such a calculation, once the nested sampling algorithm has progressed to a likelihood level such that (at
+least locally) the ‘footprint’ of the mode is well-deﬁned, one needs
+to identify at each subsequent iteration those points in the active
+set belonging to that mode. The partitioning and ellipsoids construction algorithm described in Section 5.2 provides a much more
+efﬁcient and reliable method for performing this identiﬁcation, as
+compared with the methods employed in FH08.
+At the beginning of the nested sampling process, all the active
+points are assigned to one ‘group’ G1. As outlined above, at subsequent iterations, the set of N active points is partitioned into K
+subsets {Sk} and their corresponding ellipsoids {Ek} constructed.
+To perform mode identiﬁcation, at each iteration, one of the subsets
+Sk is then picked at random: its members become the ﬁrst members
+of the ‘temporary set’ T and its associated ellipsoid Ek becomes
+the ﬁrst member of the set of ellipsoids E. All the other ellipsoids
+Ek′ (k′ ̸= k) are then checked for intersection with Ek using an
+exact algorithm proposed by Alfano & Greer . Any ellipsoid
+found to intersect with Ek is itself added to E and the members of
+the corresponding subset Sk are added to T . The set E (and consequently the set T ) is then iteratively built up by adding to it any
+ellipsoid not in E that intersects with any of those already in E, until no more ellipsoids can be added. Once this is completed, if no
+more ellipsoids remain then all the points in T are (re)assigned to
+G1, a new active point is drawn from the union of the ellipsoids
+{Ek} (and also assigned to G1) and the nested sampling process
+proceeds to its next iteration.
+If, however, there remain ellipsoids {Ek} not belonging to E,
+then this indicates the presence of (at least) two isolated regions
+contained within the iso-likelihood surface. In this event, the points
+in T are (re)assigned to the group G2 and the remaining active
+points are (re)assigned to the group G3. The original group G1
+then contains only the inactive points generated up to this nested
+sampling iteration and is not modiﬁed further. The group G3 is
+then analysed in a similar manner to see if can be split further (into
+G3 and G4), and the process continued until no further splitting is
+possible. Thus, in this case, one is left with an ‘inactive’ group G1
+and a collection of ‘active’ groups G2, G3, . . . . A new active point
+is then drawn from the union of the ellipsoids {Ek}, and assigned
+to the appropriate active group, and the nested sampling process
+proceeds to its next iteration.
+At subsequent nested sampling iterations, each of the active
+groups present at that iteration is analysed in the same manner to
+see if it can be split. If so, then the active points in that group are
+(re)assigned to new active groups generated as above, and the original group becomes inactive, retaining only those of its points that
+are inactive. In order to minimize the computational cost, we take
+advantage of the fact that the ellipsoids created by Algorithm 1 can
+only get smaller in later iterations. Hence, within each active group,
+if two ellipsoids are found not to intersect at some iteration, they are
+not checked for intersection in later iterations. This makes the computational expense involved in separating out the modes negligible.
+At the end of the nested sampling process, one thus obtains
+a set of inactive groups and a set of active groups, which between
+them partition the full set of (inactive and active) sample points
+generated. It is worth noting that, as the nested sampling process
+reaches higher likelihood levels, the number of active points in any
+particular active group may dwindle to zero, but such a group is still
+considered active since it remains unsplit at the end of the nested
+sampling run. Each active groups is then promoted to a ‘mode’,
+resulting in a set of L (say) such modes {Ml}.
+As a concrete example, consider the two-dimensional illustration shown in Fig. 4, in which the solid circles denote active
+points at the nested sampling iteration i = i2, and the open circles are the inactive points at this stage. In this illustration, the ﬁrst
+group G1 remains unsplit until iteration i = i1 of the nested sampling process, at which stage it is split into G2, G3 and G4. The
+group G3 then remains unsplit until iteration i = i2, when it is
+split into G5, G6 and G7. The group G4 remains unsplit until iteration i = i2, when it is split into G8 and G9. The group G2
+remains unsplit at iteration i = i2 but the number of active points it
+contains has fallen to zero, since it is a low-lying region of the likelihood function. Thus, at the iteration i = i2, the inactive groups
+are G1, G3 and G4, and the active groups are G2, G5, G6, G7, G8
+and G6. If (say) all of the latter collection of groups were to remain
+active until the end of the nested sampling process, each would
+then be promoted to a mode according to M1 = G2, M2 = G5,
+M3 = G6, · · · , M6 = G9.
+Evaluating ‘local’ evidences
+The reliable identiﬁcation of isolated modes {Ml} allows one to
+evaluate the local evidence associated with each mode much more
+c⃝2008 RAS, MNRAS 000, 1–14
+F. Feroz, M.P. Hobson & M. Bridges
+Figure 4. Cartoon illustrating the assignment of points to groups; see text
+for details. The iso-likelihood contours L = Li1 and L = Li2 are shown
+as the dashed lines and dotted lines respectively. The solid circles denote
+active points at the nested sampling iteration i = i2, and the open circles
+are the inactive points at this stage.
+efﬁciently and robustly than the methods presented in FH08. Suppose the lth mode Ml contains the points {uj} (j = 1, · · · , nl). In
+the simplest approach, the local evidence of this mode is given by
+where (as in Eq. 8) wj = XM/N for each active point in Ml,
+and for each inactive points wj =
+2(Xi−1 −Xi+1), in which
+i is the nested sampling iteration at which the inactive point was
+discarded. In a similar manner, the posterior inferences resulting
+from the lth mode are obtained by weighting each point in Ml by
+pj = Ljwj/Zl.
+As outlined in FH08, however, there remain some problems
+with this approach for modes that are sufﬁciently close to one another in the parameter space that they are only identiﬁed as isolated regions once the algorithm has proceeded to likelihood values
+somewhat larger than the value at which the modes actually separate. The ‘local’ evidence of each mode will then be underestimated
+by Eq. 25. In such cases, this problem can be overcome by also
+making use of the points contained in the inactive groups at the end
+of the nested sampling process, as follows.
+For each mode Ml, expression Eq. 25 for the local evidence is
+replaced by
+where the additional summation over g includes all the points in the
+inactive groups, the weight wg = 1
+2(Xi−1 −Xi+1), where i is the
+nested sampling iteration in which the gth point was discarded, and
+the additional factors α(l)
+g are calculated as set out below. Similarly,
+posterior inferences from the lth mode are obtained by weighting
+each point in Ml by pj = Ljwj/Zl and each point in the inactive
+groups by pg = Lgwgα(l)
+The factors α(l)
+can be determined in a number of ways. The
+most straightforward approach is essentially to reverse the process
+illustrated in Fig. 4, as follows. Each mode Ml is simply an active
+group G that has been renamed. Moreover, one can identify the inactive group G′ that split to form G at the nested sampling iteration
+i. All points in the inactive group G′ are then assigned the factor
+where n(A)
+G (i) is the number of active points in G at nested sampling iteration i, and similarly for n(A)
+G′ (i). Now, the group G′ may
+itself have been formed when an inactive group G′′ split at an
+eariler nested sampling iteration i′ < i, in which case all the points
+in G′′ are assigned the factor
+The process is continued until the recursion terminates. Finally, all
+points in inactive groups not already assigned have α(l)
+As a concrete example, consider M2 = G5 in Fig. 4. In this
+case, the factors assigned to the members of all the inactive groups
+G1, G3 and G4 are
+It is easy to check that the general prescription (Eqs. 27 and
+28) ensures that
+i.e. the sum of the local evidences for each mode is equal to the
+global evidence. An alternative method for setting the factors α(l)
+for which Eq. 30 again holds, is to use a mixture model to analyse
+the full set of points (active and inactive) produced, as outlined in
+Appendix A.
+APPLICATIONS
+In this section we apply the MULTINEST algorithm described
+above to two toy problems to demonstrate that it indeed calculates
+the Bayesian evidence and makes posterior inferences accurately
+and efﬁciently. These toy examples are chosen to have features that
+resemble those that can occur in real inference problems in astroand particle physics.
+Toy model 1: egg-box likelihood
+We ﬁrst demonstrate the application of MULTINEST to a highly
+multimodal two-dimensional problem, for which the likelihood resembles an egg-box. The un-normalized likelihood is deﬁned as
+L(θ1, θ2) = exp
+and we assume a uniform prior U(0, 10π) for both θ1 and θ2. A plot
+of the log-likelihood is shown in Fig. 5 and the the prior ranges are
+chosen such that some of the modes are truncated. Hence, although
+only two-dimensional, this toy example is a particularly challenging problem, not only for mode identiﬁcation but also for evaluating
+the local evidence of each mode accurately. Indeed, even obtaining
+c⃝2008 RAS, MNRAS 000, 1–14
+MULTINEST: efﬁcient and robust Bayesian inference
+Figure 5. Toy model 1: (a) two-dimensional plot of the likelihood function deﬁned in Eq. 31; (b) dots denoting the points with the lowest likelihood at
+successive iterations of the MULTINEST algorithm. Different colours denote points assigned to different isolated modes as the algorithm progresses.
+posterior samples efﬁciently from such a distribution can present a
+challenge for standard Metropolis–Hastings MCMC samplers. We
+note that distributions of this sort can occur in astronomical object
+detection applications (see FH08).
+Owing to the highly multimodal nature of this problem, we
+use 2000 active points. The results obtained with MULTINEST are
+illustrated in Fig. 5, in which the dots show the points with the
+lowest likelihood at successive iterations of the nested sampling
+process, and different colours indicate points assigned to different isolated modes as the algorithm progresses. MULTINEST required ∼30, 000 likelihood evaluations and evaluated the global
+log-evidence value to be 235.86±0.06, which compares favourably
+with the log-evidence value of 235.88 obtained through numerical
+integration on a ﬁne grid. The local log-evidence values of each
+mode, calculated through numerical integration on a ﬁne grid (denoted as ‘true log(Z)’) and using MULTINEST are listed in Table 1.
+We see that there is good agreement between the two estimates.
+Toy model 2: Gaussian shells likelihood
+We now illustrate the capabilities of our MULTINEST in sampling
+from a posterior containing multiple modes with pronounced (curving) degeneracies, and extend our analysis to parameters spaces of
+high dimension.
+Our toy problem here is the same one used in FH08 and
+Allanach & Lester . The likelihood function in this model
+is deﬁned as,
+L(θ) = circ(θ; c1, r1, w1) + circ(θ; c2, r2, w2),
+circ(θ; c, r, w) =
+−(|θ −c| −r)2
+In two dimensions, this toy distribution represents two well separated rings, centred on the points c1 and c2 respectively, each of
+radius r and with a Gaussian radial proﬁle of width w (see Fig. 6).
+With a sufﬁciently small w value, this distribution is representative
+of the likelihood functions one might encounter in analysing forthcoming particle physics experiments in the context of beyond-the-
+Standard-Model paradigms; in such models the bulk of the proba-
+true local log(Z)
+MULTINEST local log(Z)
+233.20 ± 0.08
+233.10 ± 0.06
+233.48 ± 0.05
+233.43 ± 0.05
+233.65 ± 0.05
+233.27 ± 0.05
+233.14 ± 0.06
+233.81 ± 0.04
+232.65 ± 0.12
+232.43 ± 0.16
+232.11 ± 0.14
+232.44 ± 0.11
+232.68 ± 0.11
+232.84 ± 0.09
+233.02 ± 0.09
+231.65 ± 0.29
+231.49 ± 0.27
+230.46 ± 0.36
+Table 1. The local log-evidence values of each mode for the toy model 1,
+described in Section 6.1, calculated through numerical integration on a ﬁne
+grid (the ‘true log(Z)’) and using the MULTINEST algorithm.
+bility lies within thin sheets or hypersurfaces through the full parameter space.
+We investigate the above distribution up to a 30-dimensional
+parameter space Θ with MULTINEST. In all cases, the centres of
+the two rings are separated by 7 units in the parameter space, and
+we take w1 = w2 = 0.1 and r1 = r2 = 2. We make r1 and
+r2 equal, since in higher dimensions any slight difference between
+these two values would result in a vast difference between the volumes occupied by the rings and consequently the ring with the
+smaller r value would occupy a vanishingly small fraction of the
+total probability volume, making its detection almost impossible.
+It should also be noted that setting w = 0.1 means the rings have
+an extremely narrow Gaussian proﬁle and hence they represent an
+‘optimally difﬁcult’ problem for our ellipsoidal nested sampling algorithm, since many tiny ellipsoids are required to obtain a sufﬁciently accurate representation of the iso-likelihood surfaces. For
+c⃝2008 RAS, MNRAS 000, 1–14
+F. Feroz, M.P. Hobson & M. Bridges
+Likelihood
+Common Points
+Likelihood
+Figure 6. Toy model 2: (a) two-dimensional plot of the likelihood function deﬁned in Eqs. (32) and (33); (b) dots denoting the points with the lowest likelihood
+at successive iterations of the MULTINEST algorithm. Different colours denote points assigned to different isolated modes as the algorithm progresses.
+Analytical
+local log(Z)
+local log(Z1)
+local log(Z2)
+−1.72 ± 0.05
+−2.28 ± 0.08
+−2.56 ± 0.08
+−5.75 ± 0.08
+−6.34 ± 0.10
+−6.57 ± 0.11
+−14.69 ± 0.12
+−15.41 ± 0.15
+−15.36 ± 0.15
+−35.93 ± 0.19
+−37.13 ± 0.23
+−36.28 ± 0.22
+−59.94 ± 0.24
+−60.70 ± 0.30
+−60.57 ± 0.32
+Table 2. The true and estimated global and local log(Z) for toy model 2, as a function of the dimensions D of the parameter space, using MULTINEST.
+the two-dimensional case, with the parameters described above, the
+likelihood is shown in Fig. 6.
+In analysing this problem using the methods presented in
+FH08, we showed that the sampling efﬁciency dropped signiﬁcantly with increasing dimensionality, with the efﬁciency being less
+than 2 per cent in 10 dimensions, with almost 600, 000 likelihood
+evaluations required to estimate the evidence to the required accuracy. Using 1000 active points in MULTINEST,we list the evaluated
+and analytical evidence values in Table 2. The total number of likelihood evaluations and the sampling efﬁciencies are listed in Table
+3. For comparison, we also list the number of likelihood evaluations
+and the sampling efﬁciencies with the ellipsoidal nested sampling
+method proposed in FH08. One sees that MULTINEST requires an
+order of magnitude fewer likelihood evaluations than the method
+of FH08. In fact, the relative computational cost of MULTINEST is
+even less than this comparison suggests, since it no longer performs
+an eigen-analysis at each iteration, as discussed in Section 5.2. Indeed, for this toy problem discussed, the EM partitioning algorithm
+discussed in Section 5.2 was on average called only once per 1000
+iterations of the MULTINEST algorithm.
+COSMOLOGICAL PARAMETER ESTIMATION AND
+MODEL SELECTION
+Likelihood functions resembling those used in our toy models do
+occur in real inference problems in astro- and particle physics,
+such as object detection in astronomy and analysis of beyond-the-Standard-Model theories in particle physics phenomenology .
+43, 093, 230
+Table 3. The number of likelihood evaluations and sampling efﬁciency for
+the ellipsoidal nested sampling algorithm of FH08 and MULTINEST, when
+applied to toy model 2 as a function of the dimension D of the parameter
+Nonetheless, not all likelihood functions are as challenging and it
+is important to demonstrate that MULTINEST is more efﬁcient (and
+certainly no less so) than standard Metropolis–Hastings MCMC
+sampling even in more straightforward inference problems.
+An important area of inference in astrophysics is that of cosmological parameter estimation and model selection, for which the
+likelihood functions are usually quite benign, often resembling a
+single, broad multivariate Gaussian in the allowed parameter space.
+Therefore, in this section, we apply the MULTINEST algorithm to
+analyse two related extensions of the standard cosmology model:
+non-ﬂat spatial curvature and a varying equation of state of dark
+The complete set of cosmological parameters and the ranges
+of the uniform priors assumed for them are given in Table 4, where
+the parameters have their usual meanings. With Ωk = 0 and
+c⃝2008 RAS, MNRAS 000, 1–14
+MULTINEST: efﬁcient and robust Bayesian inference
+⩽log[1010As] ⩽
+Table 4. Cosmological parameters and uniform priors ranges for the vanilla
+ΛCDM model, plus spatial curvature Ωk and dark energy equation of state
+parameter w.
+w = −1 this model then represents the ‘vanilla’ ΛCDM cosmology. In addition, mirroring the recent analysis of the WMAP 5year (WMAP5) data , a Sunyaev-Zel’dovich
+amplitude is introduced, with a uniform prior in the range .
+We have chosen three basic sets of data: CMB observations alone;
+CMB plus the Hubble Space Telescope (HST) constraint on H0
+ ; and CMB plus large scale structure (LSS)
+constraints on the matter power spectrum derived from the luminous red galaxy (LRG) subset of the Sloan Digital Sky Survey and the
+two degree ﬁeld survey . In addition, for
+the dark energy analysis we include distance measures from supernovae Ia data . The CMB data comprises WMAP5 observations + higher resolution datasets from the Arcminute Cosmology Bolometer Array + the Cosmic Background
+Imager + Balloon Observations of Millimetric Extragalactic Radiation and Geophysics .
+Observations of the ﬁrst CMB acoustic peak cannot in themselves constrain the spatial curvature Ωk. This could be constrained
+using angular scale of the ﬁrst acoustic peak coupled with a knowledge of the distance to the last scattering surface, but the latter is
+a function of the entire expansion history of the universe and so
+there is a signiﬁcant degeneracy between Ωk and the Hubble parameter H(z). This dependence, often termed the ‘geometric degeneracy’, can be broken, however, since measurements at different
+redshifts can constrain a sufﬁciently different functions of Ωk and
+H. Thus, the combination of CMB data with measurements of the
+acoustic peak structure in the matter power spectrum derived from
+large scale structure surveys such as the LRG subset of Sloan can
+place much tighter constraints on curvature than with either alone
+ . The
+tightest current constraint suggests Ωk ≈10−2, whereas inﬂation lasting over 60 e-folds would produce ﬂatness at the level of
+10−5 . Thus, at present, the data is not capable of refuting or conﬁrming such an inﬂationary picture. From a
+Bayesian point of view, however, one can still assess whether the
+data currently prefers the inclusion of such a physical parameter.
+The algorithmic parameters of MULTINEST were appropriately chosen given our a priori knowledge of the uni-modal form of
+typical cosmological posteriors, the dimensionality of the problem
+and some empirical testing. The number of active points was set
+to N = 400 and a sampling efﬁciency e of 0.3 means that MPI
+parallelisation across 4 CPUs is optimal (with a further 4 openmp
+Figure 7. Breaking of the ‘geometric’ degeneracy in CMB data (blue) via
+the addition of HST (green) and large scale structure data (red).
+Dataset \ Model
+vanilla + Ωk
+vanilla + Ωk + w
+−0.29 ± 0.27
+−1.56 ± 0.27
+−2.92 ± 0.27
+−1.29 ± 0.27
+Table 5. Differences of log evidences for both models and the three datasets
+described in the text.[Negative (Positive) values represent lower (higher)
+preference for the parameterisation change]
+threads per MPI CPU used by CAMB’s multithreading facility).
+This represents a relatively modest computational investment. All
+of the inferences obtained in this section required between 40,000
+and 50,000 likelihood evaluations.
+Results: spatial curvature
+Fig. 7. illustrates the progressively tighter constraints placed on Ωk
+and H0 produced by combining CMB data with other cosmological
+probes of large scale structure. The geometric degeneracy is clearly
+unbroken with CMB data alone, but the independent constraints on
+H0 by HST are seen to tighten the constraint somewhat. Including
+LSS data, speciﬁcally the LRG data, markedly reduces the uncertainty on the curvature so that at 1-σ we can limit the curvature
+range to −0.043 ⩽Ωk ⩽0.004. The asymmetry of this constraint
+leaves a larger negative tail of Ωk resulting in a mean value that is
+only slightly closed. However, even these most stringent parameter
+constraints available, we see no statistically signiﬁcant deviation
+from a spatially ﬂat universe. The Bayesian evidence, in penalising excessive model complexity should tell us whether relaxing the
+constraint on ﬂatness is preferred by the data. Our results (Table 5)
+very clearly rule out the necessity for such an addition in anything
+other than with CMB data alone. This implies that the inclusion of
+spatial curvature is an unnecessary complication in cosmological
+model building, given the currently available data.
+Results: varying equation of state of dark energy
+The properties of the largest universal density component are still
+largely unknown, yet such a component seems crucial for the universe to be spatially ﬂat. It has thus been argued by some that it is inappropriate to assume spatial ﬂatness when attempting to vary the properties of the dark energy component beyond those of a simple cosmological constant.
+Here we allow for the variation of the dark energy equation of state
+parameter w. We will therefore proceed by placing joint constraints
+on both w and Ωk, as performed in Komatsu et al. . Once
+again we encounter a serious degeneracy, this time between Ωk
+and w. With the geometric degeneracy, combining cosmological
+observations of the universe at different redshifts was sufﬁcient to
+break the dependence, but when dark energy is dynamical we must
+use at least a third, independent data set. In this analysis, we have
+therefore included distance measures from type Ia supernovae observations . Using this combination of data
+produces impressively tight constraints on both w and Ωk; indeed
+the resulting constraints on the spatial curvature are tighter than
+those obtained in the previous section, for which w was held constant at w = −1. This is primarily due to the near orthogonality of the constraints provided by supernovae and the CMB. Once
+again we ﬁnd little evidence to support a departure from the basic
+vanilla cosmology (see Table 5). To within estimated uncertainty,
+the Bayesian evidence is at least one log unit greater for a ﬂat universe with dark energy in the form of a cosmological constant.
+Comparison of MULTINEST and MCMC ‘quick look’
+parameter constraints
+The above results are in good agreement with those found by
+Komatsu et al. using more traditional MCMC methods, and
+indicate that MULTINEST has produced reliable inferences, both
+in terms of the estimated evidence values and the derived posterior
+parameter constraints. It is often the case, however, that cosmologists wish only to obtain a broad idea of the posterior distribution
+of parameters, using short MCMC chains and hence relatively few
+likelihood evaluations. In this section, we show that the MULTI-
+NEST algorithm can also perform this task by setting the number
+of active points, N, to a smaller value.
+In order to illustrate this functionality, we analyse the
+WMAP5 CMB data-set in the context of the vanilla ΛCDM cosmology using both MULTINEST and the publicly available CosmoMC Lewis & Bridle package, which uses an MCMC
+sampler based on a tailored version of the Metropolis–Hastings
+MCMC(3200)
+MCMC(48000)
+log(1010As)
+Figure 9. 1-D marginalized posteriors for the ﬂat-ΛCDM cosmology obtained with: CosmoMC using 48,000 likelihood evaluations (solid black);
+CosmoMC using 3,200 likelihood evaluations (dotted pink); and MULTI-
+NEST using 3,100 likelihood evaluations (dashed blue).
+method. We imposed uniform priors on all the parameters. The
+prior ranges for Ωbh2, Ωcdmh2, Θ, and τ is listed in Table 4. In
+addition, ns was allowed to vary between 0.8 and 1.2, log(1010As)
+between 2.6 and 4.2 and the Sunyaev–Zel’dovich amplitude between 0 and 2.
+To facilitate later comparisons, we ﬁrst obtained an accurate determination of the posterior distribution using the traditional
+method by running CosmoMC to produce 4 long MCMC chains.
+The Gelman–Rubin statistic R returned by CosmoMC indicated
+that the chains had converged to within R ≈1.1 after about 6000
+steps per chain, resulting in ∼24,000 likelihood evaluations. To
+be certain of determining the ‘true’ posterior to high accuracy, we
+then ran the MCMC chains for a further 6,000 samples per chain,
+resulting in a total of 48,000 likelihood evaluations, at which point
+the convergence statistic was R ≈1.05.
+As stated above, however, one often wishes to obtain only a
+‘quick-and-dirty’ estimate of the posterior in the ﬁrst stages of the
+data analysis. As might be typical of such analyses, we ran CosmoMC again using 4 MCMC chains, but with only 800 steps per
+chain, resulting in a total of 3,200 likelihood evaluations. As a comparison, we also ran the MULTINEST algorithm using only 50 active points and with the sampling efﬁciency e set to unity; this required a total of 3,100 likelihood evaluations. In Fig. 9, we plot the
+1-D marginalized posteriors for derived from the two analyses, together with the results of the longer CosmoMC analysis described
+above. It is clear from these plots that both the MULTINEST and
+MCMC ‘quick-look’ results compare well with the ‘true’ posterior
+obtained from the more costly rigorous analysis.
+c⃝2008 RAS, MNRAS 000, 1–14
+MULTINEST: efﬁcient and robust Bayesian inference
+DISCUSSION AND CONCLUSIONS
+We have described a highly efﬁcient Bayesian inference tool, called
+MULTINEST, which we have now made freely available for academic purposes as a plugin that is easily incorporated into the COS-
+MOMC software. On challenging toy models that resemble real inference problems in astro- and particle physics, we have demonstrated that MULTINEST produces reliable estimates of the evidence, and its uncertainty, and accurate posterior inferences from
+distributions with multiple modes and pronounced curving degeneracies in high dimensions. We have also demonstrated in cosmological inference problems that MULTINEST produces accurate
+parameter constraints on similar time scales to standard MCMC
+methods and, with negligible extra computational effort, also yields
+very accurate Bayesian evidences for model selection. As a cosmological application we have considered two extensions of the
+basic vanilla ΛCDM cosmology: non-zero spatial curvature and a
+varying equation of state of dark energy. Both extensions are determined to be unnecessary for the modelling of existing data via the
+evidence criterion, conﬁrming that with the advent of ﬁve years of
+WMAP observations the data is still satisﬁed by a ΛCDM cosmology.
+As a guide for potential users, we conclude by noting that the
+MULTINEST algorithm is controlled by two main parameters: (i)
+the number of active points N; and (ii) the maximum efﬁciency e
+(see Section 5.2). These values can be chosen quite easily as outlined below. First, N should be large enough that, in the initial sampling from the full prior space, there is a high probability that at
+least one point lies in the ‘basin of attraction’ of each mode of the
+posterior. In later iterations, active points will then tend to populate
+these modes. It should be remembered, of course, that N must always exceed the dimensionality D of the parameter space. Also, in
+order to calculate the evidence accurately, N should be sufﬁciently
+large so that all the regions of the parameter space are sampled adequately. For parameter estimation only, one can use far fewer active
+points. For cosmological data analysis, we found 400 and 50 active
+points to be adequate for evidence evaluation and parameter estimation respectively. The parameter e controls the sampling volume
+at each iteration, which is equal to the sum of the volumes of the
+ellipsoids enclosing the active point set. For parameter estimation
+problems, e should be set to 1 to obtain maximum efﬁciency without undersampling or to a lower value if one wants to get a general
+idea of the posterior very quickly. For evidence evaluation in cosmology, we found setting e ∼0.3 ensures an accurate evidence
+ACKNOWLEDGEMENTS
+This work was carried out largely on the Cambridge High Performance Computing Cluster Darwin and the authors would like to
+thank Dr. Stuart Rankin for computational assistance. FF is supported by studentships from the Cambridge Commonwealth Trust,
+Isaac Newton and the Pakistan Higher Education Commission Fellowships. MB is supported by STFC.

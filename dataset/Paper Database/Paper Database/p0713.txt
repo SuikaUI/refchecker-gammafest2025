@@ -1,0 +1,1035 @@
+A Watermark for Large Language Models
+John Kirchenbauer * Jonas Geiping * Yuxin Wen Jonathan Katz Ian Miers Tom Goldstein
+University of Maryland
+Potential harms of large language models can be mitigated
+by watermarking model output, i.e., embedding signals into
+generated text that are invisible to humans but algorithmically detectable from a short span of tokens. We propose a
+watermarking framework for proprietary language models.
+The watermark can be embedded with negligible impact
+on text quality, and can be detected using an efficient opensource algorithm without access to the language model API
+or parameters. The watermark works by selecting a randomized set of “green” tokens before a word is generated, and
+then softly promoting use of green tokens during sampling.
+We propose a statistical test for detecting the watermark
+with interpretable p-values, and derive an informationtheoretic framework for analyzing the sensitivity of the
+watermark. We test the watermark using a multi-billion
+parameter model from the Open Pretrained Transformer
+(OPT) family, and discuss robustness and security.
+1. Introduction
+Large language models (LLMs), such as the recently developed ChatGPT, can write documents, create executable
+code, and answer questions, often with human-like capabilities . As these systems become
+more pervasive, there is increasing risk that they may be
+used for malicious purposes . These include social engineering and election
+manipulation campaigns that exploit automated bots on social media platforms, creation of fake news and web content,
+and use of AI systems for cheating on academic writing and
+coding assignments. Furthermore, the proliferation of synthetic data on the web complicates future dataset creation
+efforts, as synthetic data is often inferior to human content
+and must be detected and excluded before model training
+ . For many reasons, the ability to detect and audit the usage of machine-generated text becomes
+a key principle of harm reduction for large language models .
+*Equal contribution . Code and demo are available at
+github.com/jwkirchenbauer/lm-watermarking.
+Correspondence to: John Kirchenbauer < >.
+…The watermark detection algorithm
+can be made public, enabling third
+parties (e.g., social media
+platforms) to run it themselves, or
+it can be kept private and run behind
+an API. We seek a watermark with the
+following properties:
+No watermark
+With watermark
+- minimal marginal probability for a
+detection attempt.
+- Good speech frequency and energy
+rate reduction.
+- messages indiscernible to humans.
+- easy for humans to verify.
+Extremely efficient on average term
+lengths and word frequencies on
+synthetic, microamount text (as little
+as 25 words)
+Very small and low-resource key/hash
+(e.g., 140 bits per key is sufficient
+for 99.999999999% of the Synthetic
+Num tokens
+Figure 1. Outputs of a language model, both with and without
+the application of a watermark. The watermarked text, if written
+by a human, is expected to contain 9 “green” tokens, yet it contains 28. The probability of this happening by random chance is
+≈6×10−14, leaving us extremely certain that this text is machine
+generated. Words are marked with their respective colors. The
+model is OPT-6.7B using multinomial sampling. Watermark
+parameters are γ, δ = (0.25, 2). The prompt is the whole paragraph marked in blue below.
+In this work, we study watermarking of language
+model output. A watermark is a hidden pattern in
+text that is imperceptible to humans, while making
+the text algorithmically identifiable as synthetic. We
+propose an efficient watermark that makes synthetic
+text detectable from short spans of tokens (as few as
+25 tokens), while false-positives (where human text
+is marked as machine-generated) are statistically improbable. The watermark detection algorithm can be
+made public, enabling third parties (e.g., social media
+platforms) to run it themselves, or it can be kept private
+and run behind an API. We seek a watermark with the
+following properties:
+ 
+A Watermark for Large Language Models. Page 2 of 13.
+• The watermark can be algorithmically detected without any knowledge of the model parameters or access
+to the language model API. This property allows the
+detection algorithm to be open sourced even when the
+model is not. This also makes detection cheap and fast
+because the LLM does not need to be loaded or run.
+• Watermarked text can be generated using a standard
+language model without re-training.
+• The watermark is detectable from only a contiguous
+portion of the generated text. This way, the watermark
+remains detectable when only a slice of the generation
+is used to create a larger document.
+• The watermark cannot be removed without modifying
+a significant fraction of the generated tokens.
+• We can compute a rigorous statistical measure of confidence that the watermark has been detected.
+1.1. Notation & Language model basics
+Language models have a “vocabulary” V containing words
+or word fragments known as “tokens.”
+Typical vocabularies contain |V| = 50, 000 tokens or more . Consider a sequence of
+T tokens {s(t)} ∈VT .
+Entries with negative indices,
+s(−Np), · · · , s(−1), represent a “prompt” of length Np and
+s(0), · · · , s(T ) are tokens generated by an AI system in response to the prompt.
+A language model (LM) for next word prediction is a function f, often parameterized by a neural network, that accepts
+as input a sequence of known tokens s(−Np), · · · , s(t−1),
+which contains a prompt and the first t −1 tokens already
+produced by the language model, and then outputs a vector
+of |V | logits, one for each word in the vocabulary. These
+logits are then passed through a softmax operator to convert
+them into a discrete probability distribution over the vocabulary. The next token at position t is then sampled from this
+distribution using either standard multinomial sampling, or
+greedy sampling (greedy decoding) of the single most likely
+next token. Additionally, a procedure such as beam search
+can be employed to consider multiple possible sequences
+before selecting the one with the overall highest score.
+1.2. A caveat: The difficulty of watermarking
+low-entropy sequences
+Consider the following two sequences of tokens, with
+prompts in red:
+The quick brown fox jumps over the lazy dog
+for(i=0;i<n;i++) sum+=array[i]
+Were they produced by a human or by a language model?
+Determining this is fundamentally hard because these sequences have low entropy; the first few tokens strongly
+determine the following tokens.
+Low entropy text creates two problems for watermarking.
+First, both humans and machines provide similar if not
+identical completions for low entropy prompts, making it
+impossible to discern between them. Second, it is difficult
+to watermark low entropy text, as any changes to the choice
+of tokens may result in high perplexity, unexpected tokens
+that degrade the quality of the text. Later, we rigorously define sentence entropy, and analyze its impact on watermark
+detection.
+2. A simple proof of concept
+We start out by describing a simple “hard” red list watermark
+in Algorithm 1 that is easy to analyze, easy to detect and
+hard to remove. The simplicity of this approach comes at the
+cost of poor generation quality on low entropy sequences.
+We will discuss more sophisticated strategies later.
+Algorithm 1 Text Generation with Hard Red List
+Input: prompt, s(−Np) · · · s(−1)
+for t = 0, 1, · · · do
+Apply the language model to prior tokens
+s(−Np) · · · s(t−1) to get a probability vector p(t)
+over the vocabulary.
+Compute a hash of token s(t−1), and use it to
+seed a random number generator.
+Using this seed, randomly partition the vocabulary into a “green list” G and a “red list” R of
+equal size.
+Sample s(t) from G , never generating any token
+in the red list.
+The method works by generating a pseudo-random red list
+of tokens that are barred from appearing as s(t). The red list
+generator is seeded with the prior token s(t−1), enabling the
+red list to be reproduced later without access to the entire
+generated sequence.
+Detecting the watermark. While producing watermarked
+text requires access to the language model, detecting the
+watermark does not. A third party with knowledge of the
+hash function and random number generator can re-produce
+the red list for each token and count how many times the red
+list rule is violated. We can detect the watermark by testing
+the following null hypothesis,
+H0: The text sequence is generated with
+no knowledge of the red list rule.
+A Watermark for Large Language Models. Page 3 of 13.
+Because the red list is chosen at random, a natural writer is
+expected to violate the red list rule with half of their tokens,
+while the watermarked model produces no violations. The
+probability that a natural source produces T tokens without
+violating the red list rule is only 1/2T , which is vanishingly
+small even for short text fragments with a dozen words. This
+enables detection of the watermark (rejection of H0) for,
+e.g., a synthetic tweet.
+A more robust detection approach uses a one proportion
+z-test to evaluate the null hypothesis. If the null hypothesis
+is true, then the number of green list tokens, denoted |s|G,
+has expected value T/2 and variance T/4. The z-statistic
+for this test is
+z = 2(|s|G −T/2)/
+We reject the null hypothesis and detect the watermark if z
+is above a chosen threshold. Suppose we choose to reject
+the null hypothesis if z > 4. In this case, the probability of
+a false positive is 3 × 10−5, which is the one-sided p-value
+corresponding to z > 4. At the same time, we will detect
+any watermarked sequence with 16 or more tokens (the
+minimum value of T that produces z = 4 when |s|G=T).
+How hard is it to remove the watermark?
+The use of
+the one proportion z-test makes removal of the watermark
+difficult. Consider the case of a watermarked sequence
+of length T = 1000. Suppose an adversary modifies 200
+tokens in the sequence to add red list words and scrub the
+watermark. A modified token at position t can violate the
+red list rule at position t. Furthermore, the value of st
+determines the red list for token st+1, and a maximally
+adversarial choice of st will put st+1 in violation of the red
+list rule as well. For this reason, 200 token flips can create
+at most 400 violations of the red list rule. Unfortunately
+for the attacker, this maximally adversarial sequence with
+600 remaining green list tokens still produces a z-statistic of
+2(600−1000/2)/
+1000 ≈6.3, and a p-value of ≈10−10,
+leaving the watermark readily detectable with extremely
+high confidence. In general, removing the watermark of a
+long sequence requires modifying roughly one quarter of
+the tokens or more.
+Note the analysis above assumes the attacker has complete
+knowledge of the watermark, and each selected token is
+maximally adversarial (which likely has a negative impact
+on quality). Without knowledge of the watermark algorithm,
+each flipped token has only a 50% chance of being in the
+red list, as does the adjacent token. In this case, the attacker
+above only creates 200 red list words (in expectation) by
+modifying 200 tokens. Methods for keeping the watermark
+algorithm secret but available via API are discussed in
+Section 5.
+Drawbacks of the hard red list rule. The hard red list rule
+handles low entropy sequences in a simple way; it prevents
+the language model from producing them. For example,
+the token “Barack” is almost deterministically followed
+by “Obama” in many text datasets, yet “Obama” may be
+disallowed by the red list.
+A better behavior is to use a “soft” watermarking rule that
+is only active for high-entropy text that can be imperceptibly watermarked. As long as low-entropy sequences are
+wrapped inside a passage with enough total entropy, the
+passage will still easily trigger a watermark detector, solving the problem described in Section 1.2. Further, one can
+combine the watermark with a beam search decoder that
+“irons-in” the watermark. By searching the hypothesis space
+of likely token sequences, candidates sequences with a high
+density of tokens in the green list are found, resulting in a
+high strength watermark with minimal perplexity cost.
+3. A more sophisticated watermark
+We now discuss the “soft” watermark that promotes the
+use of the green list for high entropy tokens when many
+good choices are available, while having little impact on the
+choice of low-entropy tokens that are nearly deterministic.
+To derive this watermark, we examine what happens in the
+language model just before it produces a probability vector.
+The last layer of the language model outputs a vector of
+logits l(t). These logits get converted into a probability
+vector p(t) using the softmax operator
+= exp(l(t)
+Rather than strictly prohibiting the red list tokens, Algorithm
+2 adds a constant δ to the logits of the green list tokens.
+The soft red list rule adaptively enforces the watermark in
+situations where doing so will have little impact on quality,
+while almost ignoring the watermark rule in the low entropy
+case where there is a clear and unique choice of the “best”
+word. A highly likely word with p(t)
+≈1 has a much larger
+logit than other candidates, and this will remain the largest
+regardless of whether it is in the red list. But when the
+entropy is high, there are many comparably large logits
+to choose from, and the δ rule has a large impact on the
+sampling distribution, strongly biasing the output towards
+the green list.
+3.1. Detecting the soft watermark
+The process for detecting the soft watermark is identical to
+that for the hard watermark. We assume the null hypothesis
+(1) and compute a z-statistic using Equation (2). We reject
+the null hypothesis and detect the watermark if z is greater
+than a threshold. For arbitrary γ we have
+z = (|s|G −γT)/
+A Watermark for Large Language Models. Page 4 of 13.
+Algorithm 2 Text Generation with Soft Red List
+Input: prompt, s(−Np) · · · s(−1)
+green list size, γ ∈(0, 1)
+hardness parameter, δ > 0
+for t = 0, 1, · · · do
+Apply the language model to prior tokens
+s(−Np) · · · s(t−1) to get a logit vector l(t) over
+the vocabulary.
+Compute a hash of token s(t−1), and use it to
+seed a random number generator.
+Using this random number generator, randomly
+partition the vocabulary into a “green list” G of
+size γ|V |, and a “red list” R of size (1 −γ)|V |.
+Add δ to each green list logit. Apply the softmax operator to these modified logits to get a
+probability distribution over the vocabulary.
+i∈R exp(l(t)
+i∈G exp(l(t)
+i∈R exp(l(t)
+i∈G exp(l(t)
+Sample the next token, s(t), using the watermarked distribution ˆp(t).
+Consider again the case in which we detect the watermark
+for z > 4. Just like in the case of the hard watermark, we
+get false positives with rate 3 × 10−5. In the case of the
+hard watermark, we could detect any watermarked sequence
+of length 16 tokens or more, regardless of the properties
+of the text. However, in the case of the soft watermark our
+ability to detect synthetic text depends on the entropy of
+the sequence. High entropy sequences are detected with
+relatively few tokens, while low entropy sequences require
+more tokens for detection. Below, we rigorously analyze
+the detection sensitivity of the soft watermark, and its
+dependence on entropy.
+4. Analysis of the soft watermark
+In this section, we examine the expected number of green list
+tokens used by a watermarked language model and analyze
+the dependence of this quantity on the entropy of a generated
+text fragment. Our analysis assumes the red list is sampled
+uniformly at random. This is a deviation from the method
+used in practice, which generates red lists using a pseudorandom number generator seeded with previous tokens. The
+consequences of pseudo-random sampling are explored in
+Section 5. We analyze the case in which text is generated
+by multinomial random sampling. In our experiments, we
+consider two more sampling schemes, greedy decoding and
+beam search.
+We need a definition of entropy that is appropriate for our
+analysis. The strength of our watermark is weak when the
+distribution over tokens has a large “spike” concentrated
+on one or several tokens. We define the following type of
+entropy to quantify this phenomenon.
+Definition 4.1. Given a discrete probability vector p and a
+scalar z, we define the spike entropy of p with modulus z as
+Like the classical Shannon entropy, the spike entropy is
+a measure of how spread out a distribution is; The spike
+entropy assumes its minimal value of
+1+z when the entire mass of p is concentrated at a single location, and its
+maximal value of
+N+z when the mass of p is uniformly
+distributed. For large z, the value of
+1+zpk ≈1/z when
+pk > 1/z and ≈0 for pk < 1/z. For this reason, one can
+interpret the spike entropy as a softened measure of the
+number of entries in p greater than 1/z.
+The following theorem predicts the number of green list
+tokens that appear in a sequence with the watermark.
+Theorem 4.2. Consider watermarked text sequences of T
+tokens. Each sequence is produced by sequentially sampling a raw probability vector p(t) from the language model,
+sampling a random green list of size γN, and boosting the
+green list logits by δ using Equation 4 before sampling each
+token. Define α = exp(δ), and let |s|G denote the number
+of green list tokens in sequence s.
+If a randomly generated watermarked sequence has average
+spike entropy at least S⋆, i.e.,
+p(t), (1 −γ)(α −1)
+1 + (α −1)γ
+then the number of green list tokens in the sequence has
+expected value at least
+1 + (α −1)γ S⋆,
+Furthermore, the number of green list tokens has variance
+Var |s|G ≤T
+1 + (α −1)γ
+1 + (α −1)γ
+If we have chosen γ ≥.5, then we can use the strictly looser
+but simpler bound
+Var |s|G ≤Tγ(1 −γ).
+A Watermark for Large Language Models. Page 5 of 13.
+Remark. It may seem like there are a lot of messy constants
+floating around in this bound. However, when we choose
+2 and δ = ln(2) ≈0.7, this bound simplifies to
+3TS⋆, Var |s|G ≤2
+where S⋆is a bound on spike entropy with modulus 1/3. If
+we study the “hard” red list rules by choosing γ = 1
+letting δ →∞, we have
+E |s|G ≥TS⋆, Var |s|G ≤TS⋆(1 −S⋆)
+where S⋆is a bound on spike entropy with modulus 1.
+4.1. Sensitivity of the watermark test
+The sensitivity of the soft watermark can be computed using
+standard type-II error analysis. For illustrative purposes,
+we estimate the type-II (false negative) error rate of a soft
+watermark with γ = .5 and δ = 2. We assume 200 tokens
+are generated using OPT-1.3B using
+prompts from the C4 dataset’s RealNewsLike subset . We also assume a detection threshold of z = 4
+(which occurs at ∼128.2/100 tokens) which gives us a
+type-I error (false positive) rate of 3 × 10−5.
+Theoretical bound. Our generations have an average spike
+entropy per sample of S = 0.807 over ∼500 generations.
+Theorem 4.2 says that the expected number of green list
+tokens per generation is at least 142.2. Indeed, the empirical average is 159.5. For sequences with entropy equal to
+the mean (S = 0.807) we get σ ≤6.41 tokens, and 98.6%
+sensitivity (1.4% type-II error rate), using a standard Gaussian approximation for the green list count. Note, this is a
+lower bound on the sensitivity for this particular entropy.
+If we use the true empirical mean of 159.5 rather than the
+theoretical bound, we get a 5.3 × 10−7 type-II error rate, a
+realistic approximation but not a rigorous lower bound.
+Empirical sensitivity. Empirically, 98.4% of generations
+are detected at the z = 4 (128 token) threshold when multinomial sampling is used. When 4-way beam search over a
+greedy decoding is used, we get 99.6% empirical sensitivity.
+Unlike the theoretical bounds, these are computed over all
+generations, which have the same length but vary in their
+individual entropies. Here, the primary source of type-II
+errors is low entropy sequences, as calculations above show
+that we expect a very low error rate when the entropy lies
+near the mean. To validate this, we examine the subset of
+375/500 generations that have spike entropy above the 25th
+percentile, of which we detect 100% of generations at the
+z = 4 threshold.
+What do failure cases look like? We display typical success and failure cases for the watermark in Table 1. We
+observe that low-entropy (undetectable) sequences typically
+involve data memorization; the model regurgitates a copy
+(or near copy) of human-written text which is therefore not
+detectable as machine-written. A detailed exploration of
+model accuracy is presented in Section 6, with more generation examples provided in Appendix A.1.
+Evaluating Repetitive Text. A subtlety of the proposed
+approach is that tokens in the green list are only pseudorandom, and n-grams of text that are repeated will always
+be scored in the same manner. Assume a 2-gram, such as
+“Barack Obama” happens to green-list “Obama”. Repetitive
+usage of this 2-gram would result in a higher than expected
+number of green tokens. In a worst-case scenario, humangenerated text with a high number of repetitions of this
+2-gram may be erroneously flagged as machine-generated.
+Two remedies are possible: The first is to simply increase
+the length h of the PRNG function, thereby increasing the
+variability of the green-listed words, as larger (h+1)-grams
+are much less likely to be repeated.
+A better remedy
+(possibly used in conjunction with the first) is not to count
+repeated n-grams when checking for the watermark. In
+the example above, the 2-gram “Barack Obama” would
+be counted on its first occurrence, and then subsequently
+ignored when it appears again; it is counted as neither green
+nor red, and the token counter T is not incremented.
+In addition to preventing false positives, skipping repeated
+n-grams can also make the detector more sensitive. A repeated n-gram is likely to be low-entropy, and so it will not
+contribute to the strength of the watermark. By excluding
+these from the count, we keep the green list fraction high
+and maintain high sensitivity.
+4.2. Impact on quality of generated text
+A soft watermark has very little impact on the perplexity of
+tokens with extremely high or low entropy. When the distribution produced by the language model is uniform (maximal
+entropy), the randomness of the green list results in tokens
+being uniformly sampled, and the perplexity remains untouched. Conversely, in the case of minimal entropy, where
+all probability mass is concentrated on a single token, the
+soft watermark rule has no effect and there is once again no
+impact on perplexity.
+The watermark rule does impact perplexity for tokens of
+moderate entropy. In this case, we can provide the following
+simple bound that holds uniformly over all entropy values.
+Theorem 4.3. Consider a sequence s(i), −Np < i < T.
+Suppose the (non-watermarked) language model produces
+a probability vector p(T ) for the token at position T. The
+watermarked model predicts the token at position T using
+modified probability vector ˆp(T ). The expected perplexity of
+the Tth token with respect to the randomness of the red list
+A Watermark for Large Language Models. Page 6 of 13.
+real completion
+no watermark (NW)
+watermarked (W)
+...tled out of court and publicly
+reconciled.\nIn the ’80s the band’s
+popularity waned in the United
+States but remained strong abroad.
+Robin released three solo albums,
+with limited success. The Bee Gees
+returned with some moderate hits
+in the late 1990s and were inducted
+into the Rock and Roll Hall of
+Fame in 1997. With his brothers,
+Mr. Gibb won six Grammys.\nIn
+addition to his wife and his brother
+[...continues]
+continued to tour, and Barry became
+a television producer.\nBut in the
+early ’90s, the Bee Gees’ popularity
+remained high. They scored a
+hit with “Don’t Stop Believing”
+in 1990, and in 1992 the Bee
+Ge[...continues]
+’ 1990 album, “Spirits of the
+Century,” was a mixed critical and
+commercial success.\nWhen the
+brothers were nominated for a
+Grammy Award in 1990, Mr. Gibb’s
+“You Should Be Dancing” and
+“Massachusetts,[...continues]
+... logged into their Google account
+and have verified profiles that match
+queries for the site.\nGoogle’s John
+Mueller said there is no ranking
+benefit in using different Google
+Search Console and Google
+Analytics accounts for each individual web site you manage. The
+topic came up before, as long as
+you are not spamming Google there also is no down side to using
+the same accounts across multiple
+we[...continues]
+Analytics data to calculate ranking
+sentiment.\nGoogle have a new
+feature called Keyword Difficulty
+Analysis that shows you the
+keywords your competitors are
+ranking for. It shows the demand
+curve as [...continues]
++ accounts to see different numbers.\nGoogle also released
+their own great blog post on the
+news algorithm. They give lots
+of great advice to help your site
+do better.\nFinally, at the end of
+September [...continues]
+...1 on the season with a 2.76 GAA
+and.906 save percentage.\nMar. 11
+5:28 PM PT6:28 PM MT7:28 PM
+CT8:28 PM ET0:28 GMT8:28 5:28
+PM MST6:28 PM CST7:28 PM
+EST4:28 UAE (+1)20:28 ET21:28
+BRT - Sergei Bobrovsky
+stopped 18 of 19 shots in the Blue
+Jackets’ 2-0 loss to the Islanders
+on Monday. The defeat dropped
+him to 29-22-1 on the season
+with a 2.74 GAA and.907 save
+percentage.\nMar. 9 5:41 PM
+PT6:41 PM MT7:[...continues]
+stopped 28 of 30 shots in the Blue
+Jackets’ 3-2 shootout loss to the
+Islanders on Sunday. The loss
+dropped him to 30-22-1 on the
+season with a 2.76 GAA and.906
+save percentage.\nMar. 10 6:15 PM
+PT7:15[...continues]
+stopped 30 of 34 shots in the Blue
+Jackets’ 6-2 win over the Canadiens
+on Monday. The victory pushed
+him to 31-21-1 on the season
+with a 2.72 GAA and.908 save
+percentage.\nMar. 10 11:49 AM
+PT12:49 PM [...continues]
+...cond season at Hall Bros
+Oval.\nThe defender also admitted his surprise at Young’s run to
+the finals but credited the injection
+of youth into the side.\n“We were
+really in a building phase last year
+we copped a few floggings with
+all those juniors blokes coming
+in,” Galvin said.\n“Now, we’ve
+kept that core group together
+for two years and I think we’ve
+come along quicker than we
+anticipated.\nROCK[...continues]
+we copped a few floggings with
+all those juniors blokes coming
+in,” Galvin said.\n“Now, we’ve
+kept that core group together
+for two years and I think we’ve
+come along quicker than we
+anticipated.\n“Tha[...continues]
+we copped a few floggings with
+all those juniors blokes coming
+in,” Galvin said.\n“Now, we’ve
+kept that core group together
+for two years and I think we’ve
+come along quicker than we
+anticipated.\n“Tha[...continues]
+Table 1. Selected outputs from non-watermarked (NW) and watermarked (W) multinomial sampling using γ = 0.5 and δ = 2.0. The
+examples in the first two rows have high entropy and correspondingly high z-scores, without any perceptible degradation in output
+quality. The two lower rows are failure cases where the watermark is too weak to be detected – they have low entropy and corresponding low z-scores. Anecdotally, failure cases typically seem to involve data memorization in which the model regurgitates a near-copy
+of human text. Note the output similarity between the generated and “real” human text in the bottom two rows. Memorization leads
+to large, high confidence logit values that constrain the outputs. Another common factor in failure cases is templated outputs (see the
+date/time formatting in row 3) that constrain model choices.
+partition is
+) ≤(1 + (α −1)γ)P ∗,
+where P ∗= P
+) is the perplexity of the
+original model.
+5. Private Watermarking
+The watermark algorithms above are designed to be public. A watermark can also be operated in private mode, in
+which the algorithm uses a random key that is kept secret and
+hosted behind a secure API. If the attacker has no knowledge
+of the key used to produce the red list, it becomes more difficult for the attacker to remove the watermark as the attacker
+does not know which tokens are in the red list. However,
+testing for the presence of the watermark now requires using
+the same secure API and, if this API is public, access needs
+to be monitored to prevent an adversary from making too
+many queries using minor variants of the same sequence.
+Let F be a pseudorandom function (PRF) that, for simplicity,
+we view as accepting arbitrary length inputs and producing
+output as long as needed. F could be a standard block cipher
+like AES or a cryptographic hash function like SHA3. To
+create a private watermark, we first choose a random key
+K; a private red list for token s(t) can then be generated in
+a manner similar to what was described earlier, but now by
+first computing FK(s(t−h), · · · , s(t−1)), a pseudorandom
+function evaluated on the prior h tokens.
+An attacker can discover the watermarking rules by observing occurrences of token tuples in generated text and
+tabulating the frequencies of the immediately subsequent
+tokens, even if the underlying key is unknown. To tabulate
+every red list in such a brute-force attack, |V|1+h tokens
+need to be submitted to the detection API. When h = 1,
+the red lists produced by many tokens could be discovered
+(at least partially) with conceivable effort. This brute-force
+method is ineffective for h ≫1, as there is now a unique
+red list for each ordered combination of words. At the same
+time, large values of h decrease watermark robustness when
+a naive method is used. When, say, h = 5 consecutive
+tokens are used to produce a red list, an adversarial change
+to just one of those tokens randomizes the red list for 5
+different downstream tokens, increasing the number of red
+list words by 2.5 (in expectation) if γ = .5. We call this
+downstream impact attack amplification. To limit amplification, we suggest using a small window (h = 2 or 3) when
+using the naive watermarking rule.
+A Watermark for Large Language Models. Page 7 of 13.
+Algorithm 3 Robust Private Watermarking
+Input: prompt s(−Np) · · · s(−1)
+PRF F with key K
+hardness parameter δ > 0
+window width h > 0
+for t = 0, 1, · · · do
+Apply the language model to s(−Np) · · · s(t−1)
+to get a logit vector l(t) over the vocabulary.
+Sort the vocabulary so l(t) is in descending order. Set k = 0, the index of the most likely
+Temporarily set s(t) to be the kth token in the
+vocabulary. Compute
+Hi = FK(s(t), s(t−i)) for 1 ≤i ≤h.
+Set i⋆= arg mini>0 Hi.
+Using Hi⋆as a seed, produce a random bit to
+decide if token k is on the green or red list.
+if green list is chosen then
+keep s(t) and continue.
+else if red list is chosen, and l(t)
+k+1 < l(t)
+choose s(t) to be the most likely (k = 0) token,
+which is in the red list, and continue.
+set k ←k + 1, goto to step 3.
+When a wider window h is desired, more complex, robust
+watermarking rules can achieve security against brute-force
+attacks without attack amplification. We describe such a rule
+in Algorithm 3. Here, the red list for s(t) depends on itself,
+and additionally on one prior token s(t−i⋆) chosen using a
+pseudo-random rule. To satisfy this self-hash condition, we
+iteratively test different tokens as s(t), from highest logit to
+least logit, until the red list rule is satisfied. If, during this
+search, the logit of the test token falls by more than δ, we
+give up and accept the token in the red list with largest logit.
+Algorithm 3 has several nice security properties. When one
+of the prior h tokens is changed, the watermark at position
+t changes with probability only 1/h. As such, this rule is
+free of attack amplification; in expectation, a change to a
+token results in one additional red list token.1 Like the naive
+method with h = 2, there are |V|2 unique red lists, but now
+the choice of the index i⋆depends on combinations of s(t)
+and all h tokens before it, which hides the choice of tokens
+1When γ = .5, the flipped token is in the red list 1/2 of
+the time, and one of the h downstream red lists is expected to
+randomize, resulting in another 1/2 red list token.
+used as input to F. For simplicity, Algorithm 3 is presented
+as a greedy sampler, but can be easily extended to handle
+multinomial sampling or beam search.
+Boosting Watermark Privacy with Multiple Keys. A
+straightforward add-on to significantly boost the difficulty
+of brute-forcing a hidden watermark scheme is to have k >
+1 different hidden keys, and to randomly choose one for
+each generation. At detection time, we run k tests, one for
+each of the possible keys. This comes at the cost of only a
+minor decrease in power, as we need to correct for multiple
+hypotheses, for example via Bonferroni correction. When
+γ = .5 (half the vocabulary is colored green), lists should
+further be constructed so that each word is green for k/2 of
+the keys and red for the other k/2. In this way, the lists can
+no longer be discovered by brute forced frequency analysis,
+as there is no observable bias when averaging over a large
+number of separately generated strings.
+6. Experiments
+In this section we explore the behavior of the watermark using the OPT-1.3B model . We measure
+watermark strength using the rate of type-I errors (human
+text falsely flagged as watermarked) and type-II errors (watermarked text not detected).
+We implement the proposed watermark using the Pytorch
+backend of the Huggingface library .
+The generate API provides useful abstractions, including modules for warping the logit distribution that comes
+out of the language model. We generate red lists using the
+torch random number generator and one previous token as
+described in Section 3.
+Datasets and Prompts. To simulate a variety of realistic
+language modeling scenarios we slice and dice a random
+selection of texts from the news-like subset of the C4 dataset
+ . For each random string, we trim a
+fixed length of tokens from the end and treat them as a
+“baseline” completion. The remaining tokens are a prompt.
+For the experimental runs using multinomial sampling, we
+pull examples from the dataset until we achieve at least 500
+of generations with length T = 200 ± 5 tokens. In the runs
+using greedy and beam search decoding, we suppress the
+EOS token during generation to combat the tendency of
+beam search to generate short sequences. We then truncate
+all sequences to T = 200. A larger oracle language model
+(OPT-2.7B) is used to compute perplexity (PPL) for the
+generated completions and for the human baseline.
+Watermark Strength vs Text Quality. One can achieve
+a very strong watermark for short sequences by choosing
+a small green list size γ and a large green list bias δ. However, creating a stronger watermark may distort generated
+text. Figure 2 (left) shows the tradeoff between watermark
+A Watermark for Large Language Models. Page 8 of 13.
+Oracle Model PPL (better →)
+z-score (better →)
+Oracle Model PPL (better →)
+z-score (better →)
+Figure 2. The tradeoff between average z-score and language model perplexity for T = 200 ± 5 tokens. (left) Multinomial sampling.
+(right) Greedy and beam search with 4 and 8 beams for γ = .5. Beam search promotes higher green list usage and thus larger z-scores
+with smaller impact to model quality (perplexity, PPL).
+δ : 5.0, γ : 0.1
+δ : 5.0, γ : 0.25
+δ : 5.0, γ : 0.5
+δ : 5.0, γ : 0.75
+δ : 5.0, γ : 0.9
+δ : 10.0, γ : 0.25
+δ : 5.0, γ : 0.25
+δ : 2.0, γ : 0.25
+δ : 1.0, γ : 0.25
+δ : 0.5, γ : 0.25
+δ : 10.0, γ : 0.25
+δ : 5.0, γ : 0.25
+δ : 2.0, γ : 0.25
+δ : 1.0, γ : 0.25
+δ : 0.5, γ : 0.25
+Figure 3. The average z-score as a function of T the token length of the generated text. (a) The dependence of the z-score on the green
+list size parameter γ, under multinomial sampling. (b) The effect of δ on z-score, under multinomial sampling. (c) The impact of the
+green list size parameter γ on the z-score, but with greedy decoding using 8-way beam search.
+strength (z-score) and text quality (perplexity) for various
+combinations of watermarking parameters. We compute
+results using 500 ± 10 sequences of length T = 200 ± 5
+tokens for each parameter choice. Interestingly, we see that
+a small green list, γ = .1 is pareto-optimal.
+In addition to these quantitative results, we show examples of real prompts and watermarked outputs in Table 1 to
+provide a qualitative sense for the behavior of the test statistic and quality measurement on different kinds of prompts.
+Additional examples are compiled in Appendix A.1.
+Ironing in the Watermark with Beam Search. Figure 2
+(right) shows the tradeoff between watermark strength and
+accuracy when beam search is used. Beam search has a
+synergistic interaction with the soft watermarking rule. Particularly when 8 beams are used, the points in Figure 2 form
+an almost vertical line, showing very little perplexity cost to
+achieve strong watermarking.
+Watermark Strength vs Number of Tokens. Theory predicts that the type I and type II error rates of the watermark
+should decay to zero as the sequence length T increases.
+Figure 3 shows the strength of the watermark, measured
+using the average z-score over samples, as T sweeps from 2
+to 200. Curves are shown for various values of δ and γ. The
+left two charts use multinomial sampling, while the right
+chart uses 8-way beam search and γ = .25. Once again, we
+see the power of the beam search in achieving high green
+list ratios; even for the moderate bias of δ = 2, an average
+z-score greater than 5 is achieved for as few as 35 tokens.
+Performance and Sensitivity for Multinomial Sampling.
+To show the sensitivity of the resulting hypothesis test based
+on the observed z-scores, we provide a table of error rate for
+various watermarking parameters in Table 2. We also sweep
+a range of thresholds in ROC charts in Figure 4. We further
+report detection performance and error rates for various
+cutoffs in Appendix C, and provide a comparison between
+empirical z-scores and theoretical predictions. Note that
+no type-I (false positive) errors were observed for any run
+A Watermark for Large Language Models. Page 9 of 13.
+False Positive Rate
+True Positive Rate
+False Positive Rate
+True Positive Rate
+False Positive Rate
+True Positive Rate
+δ : 10.0, γ : 0.5, AUC:1.000, PPL:11.6
+δ : 10.0, γ : 0.25, AUC:1.000, PPL:12.4
+δ : 5.0, γ : 0.5, AUC:1.000, PPL:9.1
+δ : 5.0, γ : 0.25, AUC:1.000, PPL:10.7
+δ : 2.0, γ : 0.5, AUC:0.998, PPL:6.2
+δ : 2.0, γ : 0.25, AUC:0.998, PPL:6.6
+δ : 1.0, γ : 0.5, AUC:0.985, PPL:5.4
+δ : 1.0, γ : 0.25, AUC:0.989, PPL:5.5
+δ = 0, PPL: 5.1
+False Positive Rate
+True Positive Rate
+δ : 10.0, γ : 0.5, AUC:1.000, PPL:1.2
+δ : 10.0, γ : 0.25, AUC:1.000, PPL:1.2
+δ : 5.0, γ : 0.5, AUC:1.000, PPL:1.2
+δ : 5.0, γ : 0.25, AUC:1.000, PPL:1.3
+δ : 2.0, γ : 0.5, AUC:0.999, PPL:1.2
+δ : 2.0, γ : 0.25, AUC:1.000, PPL:1.3
+δ : 1.0, γ : 0.5, AUC:0.987, PPL:1.2
+δ : 1.0, γ : 0.25, AUC:0.977, PPL:1.2
+δ = 0, PPL: 1.2
+Figure 4. ROC curves with AUC values for watermark detection. Several choices of watermark parameter δ are shown for (a) multinomial sampling and (b) greedy decoding with 8-way beam search. (c,d) The same charts with semilog axes. Higher δ values achieve
+stronger performance, but additionally we see that for a given δ, the beam search allows the watermark to capture slightly more AUC
+than the corresponding parameters under the multinomial sampling scheme.
+Table 2. Empirical error rates for watermark detection using multinomial sampling and beam search. Each row is averaged over ∼500
+generated sequences of length T = 200 ± 5. A maximum of one type-I (false positive) error was observed for any given run. All soft
+watermarks at δ = 2.0 incur at most 1.6% (8/500) type-II error at z = 4. No type-II errors occurred for the hardest watermarks with
+δ = 10.0 and γ = 0.25.
+shown in the error tables shown on the chatGPT web API on Dec15th 2022. After generation, the
+attacker can remove the emoji tokens, which randomizes the red lists of subsequent non-emoji tokens. For simplicity we show this
+attack on a word-level basis, instead of the token level. Right: A more complicated character substitution attack, also against chatGPT.
+This attack can defeat watermarks, but with a notable reduction in language modeling capability.
+A more scalable version of this attack is to use automated
+paraphrasing. An attacker that has access to a public language model can use this model to rephrase the output of the
+generated model. We provide an experimental evaluation
+of this attack in Section 7.1. Here, it is crucial to note the
+trade-off that an attacker is making: The attacker is using
+a weaker paraphrasing model to modify the text, reducing
+both watermark strength and text fluency. If the attacker
+had an equally strong language model at hand, there would
+be no need to use the watermarked API, the attacker could
+generate their own text.
+Discreet Alterations. An attacker could make small alterations, adding additional whitespaces, or misspelling a
+few words to impact the computation of the hash. A wellconstructed watermark should normalize text to ignore explicit whitespaces when computing the hash. Changing the
+spelling of many words is likely to severely degrade the
+quality of text. When implemented carefully, surface level
+alterations should not pose a serious threat to a watermark.
+Tokenization Attacks..
+An attacker can modify text
+so that sub-word tokenization of a subsequent word
+For example (again with BPE), if the text
+life.\nVerrilius is modified to
+Verrilius (i.e. \n is replaced), then the tokenization of
+the succeeding word also switches from V err ili us to
+Ver r ili us. This results in more red list tokens than
+one would expect from a single insertion. The attack can
+contribute to the effectiveness of a more powerful attack,
+but most tokens in a default sentence will not be vulnerable.
+Homoglyph and Zero-Width Attacks. This is a special
+case of the discreet alteration attack. The effect of tokenization attacks can be multiplied through homoglyph attacks
+ . Homoglyphs attacks
+are based on the fact that unicode characters are not unique,
+with multiple unicode IDs resolving to the same (or a very
+similar-looking) letter. This breaks tokenization, for example the word Lighthouse (two tokens) expands to 9
+different tokens if i and s are replaced with their equivalent
+Cyrillic unicode characters. Security against Homoglyph
+and tokenization attacks can be maintained using input normalization before the text is tested for watermarks, for example via canonicalization as in Helfrich & Neff . Otherwise, simple replacements of characters with their homoglyphs could break enough tokens to remove the watermark.
+Likewise, there are zero-width joiner/non-joiner unicode
+characters that encode zero-width whitespace and hence are
+effectively invisible in most languages. Like homoglyphs,
+these characters must be removed through canonicalization
+ .
+Generative Attacks. Generative attacks abuse the capability of large language models for in-context learning, and
+prompt the model to change its output in a predictable and
+easily reversible way. For example, the Emoji attack of
+Goodside proceeds by prompting the model to generate an emoji after every token, see Figure 5, left. These
+emojis can be removed, randomizing the red list for subsequent tokens. More broadly, all attacks that prompt the
+model to change its output “language” in a predictable way
+can potentially cause this, for example prompting the model
+to replace all letters a with e, see Figure 5, right. Or, as a
+reverse homoglyph attack, prompting the model to “switch
+the letter i with i”, where the second i is a Cyrillic letter.
+A Watermark for Large Language Models. Page 11 of 13.
+False Positive Rate
+True Positive Rate
+unattacked, AUC:0.998, PPL:6.3
+ϵ = 0.1, AUC:0.988, PPL:13.1
+ϵ = 0.3, AUC:0.954, PPL:21.2
+ϵ = 0.5, AUC:0.838, PPL:28.4
+ϵ = 0.7, AUC:0.696, PPL:33.9
+Figure 6. ROC curves for watermark detection under attack via
+the T5 Attack detailed in Section 7.1, with various replacement
+budgets ε. The initial, unattacked watermark is a γ = 0.5, δ =
+2.0 soft watermark generated using multinomial sampling. The
+attack achieves a high level of watermark degradation, but only
+at ε = 0.3, which costs the attacker an average of ∼15 points of
+perplexity compared the PPL of the original watermarked text.
+These attacks are the strongest tools against watermarking
+to our knowledge, but also require a strong LM with the
+capacity to follow the prompted rule without a loss in output
+quality. Additionally, this increases the cost of text generation by requiring more tokens than usual to be generated
+and reducing effective context width.
+A defense against these attacks is to include negative
+examples of such prompts during finetuning, training
+the model to reject these requests. Note that instruction
+finetuning is already common (for example in ChatGPT) for
+other categories of malicious prompts, using reinforcement
+learning protocols (RLHF) .
+7.1. Degradation Under Attack: Span Replacement
+Using a LM
+We study a realistic black-box attack by attempting to remove the presence of the watermark by replacing spans in
+the original output text using another language model. We
+treat the watermark algorithm as if it is private, mocking
+seclusion behind an API. The attacker does not have access
+to the locations of green list tokens and instead tries to modify the text through token replacement at random indices
+until a certain word replacement budget, ε, is reached. The
+budget constraint maintains a level semantic similarity between the original watermarked text and the attacked text,
+otherwise the “utility” of the original text for its intended
+task may be lost. Also, each span replacement in the attack
+is performed via inference using a multi-million parameter
+language model. While this is roughly a third the size of the
+target model, it means that the attack incurs an associated
+cost per step implying that a base level of efficiency with
+respect to model calls would be desired in practice.
+In our experiment, we adopt T5-Large 
+as the replacement model and iteratively select and replace
+tokens until the attacker either reaches the budget, or no
+more suitable replacement candidates are returned.
+Details of the T5 Span Attack. We tokenize the watermarked text using the T5 tokenizer. Then, while fewer
+than εT successful replacements have been performed or a
+maximal iteration count is reached:
+1. Randomly replace one word from the tokenization with
+2. Pass the region of text surrounding the mask token
+to T5 to obtain a list of k = 20 candidate replacement token sequences via a 50-way beam search, with
+associated scores corresponding to their likelihood.
+3. Each candidate is decoded into a string. If one of the
+k candidates returned by the model is not equal to the
+original string corresponding to the masked span, then
+the attack succeeds, and the span is replaced with the
+After attacking a set of 500 sequences of length T = 200±5
+token sequences this way, we compute updated z-scores and
+tabulate error rates (Table 8 in the Appendix). We also
+generate ROC plots for a range of ε budgets. While this
+attack is effective at increasing the number of red list tokens
+in the text, as shown in Figure 6, we only measure a decrease
+in watermark strength of 0.01 AUC when ε = 0.1. While
+the watermark removal is more successful at a larger budget
+of 0.3, the average PPL of attacked sequences increases by
+3× in addition to requiring more model calls.
+8. Related Work
+The idea of watermarking, defined as unseen modifications
+to data that hide identifying information, has a long
+history. However, watermarking of digital text has been
+considered challenging in the past, due to its discrete
+nature . Watermarking
+is considered easier for continuous-valued data, where
+watermarks can be encoded with a variety of well-studied
+strategies .
+In the following, we note that watermarking, as a method
+that encodes enough information to identify the source of a
+text fragment, is strictly a subset of steganography, the task
+of embedding arbitrary hidden information into data.
+A Watermark for Large Language Models. Page 12 of 13.
+Watermarking Natural Language. Early approaches to
+watermarking natural text in digital form in Atallah et al.
+ pose a similar problem with similar desiderata
+as in our setting, except targeted towards classical models.
+Given a string of text s, Atallah et al. propose to generate text s′ with the properties that s′ has similar meaning,
+contains a watermark with an extremely small false-positive
+rate that is not readable by a party without knowledge of the
+secret key that generated the watermark, is hard to remove
+through editing of s′ and is further detectable without knowledge of s (or the scheme generating s). The actual steganography scheme described therein is limited by its rule-based
+understanding of natural text to modifications of parsed syntactic tree structures. Finally, the watermark can be read by
+reconstructing the tree structure, with the chance of a falsepositive for a watermark of w bits vanishing quickly at 2−w.
+Rule-based watermarks were further developed in a series of
+works with variants also embedding watermarks based on synonym tables instead of
+only parse trees. Early developments were summarized in
+Jalil & Mirza , but strong watermarks significantly
+degraded the text quality due to the limited flexibility of
+language models at the time.
+While approaches via hierarchical language models in Wilson et al. still required human interactions, the
+emergence of modern neural language models also allowed for improved
+watermarking/steganography . Fang
+et al. propose such a neural steganography approach
+where, to encode a message of w bits, the message is first
+separated into blocks of length b. Then, the vocabulary V
+of a language model is partitioned at random into disjoint
+sets of size |V |/2b. A generative LM can then encode the
+message by generating only a token from the “allowed” set
+at each position. However, this hard rule reduces the quality
+of generated text, boxing the LM into only a small selection
+of valid tokens at every step. Other approaches, such as
+Ueoka et al. use mask-infilling models such as BERT
+to edit already-generated text for the purpose of steganography. Finally, Abdelnabi & Fritz design an end-to-end
+system where both encoding and decoding are handled by
+text-to-text language models that are trained adversarially.
+With similar motivation to our proposal, Kaptchuk et al.
+ constructs a framework that adapts traditional publickey cryptographic steganography specifically for “natural”
+comunication channels like text using generative models.
+However, their method, Meteor, relies on a synchronized
+model framework where the sender and receiver agree on
+a shared generative model used to embed and decode the
+hidden bits of information being sent.
+Recently, Aaronson announced that he is studying
+cryptographic approaches to watermarking in collaboration
+with OpenAI. Their preliminary method is based only on
+biasing of the LM output, as opposed to complete determination as in Fang et al. . While details are not currently
+available, the description suggests that hashing of n-gram
+sequences is involved. We hope to extend our comparison
+to this work when more information becomes available.
+Note that a separate line of work investigates watermarking
+model parameters themselves. This would not be used to
+watermark model output (as in this work), but to defend
+against model stealing .
+Approaches, such as Gu et al. , implant backdoor triggers through a finetuning process to cause biased responses
+to specific inputs, a behavior detectable at verification time.
+In contrast to other currently published works, we want
+to focus on strategies that are simultaneously minimally
+restrictive to a language model, leverage the LMs own understanding of natural text, require no usage of the LM to
+decode the watermark, and can be theoretically analyzed
+and validated.
+Post-hoc Detection. An alternative to watermarking is to
+develop detection models that perform a post-hoc analysis
+of machine-generated text, for example using language
+model features or finetuning existing large language models
+to behave as detectors ,
+see an overview in Jawahar et al. . These detectors
+work because LMs still leave detectable signals in generated
+text. Implementation details, such as sampling strategies,
+can be reverse-engineered from text .
+However, detection approaches are slowly losing ground
+as LM capabilities increase, for example Gambini et al.
+ note that a range of detection strategies for GPT-2
+already struggle with GPT-3. Further, known detectors
+are also vulnerable to adversarial attacks that degrade their
+functionality .
+While efforts to provide strong detectors continue, as in
+Tian , ultimately language model progress may make
+detection infeasible. All post-hoc detection methods require
+the LM to be significantly biased away from human text in
+some measurable way, such as low variation in perplexity
+across sentences . Even for current LLMs, this
+margin might be small. This is already problematic, as
+detection schemes that operate within this small margin
+are susceptible to labeling human text as false-positive, a
+concern that is especially pressing for people who produce
+unusual text, such as a non-native speakers, and people
+who use computer tools to assist them in writing. Such
+populations might be especially at risk for false-positives,
+which could lead to academic problems if these detectors
+are used in schools .
+A Watermark for Large Language Models.
+The watermarking scheme we propose is designed so that
+false positives are statistically improbable, regardless of the
+writing patterns of any given human.
+9. Conclusion
+The presented watermark has a number of nice properties
+that make it a practical choice: the watermark is computationally simple to verify without access to the underlying
+model, false positive detections are statistically improbable,
+and the watermark degrades gracefully under attack. Further, the proposed scheme can be retro-fitted to any existing
+model that generates text via sampling from a next token
+distribution, without retraining. Note, however, that careful
+implementation and instruction tuning against generative
+attacks may be required for very large models.
+There is one more important property of the proposed
+method that we have not discussed: The z-statistic used
+to detect the watermark depends only on the green list size
+parameter γ and the hash function for generating green lists.
+There is no dependence on δ or any other factor related to
+how the green list is enforced. For this reason, one can
+deploy the watermark using context-specific δ choices or
+green list enforcement rules for different kinds of text (e.g.,
+prose vs code, or small vs large models) while using the
+same downstream watermark detector. One can also change
+a proprietary implementation of the watermarked sampling
+algorithm without any need to change the detector. Finally,
+the watermarking method could be turned on only in certain
+contexts, for example when a specific user seems to exhibit
+suspicious behavior.
+There are still a number of remaining open questions regarding watermarking. For example, what kind of robust
+hashing rules are possible, and when are these rules provably optimal? What is the best way to test for the watermark
+in a streaming context, or in a context where a short span
+of watermarked text lives inside a longer non-watermarked
+span? Are there simple sensitivity bounds that are more
+accurate than those presented above for large δ and small
+γ? We hope our present results are enough to convince readers that watermarks could be a practical tool for combating
+malicious uses of generative models, and we leave these
+additional questions for future research
+10. Acknowledgements
+This work was made possible by the ONR MURI program,
+DARPA GARD (HR00112020007), the Office of Naval Research (N000142112557), and the AFOSR MURI program.
+Commercial support was provided by Capital One Bank, the
+Amazon Research Award program, and Open Philanthropy.
+Further support was provided by the National Science Foundation (IIS-2212182), and by the NSF TRAILS Institute
+(2229885).

@@ -1,0 +1,562 @@
+Exploring Adversarial Examples
+in Malware Detection
+Octavian Suciu
+University of Maryland, College Park
+ 
+Scott E. Coull
+FireEye, Inc.
+ 
+Jeffrey Johns
+FireEye, Inc.
+ 
+Abstract—The convolutional neural network (CNN) architecture is increasingly being applied to new domains, such as
+malware detection, where it is able to learn malicious behavior
+from raw bytes extracted from executables. These architectures
+reach impressive performance with no feature engineering effort
+involved, but their robustness against active attackers is yet
+to be understood. Such malware detectors could face a new
+attack vector in the form of adversarial interference with the
+classiﬁcation model. Existing evasion attacks intended to cause
+misclassiﬁcation on test-time instances, which have been extensively studied for image classiﬁers, are not applicable because
+of the input semantics that prevents arbitrary changes to the
+binaries. This paper explores the area of adversarial examples
+for malware detection. By training an existing model on a
+production-scale dataset, we show that some previous attacks
+are less effective than initially reported, while simultaneously
+highlighting architectural weaknesses that facilitate new attack
+strategies for malware classiﬁcation. Finally, we explore how
+generalizable different attack strategies are, the trade-offs when
+aiming to increase their effectiveness, and the transferability of
+single-step attacks.
+I. INTRODUCTION
+The popularity of convolutional neural network (CNN)
+classiﬁers has lead to their adoption in ﬁelds which have been
+historically adversarial, such as malware detection , .
+Recent advances in adversarial machine learning have highlighted weaknesses of classiﬁers when faced with adversarial
+samples. One such class of attacks is evasion , which acts
+on test-time instances. The instances, also called adversarial
+examples, are modiﬁed by the attacker such that they are
+misclassiﬁed by the victim classiﬁer even though they still
+resemble their original representation. State-of-the-art attacks
+focus mainly on image classiﬁers – , where attacks add
+small perturbations to input pixels that lead to a large shift in
+the victim classiﬁer feature space, potentially shifting it across
+the classiﬁcation decision boundary. The perturbations do not
+change the semantics of the image as a human oracle easily
+identiﬁes the original label associated with the image.
+In the context of malware detection, adversarial examples
+could represent an additional attack vector for an attacker
+determined to evade such a system. However, domain-speciﬁc
+challenges limit the applicability of existing attacks designed
+against image classiﬁers on this task. First, the strict semantics
+of binary ﬁles disallows arbitrary perturbations in the input
+space. This is because there is a structural interdependence
+between adjacent bytes, and any change to a byte value
+could potentially break the functionality of the executable.
+Second, limited availability of representative datasets or robust public models limits the generality of existing studies.
+Existing attacks , use victim models trained on very
+small datasets, and make various assumptions regarding their
+strategies. Therefore, the generalization effectiveness across
+production-scale models and the trade-offs between various
+proposed strategies is yet to be evaluated.
+This paper sheds light on the generalization property of adversarial examples against CNN-based malware detectors. By
+training on a production-scale dataset of 12.5 million binaries,
+we are able to observe interesting properties of adversarial
+attacks, showing that their effectiveness could be misestimated
+when small datasets are used for training, and that single-step
+attacks are more effective against robust models trained on
+larger datasets.
+Our contributions are as follows:
+• We measure the generalization property of adversarial
+attacks across datasets, highlighting common properties
+and trade-offs between various strategies.
+• We unearth an architectural weakness of a published
+CNN architecture that facilitates existing attack strategies , .
+• We investigate the transferability of single-step adversarial examples across models trained on different datasets.
+II. BACKGROUND
+The CNN architecture has proven to be very successful
+across popular vision tasks, such as image classiﬁcation .
+This lead to an increased adoption in other ﬁelds and domains, with one such example being text classiﬁcation from
+character-level features , which turns out to be extremely
+similar to the malware classiﬁcation problem discussed in
+this paper. In this setting, a natural language document is
+represented as a sequence of characters, and the CNN is
+applied on that one-dimensional stream of characters. The
+intuition behind this approach is that a CNN is capable of
+automatically learning complex features, such as words or
+word sequences, by observing compositions of raw signals
+extracted from single characters. This approach also avoids the
+requirement of deﬁning language semantic rules, and is able
+to tolerate anomalies in features, such as word misspellings.
+The classiﬁcation pipeline ﬁrst encodes each character into
+a ﬁxed-size embedding vector. The sequence of embeddings
+2019 IEEE Security and Privacy Workshops (SPW)
+© 2019, Octavian Suciu. Under license to IEEE.
+DOI 10.1109/SPW.2019.00015
+Fig. 1: Architecture for the MalConv Model.
+acts as input to a set of convolutional layers, intermixed
+with pooling layers, then followed by fully connected layers.
+The convolutional layers act as receptors, picking particular
+features from the input instance, while the pooling layers act as
+ﬁlters to down-sample the feature space. The fully connected
+layers act as a non-linear classiﬁer on the internal feature
+representation of instances.
+A. CNNs for Malware Classiﬁcation.
+Similar to this approach, the security community explored
+the applicability of CNNs to the task of malware detection.
+Raff et al. and Krˇc´al et al. use the CNNs on a raw
+byte representation, whereas Davis and Wolff use it on
+disassembled functions. In this work we focus on the raw byte
+representation. In an analogy to the text domain, an executable
+ﬁle could be conceptualized as a sequence of bytes that are
+arranged into higher-level features, such as instructions or
+functions. By allowing the classiﬁer to automatically learn
+features indicative of maliciousness, this approach avoids the
+labor-intensive feature engineering process typical of malware
+classiﬁcation tasks. Manual feature engineering proved to be
+challenging in the past and led to an arms race between
+antivirus developers and attackers aiming to evade them .
+However, the robustness of these automatically learned features in the face of evasion is yet to be understood.
+In this paper, we explore evasion attacks by focusing
+on a byte-based convolutional neural network for malware
+detection, called MalConv , whose architecture is shown
+in Figure 1. MalConv reads up to 2MB of raw byte values
+from a Portable Executable (PE) ﬁle as input, appending
+a distinguished padding token to ﬁles smaller than 2MB
+and truncating extra bytes from larger ﬁles. The ﬁxed-length
+sequences are then transformed into an embedding representation, where each byte is mapped to an 8-dimensional
+embedding vector. These embeddings are then passed through
+a gated convolutional layer, followed by a temporal maxpooling layer, before being classiﬁed through a ﬁnal fully
+connected layer. Each convolutional layer uses a kernel size of
+500 bytes with a stride of 500 (i.e., non-overlapping windows),
+and each of the 128 ﬁlters is passed through a max-pooling
+layer. This results in a unique architectural feature that we
+will revisit in our results: each pooled ﬁlter is mapped back to
+a speciﬁc 500-byte sequence and there are at most 128 such
+sequences that contribute to the ﬁnal classiﬁcation across the
+entire input. Their reported results on a testing set of 77,349
+samples achieved a Balanced Accuracy of 0.909 and Area
+Under the Curve (AUC) of 0.982.
+B. Adversarial Binaries.
+Unlike evasion attacks on images – , attacks that alter
+the raw bytes of PE ﬁles must maintain the syntactic and
+semantic ﬁdelity of the original ﬁle. The Portable Executable
+(PE) standard deﬁnes a ﬁxed structure for these ﬁles. A
+PE ﬁle contains a leading header enclosing ﬁle metadata and
+pointers to the sections of the ﬁle, followed by the variablelength sections which contain the actual program code and
+data. Changing bytes arbitrarily could break the malicious
+functionality of the binary or, even worse, prevent it from
+loading at all. Therefore, an attacker constrained to static
+analysis of the binaries has limited leverage on the features
+they can modify.
+Recent work , suggests two strategies of addressing these limitations. The ﬁrst one avoids this problem by
+appending adversarial noise to the end of the binary. Since
+the appended adversarial bytes are not within the deﬁned
+boundaries of the PE ﬁle, their existence does not impact the
+binary’s functionality and there are no inherent restrictions on
+the syntax of bytes (i.e., valid instructions and parameters).
+The trade-off, however, is that the impact of the appended
+bytes on the ﬁnal classiﬁcation is offset by the features present
+in the original sample, which remain unchanged. As we will
+see, these attacks take advantage of certain vulnerabilities in
+position-independent feature detectors present in the MalConv
+architecture. The second strategy seeks to discover regions
+in the executable that are not mapped to memory and that,
+upon modiﬁcation, would not affect the intended behavior.
+However, the utility of this approach compared to append
+strategies has not been studied before. In this paper, we
+evaluate the comparative effectiveness of the two strategies
+at scale and highlight their transferability across models, as
+well as trade-offs that might affect their general applicability.
+C. Datasets.
+To evaluate the success of evasion attacks against the Mal-
+Conv architecture we utilize three datasets. First, we collected
+16.3M PE ﬁles from a variety of sources, including VirusTotal,
+Reversing Labs, and proprietary FireEye data. The data was
+used to create a production-quality dataset of 12.5M training
+samples and 3.8M testing samples, which we refer to as the
+Full dataset. The corpus contains 2.2M malware samples in
+the training set, and 1.2M in testing. The dataset was created
+from a larger pool of more than 33M samples using a stratiﬁed
+sampling technique based on malware family. Use of stratiﬁed
+sampling ensures uniform coverage over the canonical ‘types’
+of binaries present in the dataset, while also limiting bias from
+certain overrepresented types (e.g., popular malware families).
+Second, we utilize the EMBER dataset , which is a publicly
+available dataset comprised of 1.1M PE ﬁles, out of which
+900K are used for training. On this dataset, we use the pretrained MalConv model released with the dataset. In addition,
+we also created a smaller dataset whose size and distribution
+is more in line with Kolosnjaji et al.’s evaluation , which
+we refer to as the Mini dataset. The Mini dataset was created
+by sampling 4,000 goodware and 4,598 malware samples from
+the Full dataset. Note that both datasets follow a strict temporal
+split where test data was observed strictly later than training
+data. We use the Mini dataset in order to explore whether
+the attack results demonstrated by Kolosnjaji et al. would
+generalize to a production-quality model, or whether they are
+artifacts of the dataset properties.
+III. BASELINE PERFORMANCE
+To validate our implementation of the MalConv architecture , we train the classiﬁer on both the Mini and the Full
+datasets, leaving out the DeCov regularization addition suggested by the authors. Our implementation uses a momentumbased optimizer with decay and a batch size of 80 instances.
+We train on the Mini dataset for 10 full epochs. We also
+trained the Full dataset for 10 epochs, but stopped the process
+early due to a small validation loss1. To assess and compare
+the performance of the two models, we test them on the
+entire Full testing set. The model trained on the Full dataset
+achieves an accuracy of 0.89 and an AUC of 0.97, which is
+similar to the results published in the original MalConv paper.
+Unsurprisingly, the Mini model is much less robust, achieving
+an accuracy of 0.73 and an AUC of 0.82. The MalConv model
+trained on EMBER was reported to achieve 0.99 AUC on the
+corresponding test set.
+IV. ATTACK STRATEGIES
+We now present the attack strategies used throughout our
+study and discuss their trade-offs.
+A. Append Attacks
+Append-based strategies address the semantic integrity constraints of PE ﬁles by appending adversarial noise to the original ﬁle. We start by presenting two attacks ﬁrst introduced by
+Kolosnjaji et al. and evaluated against MalConv, followed
+by our two strategies intended to evaluate the robustness of
+the classiﬁer.
+a) Random Append: This attack works by appending
+byte values sampled from a uniform distribution. This baseline
+attack measures how easily an append attack could offset
+features derived from the ﬁle length, and helps compare the
+actual adversarial gains from more complex append strategies
+over random appended noise.
+b) Gradient Append: The Gradient Append strategy uses
+the input gradient value to guide the changes in the appended
+byte values. The algorithm appends numBytes to the candidate sample and updates their values over numIter iterations
+or until the victim classiﬁer is evaded. The gradient of the
+output with respect to the input layer indicates the direction,
+in the input space, of the change required to minimize the
+output, therefore pushing its value towards the benign class.
+The representation of all appended bytes is iteratively updated,
+starting from random values. However, as the input bytes are
+mapped to a discrete embedding representation in MalConv,
+the end-to-end architecture becomes non-differentiable and its
+input gradient cannot be computed analytically. Therefore,
+1This was also reported in the original MalConv study.
+this attack uses a heuristic to instead update the embedding
+vector and discretize it back in the byte space to the closest
+byte value along the direction of the embedding gradient. We
+refer interested readers to the original paper for details of this
+discretization process . The attack requires numBytes ∗
+numIter gradient computations and updates to the appended
+bytes in the worst case, which could be prohibitively expensive
+for large networks.
+c) Benign Append: This strategy allows us to observe
+the susceptibility of the MalConv architecture, speciﬁcally its
+temporal max-pooling layer, to attacks that reuse benign byte
+sequences at the end of a ﬁle. The attack takes bytes from
+the beginning of benign instances and appends them to the
+end of a malicious instance. The intuition behind this attack
+is that leading bytes of a ﬁle, and especially the PE headers,
+are the most inﬂuential towards the classiﬁcation decision .
+Therefore, it signals whether the maliciousness of the target
+could be offset by appending highly inﬂuential benign bytes.
+Algorithm 1 The FGM Append attack
+1: function FGMAPPEND(x0, numBytes, ϵ)
+x0 ←PADRANDOM(x0, numBytes)
+e ←GETEMBEDDINGS(x0)
+eu ←GRADIENTATTACK(e, ϵ)
+for i in |x0|...|x0| + numBytes −1 do
+e[i] ←eu[i]
+x∗←EMBEDDINGMAPPING(e)
+10: end function
+11: function GRADIENTATTACK(e, ϵ)
+eu ←e −ϵ ∗sign(∇l(e))
+14: end function
+15: function EMBEDDINGMAPPING(ex)
+e ←ARRAY(256)
+for byte in 0...255 do
+e[byte] ←GETEMBEDDINGS(byte)
+for i in 0...|ex| do
+x∗[i] ←argminb∈0...255(||ex[i] −e[b]||2)
+24: end function
+d) FGM Append: Based on the observation that the
+convergence time of the Gradient Append attack grows linearly
+with the number of appended bytes, we propose the “oneshot” FGM Append attack, an adaptation of the Fast Gradient
+Method (FGM) originally described in . The adaptation of
+the FGM attack to the malware domain was ﬁrst proposed
+by Kreuk et al. in an iterative algorithm intended to
+generate a small-sized adversarial payload. In contrast, our
+attack strategy aims to highlight vulnerabilities of the model
+as a function of the increasing adversarial leverage. The
+pseudocode is described in Algorithm 1. Our attack starts by
+appending numBytes random bytes to the original sample
+x0 and updating them using a policy dictated by FGM. The
+attack uses the classiﬁcation loss l of the output with respect
+to the target label. FGM updates each embedding value by a
+user speciﬁed amount ϵ in a direction that minimizes l on the
+input, as dictated by the sign of the gradient ∇l. While this
+attack framework is independent of the distance metric used
+to quantify perturbations, our experiments use L∞. In order to
+Fig. 2: CDF of ﬁle sizes and activation locations determined
+by MalConvs max pooling layer.
+avoid the non-differentiability issue, our attack performs the
+gradient-based updates of the appended bytes in the embedding space, while mapping the updated value to the closest
+byte value representation in EMBEDDINGMAPPING using the
+L2 distance metric. A more sophisticated mapping could be
+used to ensure that the update remains beneﬁcial towards
+minimizing the loss. However, we empirically observed that
+the metric choice does not signiﬁcantly affect the results for
+our single-step attack.
+B. Limitations of Append Strategies
+Besides the inability to append bytes to ﬁles that already
+exceed the model’s maximum size (e.g., 2MB for MalConv),
+append-based attacks can suffer from an additional limitation.
+In the MalConv architecture, a PE ﬁle is broken into nonoverlapping byte sequences of length 500. With a maximum
+ﬁle size of 2MB, that corresponds to at most 4,195 such
+sequences. The model uses 128 features, meaning only 128 of
+the 4,195 sequences can ever be selected. In Figure 2, we select
+a random set of 200 candidate malware samples and examine
+the ﬁle size distribution and which of the 4,195 sequences are
+being selected, on average, by the model. This shows that, for
+example, while the ﬁrst 1,000 sequences (0.5 MB) in binaries
+correspond to 79% of the actual features for the classiﬁer,
+only 55% of the ﬁles are smaller than that. Additionally, 13%
+of the instances cannot be attacked at all because they are
+larger than the maximum ﬁle size for the classiﬁer. The result
+shows not only that appended bytes need to offset a large
+fraction of the original discriminative features, but also that
+attacking the byte sequences of these discriminative features
+directly will likely amplify the attack effectiveness due to their
+importance. Driven by this intuition, we proceed to describe an
+attack strategy that would exploit the existing bytes of binaries
+with no side effects on the functionality of the program.
+C. Slack Attacks
+a) Slack FGM:
+Our strategy deﬁnes a set of slack
+bytes where an attack algorithm is allowed to freely modify
+bytes in the existing binary without breaking the PE. Once
+identiﬁed, the slack bytes are then modiﬁed using a gradientbased approach. The SLACKATTACK function in Algorithm 2
+highlights the architecture of our attack. The algorithm is
+independent of the SLACKINDEXES method employed for
+extracting slack bytes or the gradient-based method in GRA-
+DIENTATTACK used to update the bytes.
+Algorithm 2 The Slack FGM attack
+1: function SLACKATTACK(x0)
+m ←SLACKINDEXES(x0)
+e ←GETEMBEDDINGS(x0)
+eu ←GRADIENTATTACK(e)
+xu ←EMBEDDINGMAPPING(eu)
+for idx in m do
+x∗[idx] ←xu[idx]
+11: end function
+12: function SLACKINDEXES(x)
+s ←GETPESECTIONS(x)
+m ←ARRAY(0)
+for i in 0...|s| do
+if s[i].RawSize > s[i].V irtualSize then
+rs ←s[i].RawAddress + s[i].V irtualSize
+re ←s[i].RawSize
+for idx in rs...re do
+m ←APPEND(m, idx)
+25: end function
+In our experiments we use a simple technique that empirically proves to be effective in ﬁnding sufﬁciently large slack
+regions. This strategy extracts the gaps between neighboring
+PE sections of an executable by parsing the executable section
+header. The gaps are inserted by the compiler and exist
+due to misalignments between the virtual addresses and the
+multipliers over the block sizes on disk. We compute the
+size of the gap between consecutive sections in a binary as
+RawSize −V irtualSize, and deﬁne its byte start index in
+the binary by the section’s RawAddress + V irtualSize. By
+combining all the slack regions, SLACKINDEXES returns a
+set of indexes over the existing bytes of a ﬁle, indicating
+that they can be modiﬁed. This technique was ﬁrst mentioned
+in . However, to our knowledge, a systematic evaluation
+of its effectiveness and the comparison between the slack and
+append strategies have not been performed before.
+Although more complex byte update strategies are possible,
+potentially accounting for the limited leverage imposed by the
+slack regions, we use the technique introduced for the FGM
+Append attack in Algorithm 1, which proved to be effective.
+Like in the case of FGM Append, updates are performed on
+the embeddings of the allowed byte indexes and the updated
+values are mapped back to the byte values using the L2
+distance metric.
+# Append Bytes
+Random Append
+Benign Append
+FGM Append
+TABLE I: Success Rate of the Append attacks for increased leverage on the Mini, EMBER and Full datasets.
+V. RESULTS
+Here, we evaluate the attacks described in the previous
+section in the same adversarial settings using models trained
+on the Mini, EMBER and Full datasets. Our evaluation seeks
+to answer the following questions:
+• How do existing attacks generalize to classiﬁers trained
+on larger datasets?
+• How vulnerable is a robust MalConv architecture to
+adversarial samples?
+• Are slack-based attacks more effective than append attacks?
+• Are single-step adversarial samples transferable across
+In an attempt to reproduce prior work, we select candidate
+instances from the test set set if they have a ﬁle size smaller
+than 990,000 bytes and are correctly classiﬁed as malware by
+the victim. We randomly pick 400 candidates and measure
+the effectiveness of the attacks using the Success Rate (SR):
+the percentage of adversarial samples that successfully evaded
+detection.
+A. Append Attacks.
+We evaluate the append-based attacks on the Mini, EMBER
+and the Full datasets by varying the number of appended bytes,
+and summarize the results in Table I. The Random Append
+attack fails on all three models, regardless of the number of
+appended bytes. This result is in line with our expectations,
+demonstrating that the MalConv model is immune to random
+noise and that the input size is not among the learned features.
+However, our results do not reinforce previously reported
+success rates of up to 15% by Kolosnjaji et al. .
+The SR of the Benign Append attack seems to progressively
+increase with the number of added bytes on the Mini dataset,
+but fails to show the same behavior on the EMBER and Full
+datasets. Conversely, in the FGM Append attack we observe
+that the attack fails on the Mini dataset, while reaching up
+to 33% SR on EMBER and 71% SR on the Full datasets.
+This paradoxical behavior highlights the importance of large,
+robust datasets in evaluating adversarial attacks. One reason
+for the discrepancy in attack behaviors is that the MalConv
+model trained using the Mini dataset (modeled after the dataset
+used by Kolosnjaji et al.) has a severe overﬁtting problem.
+In particular, the success of appending speciﬁc benign byte
+sequences from the Mini dataset could be indicative of poor
+generalizability and this is further supported by the disconnect
+between the model’s capacity and the number of samples in the
+Mini dataset. When we consider the single-step FGM Attack’s
+success on the EMBER and Full datasets, and its failure on the
+Mini dataset, we believe these results can also be explained
+by poor generalizability in the Mini model; the single gradient evaluation does not provide enough information for the
+sequence of byte changes made in the attack. Recomputing
+the gradient after each individual byte change is expected
+to result in a higher attack success rate. Finally, we also
+observe a large discrepancy between the SR on the EMBER
+and Full models, which counterintuitively highlights the model
+trained on a larger dataset as being more vulnerable. The
+results reveal an interesting property of single-step gradientbased atttacks: with more training data, the model encodes
+more sequential information and a single gradient evaluation
+becomes more beneﬁcial for the attack. Conversely, updating
+the bytes independently of one another on the less robust
+model is less likely to succeed.
+Aside from the methodological issues surrounding dataset
+size and composition, our results also show that even a robustly
+trained MalConv classiﬁer is vulnerable to append attacks
+when given a sufﬁciently large degree of freedom. Indeed,
+the architecture uses 500 byte convolutional kernels with a
+stride size of 500 and a single max pool layer for the entire
+ﬁle, which means that not only is it looking at a limited set
+of relatively coarse features, but it also selects the best 128
+activations locations irrespective of location. That is, once
+a sufﬁciently large number of appended bytes are added in
+the FGM attack, they quickly replace legitimate features from
+the original binary in the max pool operation. Therefore, the
+architecture does not encode positional information, which is a
+signiﬁcant vulnerability that we demonstrate can be exploited.
+Additionally, we implemented the Gradient Append attack
+proposed by Kolosnjaji et al., but failed to reproduce the
+reported results. We aimed to follow the original description, with one difference: our implementation, in line with
+the original MalConv architecture, uses a special token for
+padding, while Kolosnjaji et al. use the byte value 0 instead.
+We evaluated our implementation under the same settings as
+the other attacks, but none of the generated adversarial samples
+were successful. One limitation of the Gradient Append attack
+that we identiﬁed is the necessity to update the value of
+each appended byte at each iteration. However, different byte
+indexes might converge to their optimal value after a varying
+number of iterations. Therefore, successive and unnecessary
+updates may even lead to divergence of some of the byte values. Indeed, empirically investigating individual byte updates
+across iterations revealed an interesting oscillating pattern,
+where some bytes receive the same sequence of byte values
+cyclically in later iterations.
+(a) Slack FGM attack SR for increasing ϵ
+(b) SR for EMBER Model
+(c) SR for Full Model
+Fig. 3: Evaluation of the Slack FGM attack on the EMBER and Full models.
+B. Slack Attacks.
+We evaluate the Slack FGM attack over the EMBER and
+Full datasets for the same experimental settings as above.
+In order to control the amount of adversarial noise added
+in the slack bytes, we use the ϵ parameter to deﬁne an L2
+ball around the original byte value in the embedding space.
+Only those values provided by the FGM attack that fall within
+the ϵ ball are considered for the slack attack, otherwise the
+original byte value will remain. As illustrated in Figure 3a,
+by varying ϵ we control the percentage of available slack
+bytes that are modiﬁed. The upper bound for the SR is 15%
+on EMBER for an attack where 14% (291/2103) slack bytes
+were modiﬁed on average, while on Full we achieve 28% SR
+for 58% . While the attack is more successful
+against Full than EMBER, it also succeeds in modifying a
+proportionally larger number of bytes. We observe that the
+EMBER model returns very small gradient values for the slack
+bytes, indicating that their importance for classifying the target
+is low. The results also reinforce our hypothesis about the
+single gradient evaluation on the FGM Append attack.
+In order to compare Slack FGM with the append attacks, in
+Figures 3b and 3c we plot the SR as a function of the number
+of modiﬁed bytes. The results show that, while the FGM
+Append attack could achieve a higher SR, it also requires a
+much larger number of byte modiﬁcations. On EMBER, Slack
+FGM modiﬁes 291 bytes on average, corresponding to a SR
+for which FGM Append requires approximately 500 bytes. On
+Full, the attack achieves a SR of 27% for an average of 1005
+modiﬁed bytes, while the SR of the FGM Append lies around
+20% for the same setting. The results conﬁrm our initial
+intuition that the coarse nature of MalConv’s features requires
+consideration of the surrounding contextual bytes within the
+convolutional window. In the slack attack, we make use of
+existing contextual bytes to amplify the power of our FGM
+attack without having to generate a full 500-byte convolutional
+window using appended bytes.
+C. Attack Transferability.
+We further analyze the transferability of attack samples
+generated for one (source) model against another (target).
+We run two experiments with EMBER and Full alternately
+acting as source and target, and evaluate FGM Append and
+Slack FGM attacks on samples that successfully evade the
+source model and for which the original (pre-attack) sample is
+correctly classiﬁed by the target model. At most 2/400 samples
+evade the target model for each set of experiments, indicating
+that these single-step samples are not transferable between
+models. The ﬁndings are not in line with prior observations
+on adversarial examples for image classiﬁcation, where singlestep samples were found to successfully transfer across models . Nevertheless, we leave a systematic transferability
+analysis of other embedding mappings and stronger iterative
+attacks for future work.
+VI. RELATED WORK
+The work by Barreno et al. was among the ﬁrst to systematize attack vectors against machine learning, where they
+distinguished evasion as a type of test-time attack. Since then,
+several evasion attacks have been proposed against malware
+detectors. Many of these attacks focus on additive techniques
+for evasion, where new capabilities or features are added to
+cause misclassiﬁcation. For instance, Biggio et al. use a
+gradient-based approach to evade detection by adding new
+features to PDFs, while Grosse et al. and Hu et al. 
+add new API calls to evade detection. Al-Dujaili et al. propose an adversarial training framework against these additive
+attacks. More recently, Anderson et al. used reinforcement
+learning to evade detectors by selecting from a pre-deﬁned
+list of semantics-preserving transformations. Similarly, Xu et
+al. propose a genetic algorithm for manipulating PDFs
+while maintaining necessary syntax. Closest to our work are
+the gradient-based attacks by Kolosnjaji et al. and Kreuk
+et al. against the MalConv architecture. By contrast,
+our attacks are intended to highlight trade-offs between the
+append and slack strategies, and to test the robustness of
+the MalConv architecture when trained on production-scale
+datasets. Additionally, to our knowledge, the transferability
+of single-step adversarial attacks on malware has not been
+previously studied despite prior work that suggests it is best
+suited for mounting black-box attacks .
+VII. CONCLUSION
+In this paper, we explored the space of adversarial examples
+against deep learning-based malware detectors. Our experiments indicate that the effectiveness of adversarial attacks on
+models trained using small datasets does not always generalize to robust models. We also observe that the MalConv
+architecture does not encode positional information about the
+input features and is therefore vulnerable to append-based
+attacks. Finally, our attacks highlight the threat of adversarial
+examples as an alternative to evasion techniques such as
+runtime packing.
+ACKNOWLEDGMENTS
+We thank Jon Erickson for helpful discussions with regard
+to slack attack methods and the anonymous reviewers for their
+constructive feedback.

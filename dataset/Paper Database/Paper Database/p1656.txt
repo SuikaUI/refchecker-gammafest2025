@@ -1,0 +1,671 @@
+Machine Learning manuscript No.
+(will be inserted by the editor)
+Machine learning for targeted display advertising: Transfer learning in
+C. Perlich · B. Dalessandro · O. Stitelman ·
+T. Raeder · F. Provost
+Received: date / Accepted: date
+Abstract This paper presents a detailed discussion of problem formulation and data representation
+issues in the design, deployment, and operation of a massive-scale machine learning system for
+targeted display advertising. Notably, the machine learning system itself is deployed and has been
+in continual use for years, for thousands of advertising campaigns (in contrast to simply having the
+models from the system be deployed). In this application, acquiring sufﬁcient data for training from
+the ideal sampling distribution is prohibitively expensive. Instead, data are drawn from surrogate
+domains and learning tasks, and then transferred to the target task. We present the design of this
+multistage transfer learning system, highlighting the problem formulation aspects. We then present
+a detailed experimental evaluation, showing that the different transfer stages indeed each add value.
+We next present production results across a variety of advertising clients from a variety of industries,
+illustrating the performance of the system in use. We close the paper with a collection of lessons
+learned from the work over half a decade on this complex, deployed, and broadly used machine
+learning system.
+1 Introduction
+Advertising is a huge industry (around 2% of U.S. GDP), and advertisers are keenly interested
+in well-targeted ads. Online display advertising is a key subﬁeld of the industry where ad targeting holds both promise and challenges. It is promising because of the wealth of data that can be
+brought to bear to target ads. It is challenging because the display advertising ecosystem is an extremely complicated system where accessing the data and delivering the ads can involve dozens of
+different corporate players, in contrast to search advertising for example. This paper deals with a
+particularly challenging segment of the online display advertising market: customer prospecting.
+Customer prospecting involves delivering advertisements to consumers who have no previously observed interactions with the brand, but are good prospects—i.e., are likely to become customers
+after having been shown an advertisement.
+Display advertising has matured rapidly over the past several years, with the proliferation of
+real-time bidding exchanges (RTBs) that auction off website real estate for placing online display
+ads in real time. This has created an efﬁcient method for advertisers to target advertisements to
+C. Perlich, B. Dalessandro, O. Stitelman, T. Raeder
+M6D Research
+37 E. 18th St. New York, NY, USA
+E-mail: {claudia, briand, ori, troy}@m6d.com
+F. Provost
+Leonard N. Stern School of Business, New York University
+44 W. 4th St. New York, NY, USA
+E-mail: 
+Perlich et al
+particular consumers (see e.g. ). As is standard in the industry, let’s call the showing of a display
+ad to a particular consumer an “impression.” In each RTB the good being auctioned is an impression
+opportunity—a particular space or “slot” on a particular webpage at a particular instant with a
+particular consumer viewing it. The auctions are run in real-time, being triggered the instant a
+consumer navigates to the page and taking place during the time the page is fully rendered in
+the consumer’s browser. At the time of auction, information about the location of the potential
+advertisement and an identiﬁer of the particular internet user are passed to all potential bidders
+in the form of a bid request. Advertisers often supplement this data with information previously
+collected or purchased about the speciﬁc consumer and website. When an auction is initiated, a
+potential advertiser must determine if it wants to bid on this impression, how much it would like
+to bid, and what advertisement it would like to display if it wins the auction. There are billions of
+such real-time auctions daily and advertisers require large-scale and efﬁcient systems to make these
+decisions in milliseconds.
+This complicated ecosystem invites machine learning to play a key role in the ad optimization
+process, particularly because of the simultaneous availability of (i) massive, very ﬁne-grained data
+on consumer behavior, (ii) data on the brand-oriented actions of consumers, via instrumentation of
+purchase systems, and (iii) the ability to make advertising decisions and deliver advertisements in
+real time. The work we describe in this paper is one such massive-scale machine learning system
+that is deployed and in regular use by M6D, a company that ﬁnds prospective customers for targeted
+display advertising campaigns and executes those campaigns on the many advertising exchanges.
+Notably, the learning system itself is deployed, in contrast to the much more common case of deploying the models resulting from machine learning (as well as human model curation). Each week,
+this learning system builds thousands of models automatically, driving the advertising campaigns
+for major marketers across many industries.
+This paper’s main contribution to the machine learning literature is to use this application domain to demonstrate how data characteristics and availability constraints are translated and integrated into a complex problem formulation and ﬁnally implemented successfully as a robust learning system. We dig into some seldomly discussed aspects of problem formulation for machine
+learning applications, focusing much of the discussion on the fact that for pragmatic reasons, the
+system draws data from multiple, different sampling distributions to compose the machine learning
+As mentioned at the outset, our task is to identify prospective customers—online consumers
+who are most likely to purchase a speciﬁc product for the ﬁrst time in the near future after seeing
+an advertisement. The ultimate goal of the system is to build predictive models automatically for
+hundreds of different and concurrent display ad targeting campaigns. A challenge for the system is
+that each campaign may have a different performance criterion. Each of these criteria may be approximated with a good ranking of potential purchasers in terms of their likelihood of purchasing.
+These problems have been described in detail previously . A primary source of feature
+data is a consumer’s browsing history, captured as a collection of anonymized (hashed) URLs that
+the consumer has visited in the past. The class label for each campaign is based on the observation
+of actual purchases of the campaign product. At ﬁrst blush, this looks like an instance of a fairly
+straightforward predictive modeling problem. However, from a practical standpoint, it is impossible (both in terms of time and money) to obtain adequate training data directly for this problem.
+The dimensionality of the problem is already far beyond one million features in the simplest case
+of considering the browsing history of hashed URLs as an unordered set. The typical probability of purchasing the product within the next 7 days after seeing the ad varies between 0.001 and
+0.0000001, depending on the product and the targeting. Collecting an ideal training set is often (if
+not always) prohibitively expensive as well as time consuming.
+Thus, at a high level the problem faced in building models automatically at scale for display
+advertising is twofold:
+– The ideal training data are very costly to obtain, which is driven by many factors. Before a
+campaign is started there is no data at all on whether or not consumers purchase the product after
+Machine learning for advertising
+having been shown the advertisement (no one has yet been shown the advertisement!). Once a
+campaign starts, there are severe selection bias problems with almost any available data—unless
+very careful and costly randomized experimentation is conducted. The base purchase rate is
+generally very low so a tremendous number of randomly targeted ads must be shown to collect
+a data set with a signiﬁcant number of positive examples. The result is that data from the ideal
+distribution for learning is scarce. However, related data from other distributions can be acquired
+at substantially lower cost.
+– The system needs to learn models automatically for each new campaign. However, each campaign can vary widely in terms of the data available to it for learning, including the number
+of positive labels collected and the optimal feature engineering that can be applied. To operate
+as a robust and scalable learning system, the system needs to be ﬂexible enough so that it can
+learn and exploit the idiosyncrasies of a speciﬁc task (i.e. campaign), but also run with minimal
+human intervention.
+The system presented here solves these two problems with a two-level modeling approach.
+The ﬁrst-level modeling step deals with the sparseness, high-dimensionality, and model variety by
+drawing from sources of abundant, cheap (but notably biased) data. This step pulls data, engineers
+features and learns relationships from a variety of related processes that can be transferred to the
+main task we are trying to learn. The second-level modeling uses a stacked ensemble to combine,
+weight and recalibrate the outputs of the ﬁrst-level process, and this learning uses data drawn from
+the “target” distribution.
+We are aware of only few existing papers in the machine learning literature that look critically
+under the hood at the anatomy and design choices of a real, deployed, massive-scale learning system, some of them for targeting advertisements (cf., ). Examining real, deployed learning
+systems can help to keep machine learning researchers aware of issues that are critical to the actual
+use of machine learning, and thereby can help to keep the science of machine learning vital .
+Based on our experience in many real applications of machine learning, the issues that we present
+in this paper are much more common in practice than might be generally discussed. Speciﬁcally,
+this paper focuses on crucial issues of dealing with constraints of data availability including having
+data drawn from less-than-ideal distributions, and extremely rare outcomes. To address these issues,
+M6D’s system incorporates and composes techniques from transfer learning and stacked ensemble
+classiﬁcation. But more generally, we assert that the vast majority of deployed applications of machine learning are actually instances of transfer learning—with at least some aspects of the learning
+data different from the true target task. If this indeed is true, then as a community we should examine
+applications more broadly as applications of transfer learning.
+Other aspects of the system have been presented previously in conference publications , and with few exceptions these will be treated quickly in this paper.
+2 Background on M6D Display Advertising and Related Work
+M6D (Media6Degrees) is one of the players in the online display targeting industry, primarily focusing on prospecting, as described above. M6D ﬁnds and targets consumers online for over 100
+marketers/brands at any given time, delivering millions of ad impressions daily. The targeting system uses cookies to maintain a unique identiﬁer for an internet user (until the cookie is deleted or
+the consumer chooses ‘do-not-track’) and this allows the system to associate different events with
+the same consumer as it interacts with her (technically, with her cookie). M6D works with a number
+of data partners that allow it to observe consumers’ (partial) browsing history. In addition, at the
+beginning of a campaign each marketer places a number of “tracking pixels” on its Brand Website
+that allow the system to record visits to the site, purchases, and other actions that the marketer has
+deemed interesting. This also enables marketers and advertisers to measure meaningful metrics such
+as post-view conversions (important actions that occur subsequent to the showing of an ad) rather
+than just (mostly meaningless) clicks. Speciﬁcally, after a consumer is shown an impression, there
+Perlich et al
+is a time period established by the marketer within which some relevant action (e.g. visiting the
+marketer’s website, downloading information, subscribing to some service, or purchasing a product) is considered a conversion. These conversions are the basic unit on which M6D’s customers
+evaluate the success of the campaigns. Throughout the paper, we use the term brand action to refer
+to any relevant interaction between a consumer and a brand’s web site. Most notably, we deﬁne site
+visits as visits to the brand home page or other selected pages. These are used to train many of our
+models where purchase information is too sparse or not available at all.
+M6D delivers the majority of its ad impressions through ad exchanges (mostly in form of banner ads, but also some video and mobile). After receiving a bid request from the exchange, M6D
+evaluates whether the consumer associated with the impression opportunity is a good prospect for a
+particular campaign, and if so, will submit a bid. The bid price is determined by a separate machine
+learning process, which is described elsewhere .1 If the M6D bid was the highest across all bids
+for this auction, M6D delivers an ad for the campaign.
+The system described here is not the only machine learning system to evaluate and optimize
+online display ad opportunities. Within the scientiﬁc literature, there are several publications on the
+use of machine learning within the advertising ecosystem. These papers share common themes in
+terms of the nature of the problems associated with the use of machine learning in online advertising.
+One such theme is that these systems are characterized by classiﬁcation tasks on outcomes with rare
+event rates using high-dimensional feature vectors. Additionally, the ‘cold start‘ problem of having
+no campaign data prior to the campaign is addressed.
+The use of high dimensional raw user log data as features in classiﬁcation models was introduced in earlier work by Provost et al. as well as Chen et al in . Further work, such as that
+by and describes in ﬁner detail how features can be constructed from raw user event data.
+To address the rare event/high dimensionality problem, various solutions have been proposed.
+Agarwal et al. use hierarchical relationships within the feature set to smooth probability estimates across levels in the hierarchy. Chen et al. incorporate Laplacian smoothing into Poission
+regression estimates, and Pandey et al. and Dalessandro et al. augment the rare outcome
+with a correlated outcome that has higher rates of occurrence. Though neither nor mention
+it, the the use of alternative outcomes in a classiﬁcation model is an instance of transfer learning.
+Liu et al. directly approach the challenges of modeling in the online display advertising setting
+with transfer learning in mind. Speciﬁcally, they propose a method, often referred to as “multi-task
+learning,” where data from multiple tasks (campaigns) are pooled, a joint feature space is deﬁned,
+and parameters are estimated across the joint feature space. The joint feature space is constructed
+such that some features can be thought of as global across all campaigns and others are speciﬁc to
+individual campaigns. This method is similar to the multi-task learning approach to spam ﬁltering
+presented by Weinberger et al. . Transfer learning across campaigns, however, is not the focus
+of this paper. M6D generally does not apply cross-campaign transfer because that may involve using one brand’s data to optimize a competing brand’s campaign, which is undesireable to M6D’s
+The transfer learning conducted by the system in this paper involves the use of source domains
+that are outside of the standard campaign. To our knowledge, this is the ﬁrst paper to describe such
+an application of transfer learning in advertising. Besides the differences in the nature of the transfer,
+to our knowledge this is the ﬁrst work that describes an actual production system that scalably
+conducts transfer learning across a multitude of source tasks. Additionally, to our knowlege this
+work is the ﬁrst to publish details of a working display advertising system for combining multiple
+models via (stacked) ensemble learning.
+1 In this paper, we will ignore issues of contention between multiple campaigns.
+Machine learning for advertising
+3 Transfer Learning for Display Advertising
+The focus of this paper is on transfer learning across different tasks, so let us next introduce formal
+deﬁnitions that will allow us to discuss the transfer precisely. The deﬁnitions here are somewhat
+more elaborate than in many machine learning papers because we need to decouple the various
+elements of the data that come from different sources. The interested reader is directed to for
+a comprehensive survey of transfer learning, or to for work most closely related to
+the sort of transfer learning described here. At a high level, the idea of transfer learning is that (i)
+the learning (in part) is done for a task that differs from the real target task in either the sampling
+distribution of the examples, the features describing the examples, the exact quantity being modeled
+(the “label”), or the functional dependence between the features and the label, and (ii) that the
+knowledge obtained from this alternative learning task is then transferred to the real task—i.e.,
+somehow used to improve the learning in the target task.
+Speciﬁcally, let a task consist of a domain and a mapping. The domain, D, consists of an
+example/instance space, E, a sampling distribution, P(E), on E, and a featurization X(e) for
+any e ∈E, which provides a feature set for the example. The separation of the example space and
+the featurization is important—examples (users) are sampled, and possibly featurized in different
+ways. Crucial to understanding the transfer is to understand that users are sampled from distributions
+other than the target distribution, in order to augment the training data.
+Given the domain, a mapping, M, consists of a label/outcome, Y , and a function, f(·), that
+maps X to the label, Y . Any dataset, whether used for training or testing, represents such a learning
+task with an implicit example space, some implicit sampling distribution, an explicit featurization,
+and some implicit mapping. A target task includes a target domain DT = {ET , PT (ET ), XT (ET )}
+and a target mapping MT = {YT , fT (·)}. The ultimate goal is to build models that predict well for
+the target task, i.e., have as good as possible an estimate of fT (·). Each potential source task includes a source domain DS = {ES, PS(ES), XS(ES)} and source mapping MS = {YS, fS(·)},
+where DS ̸= DT and/or MS ̸= MT . Transfer learning aims to improve the learning of fT (·) (in
+DT ) by transferring knowledge of DS and MS into the estimation of fT (·). Note that, as with
+machine learning problems generally, the function f(·) is not observed but can be learned approximately from the data. We can use this characterization to deﬁne precisely the different datasets used
+by the M6D system.
+Recall the ultimate goal of our targeting system: identify internet users who are likely to purchase a particular product for the ﬁrst time shortly after seeing an advertisement. This ultimate goal
+is the target task. Under this premise, the ‘correct’ target sampling distribution PT for our models
+is the distribution of those users for whom we can win an ad impression given our pricing in a
+real-time auction and for whom there are no prior brand actions (purchases or site visits) related to
+the campaign in question. The target featurization XT (E) is chosen by M6D to be most broadly a
+consumer’s associated browsing history and characteristics inferrable from the consumer’s browser.
+The ultimate target outcome YT is binary: did/will the user purchase after seeing an ad?
+As pointed out previously, actually drawing sufﬁcient data from the target task is prohibitively
+expensive, and we can now state precisely why. There are two reasons: drawing from PT involves
+actually winning—purchasing—randomly selected impressions in the bidding systems . Moreover, these impressions must be purchased in a quantity that provides sufﬁcient positive instances
+to estimate a reliable, high-quality model given the feature space XT . Three factors make this impracticable:
+1. Most of the relevant information about purchase propensity is not demographic in nature but
+rather is hidden in the complex browsing history. As a result, the potentially informative feature
+space X is extremely large (in our case tens of millions of URLs even after massive reduction).
+2. YT has very, very few positive examples. The basic purchase rate for most of our advertisers
+products, in particular for prospects (consumers who have not bought or interacted with the
+brand before) is typically below 0.001% (sometimes well below) even when well targeted.
+Perlich et al
+3. Showing ads randomly to (non-targeted) browsers and then waiting for them to purchase leads
+to notably fewer individuals that purchase, as compared to targeting intelligently, and thus it is
+difﬁcult to convince advertisers to spend money on random ad targeting.
+Ultimately, the performance expectations of the advertisers do not allow for an expensive and
+lengthy “data gathering” period. Campaigns need to meet client goals in a relatively short period of
+time, often within the ﬁrst week of launch. M6D’s system solves this problem by using data it has
+gathered already. This data often goes back months to years and involves different P(E), as well
+as actions similar to and relevant to YT but in much greater supply. Sampling from these alternative
+processes forms the basis for transfer learning within the system.
+3.1 Possible Mappings/Labels for Targeted Advertising
+There are a number of more liberal deﬁnitions of labels Y that can be utilized to increase the number
+of positives for estimation. As mentioned, the primary target label of “purchase after being exposed
+to an ad” is a very rare event that requires running costly impressions. Alternative labels, candidates
+for YS, include: 1) clicking on an ad (still requires showing impressions), 2) any purchase (not just
+ﬁrst time) after an ad, 3) any purchase with or without an ad, and 4) any other brand action with or
+without an ad. The number of positively labeled internet users is larger for the alternative actions;
+in fact, 4 is a superset of 3 is a superset of 2. In addition to having a larger supply of YS than YT , for
+the transfer of knowledge to be effective, the estimated function fS(·) should be (closely) related to
+the function of interest fT (·). Consequently, the outcomes YS and YT should be (strongly) related.
+Intuitively, one interpretation is that whatever are the fundamental behavioral drivers for YT , they
+also should drive YS to some reasonable extent.
+3.2 Domains and Features of a Users’s Online Activity
+As deﬁned above a domain D has three main parts, the example space E, the sampling distribution P(E), and the featurization X(E). The example space most generally is the space of internet
+users/online consumers. This is globally true throughout the system. However, users are sampled
+in several different ways, speciﬁcally based on a set of events where M6D can interact with them.
+Individual internet users may be more or less likely to engage in speciﬁc sampling events (affecting
+P(E)), and this induces substantial heterogeneity across potential source and target tasks.
+Speciﬁcally, the events during which M6D encounters users are based on several different interaction scenarios:
+1. general internet activity—a user visiting a site/URL with which M6D has a data partnership,
+2. bid requests from the exchanges/bidding systems,
+3. showing an ad impression, whether targeted or untargeted,
+4. clicking on an ad,
+5. making a purchase at a campaign’s brand’s site,
+6. taking some other related online brand action that can be tracked online, including visiting the
+brand’s homepage, store locator page, etc.
+For this paper, the main differences between populations collected through the different sampling events are differences in the sampling distributions P(E). Thus, the data for a speciﬁc domain
+D comprise the set of instances collected via one of the above sampling methods, based on its corresponding distribution P(E). In our stage-1 experiments below, we use the union of all these events
+as the basis for the source domain. In practice, M6D builds different source-domain models based
+on the different events.
+Making things more complicated, sampling events can be used to label the examples—some of
+these events reﬂect brand interaction, others do not. Thus the system can build modeling data sets
+Machine learning for advertising
+URL visits
+Targeted Ads
+Stage 1 Task
+Stage 2 Task
+Target Task
+User Events
+Assign labels
+based on post
+view conversion
+Sample events from
+URL and brand visits
+characteristics and predictions
+from stage 1 models
+URL history
+(sparse binary)
+URL history (sparse binary)
+and characteristics
+Assign labels
+based on post
+view conversion
+Fig. 1 Conceptual overview of the different events and tasks, their feature sets and how they are sampled from browser
+events. The colors identify different event types; the italic text describes the featurization for the different tasks; dotted
+arrows and bold text speciﬁes the process of assigning labels; regular arrows indicate the event sampling; the dashed arrows
+show the stage 1 to stage 2 transition where the predictions of models from stage one form the new featurization for stage 2.
+by sampling a population from one event and assigning labels from a different event. For instance,
+those consumers who were shown an ad might be the population and the subset of those consumers
+who subsequently purchase from the brand’s website might be the positively labeled consumers.
+Alternatively, a set of consumers active within the system who may or may not have seen an ad
+could be the population, and the subset of them who have also visited the brand’s website could be
+the positively labeled set.
+We would ideally like to use all available information to make the best decision. So as described
+before, the target featurization XT (E) includes a consumer’s associated browsing history as well as
+other user information. In any of the above domains and event sample, we can characterize a user i
+by a large set of K features {x1i, x2i, . . . , xKi}. These features capture various aspects of the event,
+the user and the user’s internet browsing history. An example featurization might be based on the
+collection of URLs that the browser has visited in some pre-speciﬁed history. For example, some
+xki may be a binary indicator of the user having visited a unique URL in the past. This particular
+featurization will be denoted as Xbinary. Alternatively, each xki may be some real numbered value
+that reﬂects some weighting of recency and frequency of the browser visiting a particular URL.
+In the M6D production system when URLs are employed as features, the system hashes the URL
+string into a string token that is devoid of any semantic context or meaning. The actual URL is not
+saved. This is done in an effort to maintain the privacy and anonymity of the user. Additionally,
+features describing various characteristics of the user can be used, such as for how long the user
+has been observed, some measure of the amount of internet activity, coarse geographic location,
+and descriptive elements of the browser application the user is using (Xinfo). Appendix B uses this
+formal characterization to present the speciﬁc deﬁnitions of the target and source tasks we use in
+the experiments in section 4. Figure 1 highlights the main relationships between the user events
+(different colors identify different events and correspond in color to the sampling distribution of
+Perlich et al
+the tasks) on the left, the target task drawn from randomly targeted impressions and the two-staged
+transfer learning tasks.
+3.3 Two-Stage Transfer Learning
+So far we have identiﬁed many possible source learning tasks (domains and mappings) that can be
+utilized towards the ultimate goal of predicting the users who will most likely purchase a product
+after being exposed to an ad. Rather then selecting one, we use a two-stage transfer learning approach to learn multiple candidate mappings and then weight and combine them. Intuitively, the
+goal of the ﬁrst stage is to dramatically reduce the large target feature set XT so that in the second
+step, we can actually learn based on the target sampling distribution PT . The ﬁrst stage considers
+multiple, parallel source learning tasks. Each task has its own learning problem that estimates a
+function fs(X) to approximate the label YS. In the second step, we learn how to transfer the set
+of predictions from the ﬁrst stage by weighting the individual inputs by learning a linear classiﬁer.
+The details of this are presented below. The key to understanding the different source and target
+tasks is to understand the different events; these lead to different sampling distributions and labels,
+as depicted in Figure 1.
+An interesting caveat about the system is that the ‘correct’ target learning task, which is whether
+or not a consumer purchases following an ad impression, is sometimes not used in our production
+system to build models for a particular campaign. The reason is that for some campaigns, budgets
+make it unrealistic to serve enough impressions to observe a sufﬁcient number of conversions. In
+extreme cases, the conversion event of interest isn’t observed at all due to issues with instrumenting
+the tracking pixels on the brand’s website. In such cases, the closest outcome observed is used as
+the target learning task. In practice, the next best outcome is usually a visit to the brand’s website following an ad impression. A detailed analysis of such proxy outcomes shows that when
+attempting to predict purchases, using the site visit as the training outcome can signiﬁcantly outperform using a purchase as the training outcome. In light of these ﬁndings we will move on, no longer
+making a formal distinction between a purchase and a site visit; the union of the two will be considered as the the target label. This distinction is secondary for the transfer learning application in
+this paper, as we focus primarily on the sampling distributions P(E) and how site visits/purchases
+are incorporated as labels.
+Step 1 - Reducing the high-dimensional feature space
+The prime motivation of the ﬁrst stage in the transfer process is that the number of features in XT
+is very large while the target label YT is very rare. The cold-start problem can be thought of as an
+extreme case of not having sufﬁcient labeled data to learn a model. Given millions of ad impressions
+served, such a low base rate may or may not be a problem if X were of low cardinality. Thus, the
+goal of the ﬁrst step is to reduce the feature space in order to enable the learning from a sample
+drawn from the actual target sampling distribution PT .
+The ﬁrst stage involves learning multiple functional mappings in parallel, from different source
+tasks. The system creates multiple modeling datasets by sampling users from events that occur
+often, are relatively inexpensive, and are available prior to campaign start. Likewise, labels are assigned to the sampled users based on more widely available and related outcomes. One of the most
+effective approaches is simply to use every user who visits to the campaign’s website assign her a
+positive label, then to add a random sample of all users that were visiting any URL during the same
+time period as negative instances (as shown in Figure 1). Call this alternate outcome YS. Note that
+although superﬁcially similar, this in fact quite different from deﬁning a cohort of consumers that
+could be “won” in the auctions and waiting for them subsequently to take a brand action. We can
+learn a function fS(X) that approximates YS. Any learning algorithm that is appropriate for the
+given feature space Xbinary and is also scalable to tens of millions of features and tens of millions
+of examples may be used to learn fS(Xbinary). The production system at M6D currently uses both
+a modiﬁed naive Bayes and logistic regression trained with stochastic gradient descent to estimate
+Machine learning for advertising
+the multiple fS(Xbinary), due to these methods’ scalability and robustness in production.
+Stage 2 - Adjust to the target domain
+As discussed above, in the ﬁrst stage we estimate a number of models for each campaign, one
+for each suitable source task. In technical terms, let S be the set of source tasks that are suitable to be used in transfer learning. These source tasks are different combinations of domains
+and mappings as described above (for example, different sampling distributions and different label deﬁnitions). Given a user sampled in the target domain, we create an new featurization XS =
+[f1(Xbinary), f2(Xbinary), . . . , fn(Xbinary] where each fs(Xbinary) is the result of applying the
+learned function fs(·) for one of the source tasks. To this featurization can be appended the mostly
+numeric feature set Xinfo, capturing other user characteristics.
+In essence, we replace the original high-dimensional binary feature space in favor of a muchcondensed set of predictions from the ﬁrst stage models that have captured discriminative information. However, these predictions potentially have incurred a bias due to domain differences.
+The second stage uses a stacked ensemble to estimate a much lower-dimensional function YT =
+f(XS, Xinfo) in this compressed feature space. Having a much smaller (but still informative) feature space allows us to learn this second-stage model (i) using the target sampling distribution
+PT (E) (a random set of users without prior brand interactions from our control samples) and (ii)
+using a target that actually tracks outcomes forward in time and after the ad event. As discussed
+above, in certain cases even the true campaign target label of purchase isn’t available in sufﬁcient
+supply for this step. So ultimately, even the second stage can yet again be an instance of transfer
+learning (albeit one that we have studied intensely to convince ourselves that it indeed is appropriate ). Now we can move on to assess this transfer learning empirically, addressing two main
+questions:
+1. Does the increase in positive labels in stage 1 indeed improve performance considering the large
+bias resulting from the use of different sampling distributions and different deﬁnitions of labels?
+And as a side question: can we measure how different the tasks actually are?
+2. Does the adjustment of the domain and the labels in stage 2 improve over the initial performance
+of the stage-1 models with respect to the target task? Note that the models from the ﬁrst stage
+can be used directly in production to target browsers with high purchase propensity.
+In production, this two-step process produces two sets of models that are applied in sequence to
+identify the best browsers for targeting. Section 5 will speak to the production performance of the
+entire transfer system.
+4 Transfer Learning Results
+We now present results examining the different stages of the system’s transfer learning and provide
+empirical answers the two questions presented at the end of the last section. The two experiments
+use the production system to create training sets and we provide two evaluation/test sets to isolate
+the impact of training on different source tasks in stage 1 and of combining and weighting the
+resultant models in stage 2.
+The tasks on which we will evaluate the models in both stages have the correct sampling distribution PT (ET ) of the target task (the above-mentioned population of a random and untargeted set
+of users to whom we can show an ad and who have not taken a brand action previously) and use
+the featurization that was used for training. Note that in sequence, the models of stage 1 and stage
+2 provide a mapping of the complete feature set of the target featurization XT = (Xbinary, Xinfo)
+from both browsing history and user characteristics. Furthermore positive browsers are those who
+take a brand action within seven days of seeing the ad.
+Perlich et al
+4.1 The beneﬁts of stage-1 transfer
+This section shows that using a convenient sampling distribution PS(E) and labeling scheme that
+maximizes positives but does not reﬂect the actual target task often provides better results than
+if we were to just always use the sample PT (E) of the target task. From the transfer learning
+perspective, we will show that the estimation of function fS(·) is often a better predictor of YT than
+the estimation of fT (·).
+To demonstrate that the source and target tasks are indeed signiﬁcantly different, we empirically
+tested the difference in PT (E) between our target domain and the source domain PS(E) comprising
+all active internet consumers observed in our system. Speciﬁcally, we built a classiﬁer to distinguish
+users sampled from the two distributions using binary URL indicators as the feature set and training a linear logistic regression model with the class variable representing the domain from which
+the user was drawn. If this model has predictive power, then the domains indeed are measurably
+different—with respect to the featurization. Indeed, the model achieved an out-of-sample AUC of
+0.8 at predicting the domain, which suggests that there are signiﬁcant differences between the population of all active internet users and the population of those for which it is possible to bid and win
+impression opportunities within the ad exchanges.
+Data Details
+Proceeding to our main analysis, we deﬁne the source population ES as all active internet users
+who are observable within the system, and the sampling distribution PS(ES) is simply the empirical convenience distribution represented by taking the union of all the sampling events discussed
+in detail in the previous section. The source label YS indicates whether the user has visited the
+marketer’s website at any point in the past. We compare models trained on this source task against
+models trained directly using the target task. Speciﬁcally, the target population ET is all users (not
+targeted users) who appear in the ad exchanges and for whom we could win the auction at our desired bid price (with the corresponding PT (ET )) and the target label YT is a brand action following
+the ad. We estimated the functions fT (Xbinary) and fS(Xbinary) across 28 active campaigns. The
+evaluations are made on a sample distribution PT (ET ) of the target task using an out-of-sample and
+out-of-time holdout sample. For the experiments of this paper, each model is trained on data from
+the same 14-day time period, with identical feature sets. The only difference between the source and
+target tasks is the sampling distribution P that determines which users make it into the training sample. The (out-of-sample/out-of-time) evaluation holdout set comprises the following 7 days’ worth
+of target-task users. The results, presented below, show that this biased initial sampling scheme is
+better for learning from the massive, ﬁne-grained URL featurization.
+Modeling Details
+The stage-1 models presented here are trained with logistic regression based on the URL featurization (binary features). The logistic regression is trained using stochastic gradient descent (SGD)
+ for training, because it scales easily to millions of features and millions of examples. To specify
+the exact parameter settings, recall that SGD trains F(x) = βT x by processing each instance in
+the training set individually and making small incremental updates to each coefﬁcient along the
+gradient of the loss function. The loss function here is regularized maximum likelihood, optionally
+using L1- or L2-regularized loss (using the standard formulations). The SGD training process takes
+two parameters, hereafter called learning parameters. The ﬁrst, the learning rate, controls how
+aggressively the model coefﬁcients are updated with each instance and the second, the regularization parameter penalizes large coefﬁcients to avoid overﬁtting in high-dimensional feature spaces.
+Through careful experimentation (done previously over several years, on completely separate prior
+data), we have found a set of default learning parameters that works well across a wide variety of
+campaigns. Although we examine parameter tuning here for the purposes of our experiments, M6D
+typically does not conduct expensive hyper-parameter optimization on-the-ﬂy for each production
+model, as it increases training time dramatically, and generally reduces the robustness of the pro-
+Machine learning for advertising
+Lift of model trained on target task
+Lift of model trained on Stage−1 source task
+Fig. 2 Comparison of model performance between learning on the stage-1 source task and on learning on the target task
+(default learning parameters) when evaluated on the target task. Every point is a campaign. Points above the identity line
+indicate that the models trained on the source perform better on the target task than the models trained on the target task.
+duction system . Production parameter changes are done ofﬂine.
+Experimental Results
+The performance metric for these experiments is lift within the top 2% of the population: the number
+of positive examples in the top 2% of model scores divided by the number that would be expected
+from a random classiﬁer (i.e., 2% of all positives). This choice of metric reﬂects a typical campaign
+setup, where given a ﬁxed budget that allows targeting only a small proportion of browsers, M6D is
+expected to return as many conversions as possible. Each of the reported lift numbers is the average
+of 100 bootstrap estimates, in order to reduce the variance in the results.
+Figure 2 plots the performance of the model trained on the stage-1 source task against the
+performance of the model trained on the target task, as evaluated on the same target-task holdout
+data. Each point is one campaign; the x-axis plots the target-trained lift; the y-axis plots the sourcetrained lift. Models for which source training is better are above the diagonal line; models for which
+target training is better are below. Clearly, the stage-1 source-trained models usually outperform
+the target-trained models (20-3-5 win-tie-loss record, highly signiﬁcant by a sign test). Moreover,
+the source-trained models sometimes are much better, whereas when the target-trained models are
+better, the lift difference is small.
+In order to address the possibility that the default learning parameters are especially well-tuned
+to the stage-1 population, we conducted an extensive, expensive parameter search on a smaller set
+of seven campaigns. Speciﬁcally, we built models on both the stage-1 task and the target task using
+25 different combinations of learning rate and regularization parameter (including instances of both
+L1 and L2 regularization). For each campaign, we choose the set of learning parameters with the
+best two-fold cross-validation performance on the training set, and we report the performance of the
+Perlich et al
+Performance
+default eval
+best stage−1
+default stage−1
+Fig. 3 Comparison of the performance on the target task of stage-1 and target-task (eval) models for a seven campaigns (A-
+G) after tuning the learning parameters. The “best” model is the one that performed best in cross-validation on the training
+model learned with these chosen parameters, as well as the default-parameter model, on the same
+out-of-time test sets that we used for the prior experiments.
+Detailed results for these seven campaigns appear in Figure 3. Each cluster of bars represents
+the prediction performance of four different models at target-task prediction on the test set. From
+left to right, the bars represent the performance of: 1) the chosen-parameter model trained directly
+on the target task, 2) the default-parameter model trained directly on the target task, 3) the chosenparameter model trained on the stage-1 source task and 4) the default-parameter model trained on
+the stage-1 source task. In each of the seven cases, the model chosen by cross-validation on the
+stage-1 source task outperforms the “best” model built on the target task directly. In one case, the
+model trained with default learning parameters on the target task outperforms everything, but in
+general we see that even when tuning the learning parameters, training on the stage-1 source task
+remains the most effective strategy.
+These results are not necessarily intuitive—i.e., that learning from a completely different (source)
+training distribution and with a very different deﬁnition of positive vs. negative label would yield
+consistently better results in the target domain, but it is worth noting that the training population
+consistently provides more positive examples by at least an order of magnitude. For the campaigns
+in Figure 2, our stage-1 source population contained anywhere from 15 to 98 times as many positives as the target population. This suggests that the reduction in variance afforded by the increased
+positive-class signal is more than sufﬁcient to compensate for the bias introduced by training on
+a different sampling distribution and different labels. It seems likely that this result would hold in
+many real-word applications where positive-class data are scarce or expensive.
+Machine learning for advertising
+AUC − Stage−2 Model
+AUC − Best Stage−1 Model
+Fig. 4 Performance of the stage-2 stacked ensemble trained on the target task data compared to the best stage-1 model for
+each campaign. Performance is reported as the areas under the ROC curve (AUC) for each campaign and model. The stage-2
+models consistently outperform even the best stage-1 models. (Here, to be conservative, the “best” stage-1 models are chosen
+based on their performance on the test data.)
+4.2 Stage-2 Ensemble Model
+As we mentioned earlier, our production system builds several stage-1 source models for each campaign. The second stage of our transfer process uses the output scores produced by these models
+as components of a lower-dimensional featurization of the target-task sample of users (those who
+have seen a randomly targeted impression). In this section, we compare the performance of each
+“stacked” stage-2 model to the performance of its constituent stage-1 models. This will assess
+whether the explicit adjustment to the target task, via the retrained ensemble, improves over simply
+using one of the source models without target-task adjustment.
+Data Details
+For these experiments, as the basis for the target distribution we collected 30 days of randomly
+targeted users from PT (ET ). The base rates of the campaigns vary dramatically; these data sets had
+anywhere from 50 to 10,000 positive examples. In contrast, each campaign has a huge number of
+negative examples. For these experiments, we selected a random sample of 50,000 negatives.2 The
+stage-2 featurization produces approximately 50 features, including all of the stage-1 model scores
+for the particular campaign and user, and a number of user characteristic features (Xinfo) such as
+browser type, age of the cookie, and geo-location information.
+Modeling Details
+The stage-2 model is a logistic regression classiﬁer trained using elastic net regularization.
+Elastic net regularization combines L1 and L2 regularization and will usually send some model
+coefﬁcients to zero, and thus also serves as feature selection (as with straight L1 regularization).
+Experimental Results
+Figure 4 shows a performance comparison across 29 different campaigns, a representative sample of
+2 The AUC results below are not affected by the arbitrary change to the base rate. The training may be affected, but
+generally if a ﬁxed number of examples is to be used for training, a more-balanced sample generally leads to better predictive
+performance, as measured by AUC .
+Perlich et al
+target tasks that are part of recurring advertising campaigns. We plot the area under the ROC curve
+(AUC) of the stage-2 model on the y-axis against the AUC of the best-performing stage-1 model
+on the x-axis. All performance estimates were calculated on an out-of-time hold-out set similar to
+stage 1 methodology. An important concern in stacking is ensuring out-of-time evaluation across
+both stages. The evaluation period was not part of the stage-1 training period.
+The performance differences between the stage-2 learner and the best stage-1 learner show that
+combining source models and incorporating information about the target task signiﬁcantly improves
+the effectiveness of the models. The median and average improvement in AUC across the different
+campaigns were 0.0375 and 0.0411. The improvement is even more dramatic for cases where the
+best stage-1 model has relatively poor performance. For cases where the best stage-1 model is in
+the bottom 50% of campaigns, the median and average improvements due to the stage-2 ensemble
+are 0.056 and 0.061 respectively. Any “negative transfer” is implicitly handled by the learning
+procedure, meaning that the logistic model will assign a very low if not negative parameter if one of
+the stage-1 models is bad. Any stage-1 model with a meaningful relationship to the label, positive
+or negative, should receive an appropriate weight in the ensemble. There are two cases where the
+ensemble learner underperforms the best stage-1 learner. These are cases where the stage-1 model
+already has very high performance and these results suggest that the experimental procedure may
+have overﬁt. Note that for illustration (and to be conservative) we compare the stacked-ensemble
+performance to the best stage-1 learner as selected on the test (holdout) data, which involves a
+multiple comparisons problem ; choosing the best stage-1 learner via cross-validation should
+only increase the perceived advantage for the stacked ensemble, but does not illustrate fully the
+advantage of the stage-2 learning.
+The reader might notice the variance in AUC across campaigns in both stages of the transfer
+process. Such variance is common in this application due to the diversity of clients and brands.
+Some are mass market brands, such as well known banks, telephone service providers and soft
+drink makers; others are niche brands, such as high-end fashion retailers, luxury travel destinations
+and specialized hobbies. Some of the latter yield much greater discrimination ability. As a brand
+gets more popular, its resulting customer base becomes more heterogenous and this makes building
+discriminative models more difﬁcult. Therefore, the absolute values are less important than the
+comparisons across methods.
+5 Production Results
+The systematic experiments in the prior section showed the contributions of the transfer stages in
+lab experiments (on real data). We now present two sets of results demonstrating the system in
+action. It is worthwhile to consider who are the “customers” of the deployed machine learning
+system. The immediate customers of the system are the company ofﬁcers (e.g., the CEO) and the
+Board of Directors. The machine learning system is integral to the performance of the company,
+for which they are responsible. Therefore, we ﬁrst will show the overall performance results as
+viewed by these stakeholders. The ultimate customers of the decisions made by the system are the
+company’s advertising clients. Therefore, we also provide testimonials from these clients describing
+their individual experiences with the system.
+5.1 Results for the CEO and Board
+M6D tracks a number of key performance indicators (KPI). Typically there is a notable variation
+in goals between different campaigns (see cases in Appendix A for examples). To allow for consistent performance tracking and statistical reliability, M6D computes a lift measure: the ratio of
+the number of site-visit conversions on all targeted prospects to the number of site-visit conversions
+on the randomly targeted control group that also saw ads for the campaign. Note that we again
+use site-visit instead of the purchase for evaluation . This is necessary for two reasons: 1) some
+Machine learning for advertising
+NN Lift over RON
+Total Impressions
+Fig. 5 The left axis (with wider light colored bars) shows the impression volume in millions, the right axis the performance
+in terms of lift on post-view conversions of the the targeted campaign over our (untargeted/random) control group. The
+campaigns in the graph are sorted by performance (better to the right). Every campaign has two bars, a wider but lighter one
+for volume and a narrower darker for performance. The median performance of about 5x is highlighted in the middle. The
+performance bars for the right most 9 campaigns are truncated at a lift of 25x.
+campaigns have no purchase events for various reasons, and 2) even if they do, we often have too
+few post-impression conversions in the randomly targeted control group to estimate the baseline
+(random) conversion rate reliably. In the lab results presented above, we used a targeting threshold
+of 2% to compute the lift. Here we use whatever the targeting threshold actually was for that campaign, which is determined by a complex constellation of business factors including the targeting
+budget. The results in Figure 5 show that for all campaigns model-based targeting outperforms random targeting; the median lift is close to 5 and for some 15% of campaigns the lift easily exceeds a
+factor of 25.
+5.2 Individual Client Cases
+We have included in Appendix A a number of detailed cases reporting on actual reactions from
+customers in a variety of industries including retail, travel, automotive, consumer packaged goods,
+and education. Generally large advertisers such as these engage multiple targeting ﬁrms, and compare the targeters’ performances using their own internal evaluations. Note that we cannot reject the
+concern that there is a positive bias in the reported results, as they are not subject to the scientiﬁc
+rigor we might desire and are more likely to be published if the customer was satisﬁed. This being
+said, the fact that the presented approach can achieve as impressive results as those reported in the
+cases is nevertheless testimony to the value of the machine learning system.
+Brands use a number of techniques to assess and compare performance: 1) use multiple targeting
+ﬁrms (“on the plan”) at the same time and compare for instance the conversion results (subject to
+attribution) or the (“effective”) Cost Per Acquisition (CPA or eCPA), 2) involve a ﬁrm like Nielsen
+to assess the performance of the targeting as well as the causal impact of the advertisement, and
+3) have some internal process to measure ROI based on the estimated campaign-induced increase
+in revenue.
+These case study results show that on a number of campaigns the machine learning system’s
+targeting performs extremely well and, in particular, notably better than the competitors. Ultimately
+Perlich et al
+M6D has able to achieve very high customer satisfaction in terms of ad impact (up to 690%), ROI
+(10x), CPA (63% better than goal) and ultimately consistent campaign renewals for M6D.
+6 Conclusion
+This paper presents the detailed problem formulation incorporated by a large-scale, real-world, production machine learning system for targeted display advertising. The problem formulation involves
+the use of labels and sampling distributions different from the target task, in order to deal with the
+practical inability to acquire sufﬁcient data from the target environment. The system learns models
+with different “source” sampling distributions and training labels, and then transfers that knowledge
+to the target task. Experimental results show that the conscious use of biased proxy populations for
+training can improve model performance in situations where data are scarce.
+More speciﬁcally, sampling data from the target task is expensive and positive outcomes are
+quite scarce, especially considering the very high dimensionality of the featurization (based on
+the URLs a consumer has visited). The system trains the full-ﬂedged high-dimensional models
+on proxy populations where examples are cheaper and labels are more abundant. Then, it trains a
+much lower-dimensional, stacked ensemble model, with the previous model scores as features, on
+a smaller sample from the target sampling distribution. The experimental results show that each
+component of the multi-stage transfer learning system improves over not using that component.
+The results and approaches presented in this paper represent the culmination of knowledge from
+years of development of the massive-scale machine learning system that is deployed and in regular
+use by M6D. The development of this system has resulted in many lessons learned. Some of the
+most important lessons we learned from this experience are presented above and we will summarize
+and synthesize those lessons here:
+1. In building machine learning applications, thinking explicitly about the subtleties in the deﬁnitions of E, P(E), and Y can allow signiﬁcant improvements in the result of machine learning.
+For example, in this application we see that drawing data from distributions other than the target
+distribution as well as using labels different from the target label both can improve performance.
+Thinking carefully about these subtleties further brings to light the need to adjust the results of
+these models to the target distribution.
+2. This transfer learning approach has additional practical beneﬁts that we have not emphasized. It
+addresses directly the “cold-start” problem: in cases where no advertisements have been shown,
+one cannot learn models for the target task. However, the source models do not depend on
+advertisements being shown, and they can be used directly when there are too few training data
+from the target domain. In addition, a multi-stage approach like that applied here—learning
+source models and then correcting them—is especially attractive in production settings where
+new modeling methods can be added more easily than existing production procedures can be
+changed. New machine learning methods operating on the super-high-dimensional data can
+be added in easily, and they immediately become additional features in the stage-2 stacking
+procedure. The system seamlessly evaluates them, via the stage-2 learning, and if they add value
+(as determined empirically) then they get signiﬁcant weights in the resultant stage-2 model.
+3. In almost all situations the data that is necessary to most precisely and accurately complete the
+task at hand is very expensive and difﬁcult to obtain. It is important to come to terms with this
+quickly and adjust by collecting cheaper data that may not be optimal but still can achieve one’s
+4. In many cases a large amount of data that is not from the optimal data generating distribution
+is better than a small amount of data from the optimal data generating distribution. This does
+not mean that more data is always better. It is always important to weigh the cost of getting data
+from other source tasks versus the beneﬁt of having more of that data. M6D explicitly conducts
+evaluations of the cost/beneﬁt tradeoff of acquiring data from each data partner, based on the
+improvement (or lack thereof) of adding it in as a new source domain.
+Machine learning for advertising
+5. In many situations there are practical constraints that make training on the ultimate outcome of
+interest, for example purchases, sub-optimal. In those situations alternative outcomes or proxies
+like site visits may result in better performing models.
+6. When building an automated system that learns many models simultaneously, updates those
+models on an ongoing basis, and needs to be scalable, it is important to make learning decisions
+that beneﬁt the majority of the models without severely damaging any of them.
+7. The idea of progressive dimensionality reduction, building successively lower-dimensional models, is useful in its own right separate from these production constraints whenever data are available at multiple resolutions. It is ineffective to mix features such as browser characteristics (or
+demographics, if a targeter wished to acquire such data) directly with millions of binary URL
+indicators. On the other hand, such lower-dimensional feature sets integrate smoothly with the
+lower-dimensional set of stage-1 model outputs.
+We hope that these lessons will be useful to other practitioners in their efforts to apply machine
+learning, especially in situations where they seek to build an automated system of many models
+that regulates itself with minimal human intervention. We believe that in real applications, learning
+from distributions and/or with labels that do not match the target task exactly is much more common than is apparent in the machine learning research literature. This has been noted explicitly for
+sales targeting . For credit scoring, models often are built at least in part from data on a credit
+issuer’s customers, which is a signiﬁcantly different distribution from that of the target task (credit
+applicants); similarly, in targeted marketing, predicting response level generally is done based on
+those customers who have responded, even when the target task is to estimate the response level
+across the prospect population. Both of these are instances of learning under selection bias, which
+has been studied extensively . In fraud detection data often is drawn from different sources and
+composed into training data, without (necessarily) careful consideration of the target sampling distribution . For webpage classiﬁcation for safe advertising, data on the very rare classes of interest
+are drawn from all manner of sources different from the actual target task . In some of these
+applications, such as the aforementioned credit scoring and traditional targeted marketing, long experience has led some practitioners to think about certain issues of transfer learning explicitly (even
+if they don’t call it that). In other domains practitioners proceed without carefully thinking about
+issues of transfer. Further, as we have illustrated, often the transfer is much more nuanced than is
+accounted for by the common corrections for selection bias.
+This paper illustrates how transfer learning can lead to measurable improvements, and we assert
+that at least in our case thinking explicitly about the transfer aspects of such applications has led to
+more improvement than if such transfer were simply done based on modeling intuition.

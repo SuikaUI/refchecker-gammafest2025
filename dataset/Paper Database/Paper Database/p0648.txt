@@ -1,0 +1,635 @@
+Few-Shot Learning via Embedding Adaptation with Set-to-Set Functions
+Han-Jia Ye*
+Nanjing University
+ 
+Hexiang Hu
+ 
+De-Chuan Zhan
+Nanjing University
+ 
+USC & Google
+ 
+Learning with limited data is a key challenge for visual recognition. Many few-shot learning methods address
+this challenge by learning an instance embedding function
+from seen classes and apply the function to instances from
+unseen classes with limited labels. This style of transfer
+learning is task-agnostic: the embedding function is not
+learned optimally discriminative with respect to the unseen
+classes, where discerning among them leads to the target task. In this paper, we propose a novel approach to
+adapt the instance embeddings to the target classiﬁcation
+task with a set-to-set function, yielding embeddings that are
+task-speciﬁc and are discriminative. We empirically investigated various instantiations of such set-to-set functions and
+observed the Transformer is most effective — as it naturally
+satisﬁes key properties of our desired model. We denote this
+model as FEAT (few-shot embedding adaptation w/ Transformer) and validate it on both the standard few-shot classi-
+ﬁcation benchmark and four extended few-shot learning settings with essential use cases, i.e., cross-domain, transductive, generalized few-shot learning, and low-shot learning.
+It archived consistent improvements over baseline models
+as well as previous methods, and established the new stateof-the-art results on two benchmarks.
+1. Introduction
+Few-shot visual recognition emerged
+as a promising direction in tackling the challenge of learning new visual concepts with limited annotations.
+Concretely, it distinguishes two sets of visual concepts: SEEN
+and UNSEEN ones. The target task is to construct visual
+classiﬁers to identify classes from the UNSEEN where each
+class has a very small number of exemplars (“few-shot”).
+The main idea is to discover transferable visual knowledge in the SEEN classes, which have ample labeled instances, and leverage it to construct the desired classiﬁer.
+For example, state-of-the-art approaches for few-shot learn-
+*Work mostly done when the author was a visiting scholar at USC.
+†On leave from USC
+ing usually learn a discriminative instance
+embedding model on the SEEN categories, and apply it to
+visual data in UNSEEN categories. In this common embedding space, non-parametric classiﬁers (e.g., nearest neighbors) are then used to avoid learning complicated recognition models from a small number of examples.
+Such approaches suffer from one important limitation.
+Assuming a common embedding space implies that the discovered knowledge – discriminative visual features – on
+the SEEN classes are equally effective for any classiﬁcation
+tasks constructed for an arbitrary set of UNSEEN classes. In
+concrete words, suppose we have two different target tasks:
+discerning “cat” versus “dog” and discerning “cat” versus
+“tiger”. Intuitively, each task uses a different set of discriminative features. Thus, the most desired embedding model
+ﬁrst needs to be able to extract discerning features for either
+task at the same time. This could be a challenging aspect in
+its own right as the current approaches are agnostic to what
+those “downstream” target tasks are and could accidentally
+de-emphasize selecting features for future use. Secondly,
+even if both sets of discriminative features are extracted,
+they do not necessarily lead to the optimal performance for
+a speciﬁc target task. The most useful features for discerning “cat” versus “tiger” could be irrelevant and noise to the
+task of discerning “cat” versus “dog”!
+What is missing from the current few-shot learning approaches is an adaptation strategy that tailors the visual
+knowledge extracted from the SEEN classes to the UNSEEN
+ones in a target task. In other words, we desire separate embedding spaces where each one of them is customized such
+that the visual features are most discriminative for a given
+task. Towards this, we propose a few-shot model-based embedding adaptation method that adjusts the instance embedding models derived from the SEEN classes. Such modelbased embedding adaptation requires a set-to-set function: a
+function mapping that takes all instances from the few-shot
+support set and outputs the set of adapted support instance
+embeddings, with elements in the set co-adapting with each
+other. Such output embeddings are then assembled as the
+prototypes for each visual category and serve as the nearest neighbor classiﬁers.
+Figure 1 qualitatively illustrates
+ 
+School bus
+Golden retriever
+Theater curtain
+Adaptation
+School bus
+Adaptation
+Scoreboard
+Golden retriever
+Adaptation
+Golden retriever
+Adaptation
+(a) Acc↑: 40.33% →55.33%
+(b) Acc↑: 48.00% →69.60%
+(c) Acc↑: 43.60% →63.33%
+(d) Acc↓: 56.33% →47.13%
+Figure 1: Qualitative visualization of model-based embedding adaptation procedure (implemented using FEAT) on test tasks (refer to
+§ 5.2.2 for more details). Each ﬁgure shows the locations of PCA projected support embeddings (class prototypes) before and after the
+adaptation of FEAT. Values below are the 1-shot 5-way classiﬁcation accuracy before and after the the adaptation. Interestingly, the
+embedding adaptation step of FEAT pushes the support embeddings apart from the clutter and toward their own clusters, such that they can
+better ﬁts the test data of its categories. (Best view in colors!)
+the embedding adaptation procedure (as results of our best
+model). These class prototypes spread out in the embedding
+space toward the samples cluster of each category, indicating the effectiveness of embedding adaptation.
+In this paper, we implement the set-to-set transformation
+using a variety of function approximators, including bidirectional LSTM (Bi-LSTM), deep sets , graph convolutional network (GCN) , and Transformer .
+Our experimental results (refer to § 5.2.1) suggest that
+Transformer is the most parameter efﬁcient choice that at
+the same time best implements the key properties of the desired set-to-set transformation, including contextualization,
+permutation invariance, interpolation and extrapolation capabilities (see § 4.1). As a consequence, we choose the
+set-to-set function instantiated with Transformer to be our
+ﬁnal model and denote it as FEAT (Few-shot Embedding
+Adaptation with Transformer). We further conduct comprehensive analysis on FEAT and evaluate it on many extended
+tasks, including few-shot domain generalization, transductive few-shot learning, and generalized few-shot learning.
+Our overall contribution is three-fold.
+• We formulate the few-shot learning as a model-based embedding adaptation to make instance embeddings taskspeciﬁc, via using a set-to-set transformation.
+• We instantiate such set-to-set transformation with various
+function approximators, validating and analyzing their
+few-shot learning ability, task interpolation ability, and
+extrapolation ability, etc. It concludes our model (FEAT)
+that uses the Transformer as the set-to-set function.
+• We evaluate our FEAT model on a variety of extended
+few-shot learning tasks, where it achieves superior performances compared with strong baseline approaches.
+2. Related Work
+Methods speciﬁcally designed for few-shot learning fall
+broadly into two categories. The ﬁrst is to control how a
+classiﬁer for the target task should be constructed.
+fruitful idea is the meta-learning framework where the
+classiﬁers are optimized in anticipation that a future update due to data from a new task performs well on that
+task , or the classiﬁer itself is
+directly meta-predicted by the new task data .
+Another line of approach has focused on learning generalizable instance embeddings 
+and uses those embeddings on simple classiﬁers such as
+nearest neighbor rules. The key assumption is that the embeddings capture all necessarily discriminative representations of data such that simple classiﬁers are sufﬁced, hence
+avoiding the danger of overﬁtting on a small number of labeled instances. Early work such as ﬁrst validated the
+importance of embedding in one-shot learning, whilst 
+proposes to learn the embedding with a soft nearest neighbor objective, following a meta-learning routine. Recent
+advances have leveraged different objective functions for
+learning such embedding models, e.g., considering the class
+prototypes , decision ranking , and similarity comparison . Most recently, utilizes the graph convolution network to unify the embedding learning.
+Our work follows the second school of thoughts. The
+main difference is that we do not assume the embeddings learned on SEEN classes, being agnostic to the target tasks, are necessarily discriminative for those tasks.
+In contrast, we propose to adapt those embeddings for
+each target task with a set-to-set function so that the transformed embeddings are better aligned with the discrimination needed in those tasks. We show empirically that such
+task-speciﬁc embeddings perform better than task-agnostic
+MetaOptNet and CTM follow the same
+spirit of learning task-speciﬁc embedding (or classiﬁers) via
+either explicitly optimization of target task or using concentrator and projector to make distance metric task-speciﬁc.
+Classification
+Soft Nearest
+(a) Instance Embedding
+Classification
+Adaptation
+Soft Nearest
+Train Instance
+Test Instance
+Task Agnostic
+Task Specific
+(b) Embedding Adaptation
+Set-to-Set Function
+Illustration of the proposed Few-Shot Embedding
+Adaptation Transformer (FEAT). Existing methods usually use the
+same embedding function E for all tasks. We propose to adapt the
+embeddings to each target few-shot learning task with a set-to-set
+function such as Transformer, BiLSTM, DeepSets, and GCN.
+3. Learning Embedding for Task-agnostic FSL
+In the standard formulation of few-shot learning
+(FSL) , a task is represented as a M-shot N-way
+classiﬁcation problem with N classes sampled from a set
+of visual concepts U and M (training/support) examples
+per class.
+We denote the training set (also referred as
+support sets in the literature) as Dtrain = {xi, yi}NM
+with the instance xi ∈RD and the one-hot labeling vector yi ∈{0, 1}N. We will use “support set” and “training set” interchangeably in the paper. In FSL, M is often small (e.g., M = 1 or M = 5).
+The goal is to
+ﬁnd a function f that classiﬁes a test instance xtest by
+ˆytest = f(xtest; Dtrain) ∈{0, 1}N.
+Given a small number of training instances, it is challenging to construct complex classiﬁers f(·). To this end,
+the learning algorithm is also supplied with additional data
+consisting of ample labeled instances. These additional data
+are drawn from visual classes S, which does not overlap
+with U. We refer to the original task as the target task which
+discerns N UNSEEN classes U. To avoid confusion, we denote the data from the SEEN classes S as DS.
+To learn f(·) using DS, we synthesize many M-shot Nway FSL tasks by sampling the data in the meta-learning
+manner . Each sampling gives rise to a task to classify a test set instance xS
+test into one of the N SEEN classes
+by f(·), where the test instances set DS
+test is composed of
+the labeled instances with the same distribution as DS
+Formally, the function f(·) is learnt to minimize the averaged error over those sampled tasks
+f ∗= arg min
+train), yS
+where the loss ℓ(·) measures the discrepancy between the
+prediction and the true label. For simplicity, we have assumed we only synthesize one task with test set DS
+optimal f ∗is then applied to the original target task.
+We consider the approach based on learning embeddings
+Algorithm 1 Training strategy of embedding adaptation
+Require: Seen class set S
+1: for all iteration = 1,...,MaxIteration do
+Sample N-way M-shot (DS
+test) from S
+Compute φx = E(x), for x ∈X S
+train ∪X S
+for all (xS
+Compute {ψx ; ∀x ∈X S
+train} with T via Eq. 3
+Predict ˆyS
+test with {ψx} as Eq. 4
+Compute ℓ(ˆyS
+test) with Eq. 1
+Compute ∇E,T
+test ℓ(ˆyS
+Update E and T with ∇E,T use SGD
+11: end for
+12: return Embedding function E and set function T.
+for FSL (see Figure 2 (a) for an overview). In particular, the classiﬁer f(·) is composed of two elements. The
+ﬁrst is an embedding function φx = E(x) ∈Rd that maps
+an instance x to a representation space. The second component applies the nearest neighbor classiﬁers in this space:
+ˆytest = f(φxtest; {φx, ∀(x, y) ∈Dtrain})
+ sim(φxtest, φx)
+· y, ∀(x, y) ∈Dtrain
+Note that only the embedding function is learned by optimizing the loss in Eq. 1. For reasons to be made clear in
+below, we refer this embedding function as task-agnostic.
+4. Adapting Embedding for Task-speciﬁc FSL
+In what follows, we describe our approach for few-shot
+learning (FSL). We start by describing the main idea (§ 4.1,
+also illustrated in Figure 2), then introduce the set-to-set
+adaptation function (§ 4.2). Last are learning (§ 4.3) and
+implementations details (§ 4.4).
+4.1. Adapting to Task-Speciﬁc Embeddings
+The key difference between our approach and traditional
+ones is to learn task-speciﬁc embeddings. We argue that the
+embedding φx is not ideal. In particular, the embeddings do
+not necessarily highlight the most discriminative representation for a speciﬁc target task. To this end, we introduce an
+adaption step where the embedding function φx (more precisely, its values on instances) is transformed. This transformation is a set-to-set function that contextualizes over
+the image instances of a set, to enable strong co-adaptation
+of each item.
+Instance functions fails to have such coadaptation property.
+Furthermore, the set-to-set-function
+receives instances as bags, or sets without orders, requiring
+the function to output the set of reﬁned instance embeddings
+while being permutation-invariant. Concretely,
+{ψx ; ∀x ∈Xtrain} = T ({φx ; ∀x ∈Xtrain})
+= T (π {φx ; ∀x ∈Xtrain}))
+where Xtrain is a set of all the instances in the training set
+Dtrain for the target task. π(·) is a permutation operator
+over a set. Thus the set of adapted embedding will not
+change if we apply a permutation over the input embedding
+set. With adapted embedding ψx, the test instance xtest can
+be classiﬁed by computing nearest neighbors w.r.t. Dtrain:
+ˆytest = f(φxtest; {ψx, ∀(x, y) ∈Dtrain})
+Our approach is generally applicable to different types of
+task-agnostic embedding function E and similarity measure
+sim(·, ·), e.g., the (normalized) cosine similarity or the
+negative distance . Both the embedding function E and
+the set transformation function T are optimized over synthesized FSL tasks sampled from DS, sketched in Alg. 1.
+Its key difference from conventional FSL is in the line 4 to
+line 8 where the embeddings are transformed.
+4.2. Embedding Adaptation via Set-to-set Functions
+Next, we explain various choices as the instantiations of
+the set-to-set embedding adaptation function.
+Bidirectional LSTM (BILSTM) is one of the
+common choice to instantiate the set-to-set transformation,
+where the addition between the input and the hidden layer
+outputs of each BILSTM cell leads to the adapted embedding. It is notable that the output of the BILSTM suppose to
+depend on the order of the input set. Note that using BIL-
+STM as embedding adaptation model is similar but different
+from the fully conditional embedding , where the later
+one contextualizes both training and test instance embedding altogether, which results in a transductive setting.
+DeepSets is inherently a permutation-invariant transformation function. It is worth noting that DEEPSETS aggregates the instances in a set into a holistic set vector. We consider two components to implement such DeepSets transformation, an instance centric set vector combined with a set
+context vector. For x ∈Xtrain, we deﬁne its complementary set as x∁. Then we implement the DEEPSETS by:
+ψx = φx + g([φx;
+In Eq. 5, g and h are two-layer multi-layer perception
+(MLP) with ReLU activation which map the embedding
+into another space and increase the representation ability
+of the embedding. For each instance, embeddings in its
+complementary set is ﬁrst combined into a set vector as the
+context, and then this vector is concatenated with the input
+embedding to obtain the residual component of adapted embedding. This conditioned embedding takes other instances
+in the set into consideration, and keeps the “set (permutation
+invariant)” property. In practice, we ﬁnd using the maximum operator in Eq. 5 works better than the sum operator
+suggested in .
+Graph Convolutional Networks (GCN) propagate the relationship between instances in the set. We ﬁrst
+construct the degree matrix A to represent the similarity between instances in a set. If two instances come from the
+same class, then we set the corresponding element in A to
+1, otherwise to 0. Based on A, we build the “normalized”
+adjacency matrix S for a given set with added self-loops
+2 (A + I)D−1
+2 . I is the identity matrix, and D is
+the diagonal matrix whose elements are equal to the sum of
+elements in the corresponding row of A + I.
+Let Φ0 = {φx ; ∀x ∈Xtrain}, the relationship between
+instances could be propagated based on S, i.e.,
+Φt+1 = ReLU(SΦtW) , t = 0, 1, . . . , T −1
+W is a projection matrix for feature transformation.
+GCN, the embedding in the set is transformed based on
+Eq. 6 multiple times, and the ﬁnal ΦT gives rise to the {ψx}.
+Transformer. We use the Transformer architecture to implement T. In particular, we employ selfattention mechanism to transform each instance
+embedding with consideration to its contextual instances.
+Note that it naturally satisﬁes the desired properties of T
+because it outputs reﬁned instance embeddings and is permutation invariant. We denote it as Few-Shot Embedding
+Adaptation with Transformer (FEAT).
+Transformer is a store of triplets in the form of (query
+Q, key K, and value V). To compute proximity and return values, those points are ﬁrst linearly mapped into some
+space K = W ⊤
+φxk; ∀xk ∈K
+∈Rd×|K|, which
+is also the same for Q and V with WQ and WV respectively. Transformer computes what is the right value for a
+query point — the query xq ∈Q is ﬁrst matched against
+a list of keys K where each key has a value V . The ﬁnal value is then returned as the sum of all the values
+weighted by the proximity of the key to the query point,
+i.e. ψxq = φxq + P
+k αqkV:,k, where
+and V:,k is the k-th column of V . In the standard FSL setup,
+we have Q = K = V = Xtrain.
+4.3. Contrastive Learning of Set-to-Set Functions
+To facilitate the learning of embedding adaptation, we
+apply a contrastive objective in addition to the general one.
+It is designed to make sure that instances embeddings after adaptation is similar to the same class neighbors and
+dissimilar to those from different classes. Speciﬁcally, the
+embedding adaptation function T is applied to instances of
+each n of the N class in DS
+test, which gives rise to
+the transformed embedding ψ′
+x and class centers {cn}N
+Then we apply the contrastive objective to make sure training instances are close to its own class center than other
+centers. The total objective function (together with Eq. 1) is
+shown as following:
+L(ˆytest, ytest) = ℓ(ˆytest, ytest)
+xtest, cn)
+This contrastive learning makes the set transformation extract common characteristic for instances of the same category, so as to preserve the category-wise similarity.
+4.4. Implementation details
+We consider three different types of convolutional networks as the backbone for instance embedding function E:
+1) A 4-layer convolution network (ConvNet) 
+and 2) the 12-layer residual network (ResNet) used in ,
+and 3) the Wide Residual Network (WideResNet) .
+We apply an additional pre-training stage for the backbones
+over the SEEN classes, based on which our re-implemented
+methods are further optimized. To achieve more precise embedding, we average the same-class instances in the training set before the embedding adaptation with the set-toset transformation. Adam and SGD are used to optimize ConvNet and ResNet variants respectively. Moreover, we follow the most standard implementations for the
+four set-to-set functions — BiLSTM , DeepSets ,
+Graph Convolutional Networks (GCN) and Transformer (FEAT) .
+We refer readers to supplementary
+material (SM) for complete details and ablation studies of
+each set-to-set functions. Our implementation is available
+at 
+5. Experiments
+In this section, we ﬁrst evaluate a variety of models for
+embedding adaptation in § 5.2 with standard FSL. It concludes that FEAT (with Transformer) is the most effective
+approach among different instantiations. Next, we perform
+ablation studies in § 5.2.2 to analyze FEAT in details. Eventually, we evaluate FEAT on many extended few-shot learning tasks to study its general applicability (§ 5.3).
+study includes few-shot domain generalization, transductive few-shot learning, generalized few-shot learning, and
+large-scale low-shot learning (refer to SM).
+5.1. Experimental Setups
+MiniImageNet and TieredImageNet 
+datasets are subsets of the ImageNet . MiniImageNet
+includes a total number of 100 classes and 600 examples
+per class. We follow the setup provided by , and use
+64 classes as SEEN categories, 16 and 20 as two sets of
+UNSEEN categories for model validation and evaluation respectively.
+TieredImageNet is a large-scale dataset with
+more categories, which contains 351, 97, and 160 categories
+for model training, validation, and evaluation, respectively.
+In addition to these, we investigate the OfﬁceHome 
+dataset to validate the generalization ability of FEAT across
+domains. There are four domains in OfﬁceHome, and two
+of them (“Clipart” and “Real World”) are selected, which
+contains 8722 images. After randomly splitting all classes,
+25 classes serve as the seen classes to train the model, and
+the remaining 15 and 25 classes are used as two UNSEEN
+for evaluation. Please refer to SM for more details.
+Evaluation protocols. Previous approaches 
+usually follow the original setting of and evaluate the
+models on 600 sampled target tasks (15 test instances per
+In a later study , it was suggested that such
+an evaluation process could potentially introduce high variances. Therefore, we follow the new and more trustworthy
+evaluation setting to evaluate both baseline models and our
+approach on 10,000 sampled tasks. We report the mean accuracy (in %) as well as the 95% conﬁdence interval.
+Baseline and embedding adaptation methods.
+We reimplement the prototypical network (ProtoNet) as a
+task-agnostic embedding baseline model. This is known
+as a very strong approach when the backbone architecture is deep, i.e., residual networks . As suggested
+by , we tune the scalar temperature carefully to scale
+the logits of both approaches in our re-implementation. As
+mentioned, we implement the embedding adaptation model
+with four different function approximators, and denote them
+as BILSTM, DEEPSETS, GCN, and FEAT (i.e. Transformer).
+The concrete details of each model are included in the SM.
+Backbone pre-training.
+Instead of optimizing from
+scratch, we apply an additional pre-training strategy as
+suggested in . The backbone network, appended
+with a softmax layer, is trained to classify all SEEN
+classes with the cross-entropy loss (e.g., 64 classes in the
+MiniImageNet).
+The classiﬁcation performance over the
+penultimate layer embeddings of sampled 1-shot tasks from
+the model validation split is evaluated to select the best pretrained model, whose weights are then used to initialize the
+embedding function E in the few-shot learning.
+5.2. Standard Few-Shot Image Classiﬁcation
+We compare our proposed FEAT method with the instance embedding baselines as well as previous methods on
+Table 1: Few-shot classiﬁcation accuracy on MiniImageNet. ⋆
+CTM and SimpleShot utilize the ResNet-18. (see SM
+for the full table with conﬁdence intervals and WRN results.).
+1-Shot 5-Way
+5-Shot 5-Way
+Backbone →
+MatchNet 
+ProtoNet 
+RelationNet 
+TADAM 
+MetaOptNet 
+SimpleShot 
+Instance embedding
+Embedding adaptation
+the standard MiniImageNet and TieredImageNet 
+benchmarks, and then perform detailed analysis on the ablated models. We include additional results with CUB 
+dataset in SM, which shares a similar observation.
+5.2.1. Main Results
+Comparison to previous State-of-the-arts. Table 1 and
+Table 2 show the results of our method and others on the
+MiniImageNet and TieredImageNet. First, we observe that
+the best embedding adaptation method (FEAT) outperforms
+the instance embedding baseline on both datasets, indicating the effectiveness of learning task-speciﬁc embedding space. Meanwhile, the FEAT model performs significantly better than the current state-of-the-art methods on
+MiniImageNet dataset. On the TieredImageNet, we observe
+that the ProtoNet baseline is already better than some previous state-of-the-arts based on the 12-layer ResNet backbone.
+This might due to the effectiveness of the pretraining stage on the TieredImageNet as it is larger than
+MiniImageNet and a fully converged model can be itself
+very effective. Based on this, all embedding adaptation approaches further improves over ProtoNet almost in all cases,
+with FEAT achieving the best performances among all approaches. Note that here our pre-training strategy is most
+similar to the one used in PFA , while we further ﬁnetune the backbone. Temperature scaling of the logits inﬂuences the performance a lot when ﬁne-tuning over the pretrained weights. Additionally, we list some recent methods
+(SimpleShot , and CTM ) using different backbone
+Table 2: Few-shot classiﬁcation accuracy and 95% conﬁdence interval on TieredImageNet with the ResNet backbone.
+1-Shot 5-Way
+5-Shot 5-Way
+ProtoNet 
+53.31 ± 0.89
+72.69 ± 0.74
+RelationNet 
+54.48 ± 0.93
+71.32 ± 0.78
+MetaOptNet 
+65.99 ± 0.72
+81.56 ± 0.63
+68.41 ± 0.39
+84.28 ± 1.73
+SimpleShot 
+69.09 ± 0.22
+84.58 ± 0.16
+Instance embedding
+68.23 ± 0.23
+84.03 ± 0.16
+Embedding adaptation
+68.14 ± 0.23
+84.23 ± 0.16
+68.59 ± 0.24
+84.36 ± 0.16
+68.20 ± 0.23
+84.64 ± 0.16
+70.80 ± 0.23
+84.79 ± 0.16
+Table 3: Number of parameters introduced by each set-to-set
+function in additional to the backbone’s parameters.
+architectures such as ResNet-18 for reference.
+Comparison among the embedding adaptation models.
+Among the four embedding adaptation methods, BILSTM in
+most cases achieves the worst performances and sometimes
+even performs worse than ProtoNet. This is partially due
+to the fact that BILSTM can not easily implement the required permutation invariant property (also shown in ),
+which confuses the learning process of embedding adaptation. Secondly, we ﬁnd that DEEPSETS and GCN have the
+ability to adapt discriminative task-speciﬁc embeddings but
+do not achieve consistent performance improvement over
+the baseline ProtoNet especially on MiniImageNet with the
+ConvNet backbone. A potential explanation is that, such
+models when jointly learned with the backbone model, can
+make the optimization process more difﬁcult, which leads
+to the varying ﬁnal performances. In contrast, we observe
+that FEAT can consistently improve ProtoNet and other embedding adaptation approaches in all cases, without additional bells and whistles. It shows that the Transformer as a
+set-to-set function can implement rich interactions between
+instances, which provides its high expressiveness to model
+the embedding adaptation process.
+Interpolation and extrapolation of classiﬁcation ways.
+Next, we study different set-to-set functions on their capability of interpolating and extrapolating across the number
+of classiﬁcation ways. To do so, we train each variant of em-
+Number of categories per task
+Mean accuracy (in %)
+Number of categories per task
+(a) Way Interpolation
+(b) Way Extrapolation
+Figure 3: Interpolation and Extrapolation of few-shot tasks
+from the “way” perspective. First, We train various embedding
+adaptation models on 1-shot 20-way (a) or 5-way (b) classiﬁcation
+tasks and evaluate models on unseen tasks with different number
+of classes (N={5, 10, 15, 20}). It shows that FEAT is superior in
+terms of way interpolation and extrapolation ability.
+bedding adaptation functions with both 1-shot 20-way and
+1-shot 5-way tasks, and measure the performance change as
+a function to the number of categories in the test time. We
+report the mean accuracies evaluated on few-shot classiﬁcation with N = {5, 10, 15, 20} classes, and show results
+in Figure 3. Surprisingly, we observe that FEAT achieves
+almost the same numerical performances in both extrapolation and interpolation scenarios, which further displays
+its strong capability of learning the set-to-set transformation. Meanwhile, we observe that DEEPSETS works well
+with interpolation but fails with extrapolation as its performance drops signiﬁcantly with the larger N. In contrast,
+GCN achieves strong extrapolation performances but does
+not work as effectively in interpolation. BILSTM performs
+the worst in both cases, as it is by design not permutation
+invariant and may have ﬁtted an arbitrary dependency between instances.
+Parameter efﬁciency. Table 3 shows the number of additional parameters each set-to-set function has introduced.
+From this, we observe that with both ConvNet and ResNet
+backbones, FEAT has the smallest number of parameters
+compared with all other approaches while achieving best
+performances from various aspects (as results discussed
+above), which highlights its high parameter efﬁciency.
+All above, we conclude that: 1) learning embedding
+adaptation with a set-to-set model is very effective in modeling task-speciﬁc embeddings for few-shot learning 2)
+FEAT is the most parameter-efﬁcient function approximater
+that achieves the best empirical performances, together with
+nice permutation invariant property and strong interpolation/extrapolation capability over the classiﬁcation way.
+5.2.2. Ablation Studies
+We analyze
+FEAT and its ablated variants on the
+MiniImageNet dataset with ConvNet backbone.
+How does the embedding adaptation looks like qualitatively? We sample four few-shot learning tasks and learn
+a principal component analysis (PCA) model (that projects
+embeddings into 2-D space) using the instance embeddings
+of the test data. We then apply this learned PCA projection
+to both the support set’s pre-adapted and post-adapted embeddings. The results are shown in Figure 1 (the beginning
+of the paper). In three out of four examples, post-adaptation
+embeddings of FEAT improve over the pre-adaption embeddings. Interestingly, we found that the embedding adaptation step of FEAT has the tendency of pushing the support embeddings apart from the clutter, such that they can
+better ﬁt the test data of its categories. In the negative example where post-adaptation degenerates the performances,
+we observe that the embedding adaptation step has pushed
+two support embeddings “Golden Retriever” and “Lion” too
+close to each other. It has qualitatively shown that the adaptation is crucial to obtain superior performances and helps
+to contrast against task-agnostic embeddings.
+5.3. Extended Few-Shot Learning Tasks
+In this section, we evaluate FEAT on 3 different few-shot
+learning tasks. Speciﬁcally, cross-domain FSL, transductive
+FSL , and generalized FSL . We overview the
+setups brieﬂy and please refer to SM for details.
+FS Domain Generalization assumes that examples in UN-
+SEEN support and test set can come from the different domains, e.g., sampled from different distributions .
+The example of this task can be found in Figure 4. It requires a model to recognize the intrinsic property than texture of objects, and is de facto analogical recognition.
+Transductive FSL. The key difference between standard
+and transductive FSL is whether test instances arrive one
+at a time or all simultaneously. The latter setup allows the
+structure of unlabeled test instances to be utilized. Therefore, the prediction would depend on both the training (support) instances and all the available test instances in the target task from UNSEEN categories.
+Generalized FSL. Prior works assumed the test instances
+coming from unseen classes only. Different from them, the
+generalized FSL setting considers test instances from both
+SEEN and UNSEEN classes . In other words, during the
+model evaluation, while support instances all come from U,
+the test instances come from S ∪U, and the classiﬁer is
+required to predict on both SEEN and UNSEEN categories. .
+5.3.1. Few-Shot Domain Generalization
+We show that FEAT learns to adapt the intrinsic structure
+of tasks, and generalizes across domains, i.e., predicting
+test instances even when the visual appearance is changed.
+Setups. We train the FSL model in the standard domain and
+evaluate with cross-domain tasks, where the N-categories
+are aligned but domains are different. In detail, a model is
+Supervised
+34.38±0.16
+29.49±0.16
+35.51±0.16
+29.47±0.16
+36.83±0.17
+30.89±0.17
+57.04 ± 0.20
+72.89 ± 0.16
+1.56 ±0.00 20.00±0.00
+ProtoNet 41.73±0.03 48.64±0.20
+35.69±0.03
+43.94±0.03 49.72±0.20
+40.50±0.03
+(a) Few-shot domain generalization
+(b) Transductive few-shot learning
+(c) Generalized few-shot learning
+Table 4: We evaluate our model on three additional few-shot learning tasks: (a) Few-shot domain generalization, (b) Transductive few-shot
+learning, and (c) Generalized few-shot learning. We observe that FEAT consistently outperform all previous methods or baselines.
+Screwdriver
+𝒟𝒟𝐭𝐭𝐭𝐭𝐭𝐭𝐭𝐭𝐭𝐭from
+𝒟𝒟𝐭𝐭𝐭𝐭𝐭𝐭𝐭𝐭from
+“Real World”
+𝒟𝒟𝐭𝐭𝐭𝐭𝐭𝐭𝐭𝐭𝐭𝐭from
+𝒟𝒟𝐭𝐭𝐭𝐭𝐭𝐭𝐭𝐭from
+“Real World”
+Refrigerator
+Figure 4: Qualitative results of few-shot domain-generalization
+for FEAT. Correctly classiﬁed examples are shown in red boxes
+and incorrectly ones are shown in blue boxes. We visualize one
+task that FEAT succeeds (top) and one that fails (bottom).
+trained on tasks from the “Clipart” domain of OfﬁceHome
+dataset , then the model is required to generalize to both
+“Clipart (C)” and“Real World (R)” test instances. In other
+words, we need to classify complex real images by seeing
+only a few sketches (Figure 4 gives an overview of data).
+Results. Table 4 (a) gives the quantitative results and Figure 4 qualitatively examines it. Here, the “supervised” denotes a model trained with the standard classiﬁcation strategy and then its penultimate layer’s output feature is used
+as the nearest neighbor classiﬁer. We observe that ProtoNet
+can outperform this baseline on tasks when evaluating instances from “Clipart” but not ones from “real world”.
+However, FEAT improves over “real world” few-shot classi-
+ﬁcation even only seeing the support data from “Clipart”.
+5.3.2. Transductive Few-Shot Learning
+We show that without additional efforts in modeling,
+FEAT outperforms existing methods in transductive FSL.
+Setups. We further study this semi-supervised learning setting to see how well FEAT can incorporate test instances into
+joint embedding adaptation. Speciﬁcally, we use the unlabeled test instances to augment the key and value sets of
+Transformer (refer to SM for details), so that the embedding
+adaptation takes relationship of all test instances into consideration. We evaluate this setting on the transductive protocol of MiniImageNet . With the adapted embedding,
+FEAT makes predictions based on Semi-ProtoNet .
+We compare with two previous approaches,
+TPN and TEAM . The results are shown in Table 4 (b). We observe that FEAT improves its standard FSL
+performance (refer to Table 1) and also outperforms previous semi-supervised approaches by a margin.
+5.3.3. Generalized Few-Shot Learning
+We show that FEAT performs well on generalized fewshot classiﬁcation of both SEEN and UNSEEN classes.
+Setups. In this scenario, we evaluate not only on classifying test instances from a N-way M-shot task from UN-
+SEEN set U, but also on all available SEEN classes from S.
+To do so, we hold out 150 instances from each of the 64
+seen classes in MiniImageNet for validation and evaluation.
+Next, given a 1-shot 5-way training set Dtrain, we consider
+three evaluation protocols based on different class sets :
+UNSEEN measures the mean accuracy on test instances only
+from U (5-Way few-shot classiﬁcation); SEEN measures the
+mean accuracy on test instances only from S (64-Way classiﬁcation); COMBINED measures the mean accuracy on test
+instances from S ∪U (69-Way mixed classiﬁcation).
+The results can be found in Table 4 (c).
+observe that again FEAT outperforms baseline ProtoNet.
+To calibrate the prediction score on SEEN and UNSEEN
+classes , we select a constant seen/unseen class probability over the validation set, and subtract this calibration
+factor from seen classes’ prediction score. Then we take the
+prediction with maximum score value after calibration.
+6. Discussion
+A common embedding space fails to tailor discriminative
+visual knowledge for a target task especially when there are
+a few labeled training data. We propose to do embedding
+adaptation with a set-to-set function and instantiate it with
+transformer (FEAT), which customizes task-speciﬁc embedding spaces via a self-attention architecture. The adapted
+embedding space leverages the relationship between target
+task training instances, which leads to discriminative instance representations.
+FEAT achieves the state-of-the-art
+performance on benchmarks, and its superiority can generalize to tasks like cross-domain, transductive, and generalized few-shot classiﬁcations.
+Acknowledgments.This work is partially supported by The
+National Key R&D Program of China (2018YFB1004300),
+DARPA# FA8750-18-2-0117, NSF IIS-1065243, 1451412,
+1513966/ 1632803/1833137, 1208500, CCF-1139148, a
+Google Research Award, an Alfred P. Sloan Research Fellowship, ARO# W911NF-12-1-0241 and W911NF-15-1-
+0484, China Scholarship Council (CSC), NSFC (61773198,
+61773198, 61632004), and NSFC-NRF joint research
+project 61861146001.

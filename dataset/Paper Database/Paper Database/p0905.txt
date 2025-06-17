@@ -1,0 +1,642 @@
+Proceedings of the 59th Annual Meeting of the Association for Computational Linguistics
+and the 11th International Joint Conference on Natural Language Processing, pages 4582–4597
+August 1–6, 2021. ©2021 Association for Computational Linguistics
+Preﬁx-Tuning: Optimizing Continuous Prompts for Generation
+Xiang Lisa Li
+Stanford University
+ 
+Percy Liang
+Stanford University
+ 
+Fine-tuning is the de facto way of leveraging
+large pretrained language models for downstream tasks. However, ﬁne-tuning modiﬁes
+all the language model parameters and therefore necessitates storing a full copy for each
+task. In this paper, we propose preﬁx-tuning, a
+lightweight alternative to ﬁne-tuning for natural language generation tasks, which keeps language model parameters frozen and instead optimizes a sequence of continuous task-speciﬁc
+vectors, which we call the preﬁx. Preﬁx-tuning
+draws inspiration from prompting for language
+models, allowing subsequent tokens to attend
+to this preﬁx as if it were “virtual tokens”.
+We apply preﬁx-tuning to GPT-2 for table-totext generation and to BART for summarization. We show that by modifying only 0.1% of
+the parameters, preﬁx-tuning obtains comparable performance in the full data setting, outperforms ﬁne-tuning in low-data settings, and extrapolates better to examples with topics that
+are unseen during training.
+Introduction
+Fine-tuning is the prevalent paradigm for using
+large pretrained language models (LMs) to perform downstream tasks (e.g., summarization), but it requires
+updating and storing all the parameters of the LM.
+Consequently, to build and deploy NLP systems
+that rely on large pretrained LMs, one currently
+needs to store a modiﬁed copy of all the LM parameters for each task. This can be prohibitively
+expensive given the size of current LMs; for example, GPT-2 has 774M parameters and GPT-3 has 175B parameters .
+A natural approach to this problem is lightweight
+ﬁne-tuning, which freezes most of the pretrained
+parameters and only tunes a smaller set of parameters. For example, adapter-tuning (Rebufﬁet al.,
+Fine-tuning (top) updates all LM parameters (the red Transformer box) and requires storing
+a full model copy for each task. We propose preﬁxtuning (bottom), which freezes the LM parameters and
+only optimizes the preﬁx (the red preﬁx blocks). Consequently, we only need to store the preﬁx for each
+task, making preﬁx-tuning modular and space-efﬁcient.
+Note that each vertical block denote transformer activations at one time step.
+2017; Houlsby et al., 2019) inserts additional taskspeciﬁc layers between the layers of pretrained
+language models. Adapter-tuning has promising
+performance on natural language understanding
+and generation benchmarks, attaining comparable
+performance with ﬁne-tuning while adding only
+around 2–4% task-speciﬁc parameters .
+At the limit, GPT-3 can
+be deployed using in-context learning, which is
+a form of prompting, without modifying any LM
+parameters. In in-context learning, Brown et al.
+ prepend a natural language task instruction
+(e.g., TL;DR for summarization) and a few examples to the task input, and then generate the task
+output from the LM. However, since Transformers
+can only condition on a bounded-length context
+ , in-context learning
+is restricted to very small training sets.
+In this paper, we propose preﬁx-tuning, a
+lightweight alternative to ﬁne-tuning for natural language generation (NLG) tasks, inspired by prompting. Consider the task of generating a textual description of a data table, as shown in Figure 1,
+where the task input is a linearized table (e.g.,
+“name: Starbucks | type: coffee shop”) and the output is a textual description (e.g., “Starbucks serves
+coffee.”). Preﬁx-tuning prepends a sequence of
+continuous task-speciﬁc vectors to the input, which
+we call a preﬁx, depicted by red blocks in Figure 1
+(bottom). To generate each token, the LM can attend to the preﬁx as if it were a sequence of “virtual
+tokens”, but unlike prompting, the preﬁx consists
+entirely of free parameters which do not correspond
+to real tokens. In contrast to ﬁne-tuning in Figure 1
+(top), which updates all LM parameters and thus
+requires storing a tuned copy of the model for each
+task, preﬁx-tuning only optimizes the preﬁx. Consequently, we only need to store one copy of the
+large LM and a learned task-speciﬁc preﬁx, yielding a very small overhead for each additional task
+(e.g., 250K parameters for table-to-text).
+In contrast to full ﬁne-tuning, preﬁx-tuning is
+also modular: we train an upstream preﬁx which
+steers an unmodiﬁed LM, and therefore, a single
+LM can support many tasks at once. In the context of personalization where the tasks correspond
+to users , we would have a separate preﬁx for
+each user trained only on that user’s data, thereby
+avoiding data cross-contamination. Moreover, the
+preﬁx-based architecture enables us to even process examples from multiple users/tasks in a single
+batch, something that is not possible with other
+lightweight ﬁne-tuning approaches like adaptertuning.
+We evaluate preﬁx-tuning on table-to-text generation using GPT-2 and abstractive summarization using BART. In terms of storage, preﬁx-tuning
+stores 1000x fewer parameters than full ﬁne-tuning.
+In terms of performance when trained on full
+datasets, preﬁx-tuning and ﬁne-tuning are comparable for table-to-text (§6.1), while preﬁx-tuning suffers a small degradation for summarization (§6.2).
+In low-data settings, preﬁx-tuning outperforms ﬁnetuning on both tasks (§6.3). Preﬁx-tuning also extrapolates better to tables (for table-to-text) and articles (for summarization) with unseen topics (§6.4).
+Related Work
+Fine-tuning for natural language generation.
+Current state-of-the-art systems for natural language generation (NLG) are based on ﬁne-tuning
+pretrained LMs. For table-to-text generation, Kale
+ ﬁne-tunes a sequence-to-sequence model
+ . For extractive and abstractive summarization, researchers ﬁne-tune masked
+language models 
+and encode-decoder models , respectively . For other
+conditional NLG tasks such as machine translation and dialogue generation, ﬁne-tuning is also the
+prevalent paradigm . In
+this paper, we focus on table-to-text using GPT-2
+and summarization using BART, but preﬁx-tuning
+in principle can be applied to other generation tasks
+and pretrained models, such as masked LMs.
+Lightweight
+ﬁne-tuning.
+Preﬁx-tuning
+under the broad class of lightweight ﬁne-tuning
+methods, which freeze most of the pretrained
+parameters and only tune a smaller set of parameters. The key question is how to augment the LM
+architecture and decide which subset of pretrained
+parameters to tune. One line of research learns a
+task-speciﬁc parameter mask .
+Another line
+of research inserts new modules with trainable
+parameters. For example, Zhang et al. 
+trains a “side” network that is fused with the
+pretrained model via summation; adapter-tuning
+inserts task-speciﬁc layers (adapters) between each
+layer of the pretrained LM . Compared to this line of work, which tunes
+around 3.6% of the LM parameters, our method
+obtains a further 30x reduction in task-speciﬁc
+parameters, tuning only 0.1% while maintaining
+comparable performance on table-to-text tasks.
+Prompting.
+Prompting is a way of leveraging a
+pretrained LM by prepending instructions and a
+few examples to the task input and generating the
+task output from the LM. For autoregressive LMs,
+the most successful form of prompting is GPT-3’s
+in-context learning , which
+uses manually designed prompts to adapt its generation for different tasks in few-shot settings. For
+masked LMs like BERT and RoBERTa , prompt engineering has been explored for
+natural language understanding tasks . For example,
+AutoPrompt searches for a sequence of discrete trigger words and concatenates
+it with each input to elicit sentiment or factual
+knowledge from BERT and RoBERTa. In contrast
+with AutoPrompt, our method optimizes continuous preﬁxes, which are more expressive (§7.2);
+moreover, we focus on language generation tasks.
+Continuous vectors have been used to steer LMs;
+for example, Subramani et al. showed that a
+pretrained LSTM language model can reconstruct
+arbitrary sentences by optimizing a continuous vector for each sentence, making the vector inputspeciﬁc. In contrast, preﬁx-tuning optimizes a taskspeciﬁc preﬁx that applies to all instances of that
+task. As a result, unlike the previous work whose
+application is limited to sentence reconstruction,
+preﬁx-tuning can be applied to NLG tasks.
+Controllable generation.
+Controllable generation aims to steer a pretrained language model
+to match a sentence-level attribute (e.g., positive
+sentiment or sports). Such control can happen at
+training time: Keskar et al. pretrains the
+language model (CTRL) to condition on metadata
+such as keywords or URLs. The control can also
+happen at decoding time, by weighted decoding
+ or iteratively updating the past activations . However, there is no straightforward way
+to apply these controllable generation techniques
+to enforce ﬁne-grained control over generated contents, as demanded by tasks like table-to-text and
+summarization.
+P*-tuning.
+Preﬁx tuning is an instance of a new
+class of methods that has emerged, which we call
+p*-tuning (since the other prominent instances, ptuning and prompt-tuning, also start with p), all
+based on the idea of optimizing a continuous preﬁx
+or prompt. Concurrent with our work, Qin and Eisner learn mixtures of soft ﬁll-in-the-blank
+prompts to elicit knowledge from LMs such as
+BERT and BART. Hambardzumyan et al. 
+learns task-speciﬁc embeddings that adapts BERT
+for sentiment classiﬁcation. Both works show that
+tuning soft prompts outperforms previous work,
+which optimizes over discrete prompts. P-tuning
+ shows that jointly updating the
+prompt embeddings and LM parameters improves
+GPT-2’s performance on natural language understanding tasks, in both few-shot and full data settings. In a followup work, Prompt-tuning simpliﬁes our approach and applies
+it to T5 , demonstrating that
+the performance gap between ﬁne-tuning and p*tuning vanishes as the model size grows.
+Problem Statement
+Consider a conditional generation task where the
+input x is a context and the output y is a sequence
+of tokens. We focus on two tasks, shown in Figure 2 (right): In table-to-text, x corresponds to a linearized data table and y is a textual description; in
+summarization, x is an article and y is a summary.
+Autoregressive LM
+Assume we have an autoregressive neural language
+model pφ(y | x) parametrized by φ . As shown in Figure 2 (top),
+let z = [x; y] be the concatenation of x and y;
+let Xidx denote the sequence of indices that corresponds to x, and Yidx denote the same for y.
+The activation vector at time step i is hi ∈Rd,
+where hi = [h(1)
+i ; · · · ; h(n)
+] is a concatenation of
+all activation layers at this time step, and h(j)
+activation vector of the j-th layer at time step i.1
+An autoregressive neural LM computes hi as a
+function of zi and the past activations in its left
+context, as follows:
+hi = LMφ(zi, h<i),
+where the last layer of hi is used to compute the
+distribution for the next token: pφ(zi+1 | h≤i) =
+softmax(Wφ h(n)
+) and Wφ is a matrix that maps
+to logits over the vocabulary.
+Encoder-Decoder Architecture
+We can also use an encoder-decoder architecture
+ to model pφ(y | x),
+where x is encoded by the bidirectional encoder,
+and the decoder predicts y autoregressively (conditioned on the encoded x and its left context). We
+use the same indexing and activation notation, as
+shown in Figure 2 (bottom): each hi for i ∈Xidx
+is computed by the a bidirectional encoder; each
+hi for i ∈Yidx is computed by an autoregressive
+decoder using the same equation (1).
+1In GPT-2, h(n)
+consists of a key-value pair, and the dimension of each key and value is 1024.
+Figure 2: An annotated example of preﬁx-tuning using an autoregressive LM (top) and an encoder-decoder model
+(bottom). The preﬁx activations ∀i ∈Pidx, hi are drawn from a trainable matrix Pθ. The remaining activations are
+computed by the Transformer.
+Fine-tuning
+In the full ﬁne-tuning framework, we initialize with
+the pretrained parameters φ. Here pφ is a trainable language model distribution and we perform
+gradient updates on the following log-likelihood
+objective:
+log pφ(y | x) = max
+log pφ(zi | h<i).
+Preﬁx-Tuning
+We propose preﬁx-tuning as an alternative to full
+ﬁne-tuning for conditional generation tasks. We
+ﬁrst provide intuition in §4.1 before deﬁning our
+method formally in §4.2.
+Prompting has demonstrated that conditioning on a
+proper context can steer the LM without changing
+its parameters. For example, if we want the LM
+to generate a word (e.g., Obama), we can prepend
+its common collocations as context (e.g., Barack),
+and the LM will assign much higher probability to
+the desired word. Extending this intuition beyond
+generating a single word or sentence, we want to
+ﬁnd a context that steers the LM to solve an NLG
+task. Intuitively, the context could inﬂuence the
+encoding of the task input x by guiding what to extract from x, and it could inﬂuence the generation
+of the task output y by steering the next token distribution. However, it’s non-obvious whether such a
+context exists. Using natural language task instructions (e.g., “summarize the following table in one
+sentence”) for the context might guide a human to
+solve the task, but this fails for moderately-sized
+pretrained LMs.2 Optimizing over the discrete instructions might help, but discrete optimization is
+computationally challenging.
+Instead of optimizing over discrete tokens, we
+can optimize the instruction as continuous word embeddings, whose effects will be propagated upward
+to all Transformer activation layers and rightward
+to subsequent tokens. This is strictly more expressive than a discrete prompt which is constrained to
+the embeddings of real words. Preﬁx-tuning goes
+one step further in increasing expressivity by optimizing the activations of all the layers, not just
+the embedding layer. As another beneﬁt, preﬁxtuning can directly modify representations deeper
+in the network, therefore, avoiding long computation paths across the depth of the network.
+Preﬁx-tuning prepends a preﬁx for an autoregressive LM to obtain z = [PREFIX; x; y], or prepends
+preﬁxes for both encoder and decoder to obtain
+z = [PREFIX; x; PREFIX′; y], as shown in Figure 2.
+Here, Pidx denotes the sequence of preﬁx indices,
+and we use |Pidx| to denote the length of the preﬁx.
+We follow the recurrence relation in equation (1), except that the activations of the preﬁx
+indices are free parameters, given by a matrix Pθ
+(parametrized by θ) of dimension |Pidx| × dim(hi).
+if i ∈Pidx,
+LMφ(zi, h<i),
+otherwise.
+2In our preliminary experiments, GPT-2 and BART fail in
+this setting; the only exception is GPT-3.
+The training objective is the same as equation (2),
+but the set of trainable parameters changes: the language model parameters φ are ﬁxed and the preﬁx
+parameters θ are the only trainable parameters.
+Here, each hi is a function of the trainable Pθ.
+When i ∈Pidx, this is clear because hi copies
+directly from Pθ. When i ̸∈Pidx, hi still depends
+on Pθ, because the preﬁx activations are always
+in the left context and will therefore affect any
+activations to the right.
+Parametrization of Pθ
+Empirically, directly updating the Pθ parameters
+leads to unstable optimization and a slight drop
+in performance.3 So we reparametrize the matrix
+Pθ[i, :] = MLPθ(P ′
+θ[i, :]) by a smaller matrix (P ′
+composed with a large feedforward neural network
+(MLPθ). Now, the trainable parameters include P ′
+and the parameters of MLPθ. Note that Pθ and
+θ has the same number of rows (i.e., the preﬁx
+length), but different number of columns.4
+Once training is complete, these reparametrization parameters can be dropped, and only the preﬁx
+(Pθ) needs to be saved.
+Experimental Setup
+Datasets and Metrics
+We evaluate on three standard neural generation
+datasets for the table-to-text task: E2E , WebNLG , and
+DART , as shown in Table 1.
+The datasets are ordered by increasing complexity
+and size. E2E only has 1 domain (i.e. restaurant
+reviews); WebNLG has 14 domains, and DART
+is open-domain, using open-domain tables from
+Wikipedia. For evaluation, we report the metrics
+using the ofﬁcial evaluation scripts (see details in
+Appendix A.1).
+For the summarization task, we use the XSUM
+ dataset, which is an abstractive summarization dataset on news articles. We
+report ROUGE-1, ROUGE-2 and ROUGE-L.
+For table-to-text generation, we compare preﬁxtuning with three other methods: full ﬁne-tuning
+3We ﬁnd in preliminary experiments that directly optimizing the preﬁx is very sensitive to initialization.
+4Pθ has dimensions |Pidx| × dim(hi) while Pθ has
+dimensions |Pidx| × k. We choose k = 512 for table-to-text
+and 800 for summarization. MLPθ maps from k to dim(hi).
+input length
+output length
+Datasets statistics.
+The input and output
+length is the number of BPE tokens per example. For
+the three table-to-text datasets, the input length is the
+length of linearized tables (details in Appendix A.1).
+(FT-FULL), ﬁne-tuning only the top 2 layers (FT-
+TOP2), and adapter-tuning (ADAPTER).5 We also
+report the current state-of-the-art results on these
+datasets: On E2E, Shen et al. uses a pragmatically informed model without pretraining. On
+WebNLG, Kale ﬁne-tunes T5-large. On
+DART, no ofﬁcial models trained on this dataset
+version are released.6 For summarization, we compare against ﬁne-tuning BART .
+Architectures and Hyperparameters
+For table-to-text, we use GPT-2MEDIUM and GPT-
+2LARGE. For summarization, we use BARTLARGE.
+Our implementation is based on the Hugging Face
+Transformers .
+At training time, we use the AdamW optimizer
+ and a linear learning rate scheduler, as suggested by the Hugging
+Face default setup. The hyperparameters we tune
+include the number of epochs, batch size, learning
+rate, and preﬁx length. Hyperparameter details are
+in the appendix. The default setting is 10 epochs,
+batch size 5, learning rate 5·10−5 and preﬁx length
+10. The table-to-text models are trained on TITAN
+Xp or GeForce GTX TITAN X machines. Preﬁxtuning takes 0.2 hours per epoch to train on 22K
+examples, whereas ﬁne-tuning takes around 0.3
+hours per epoch. The summarization models are
+trained on Tesla V100 machines, taking 1.25 hours
+per epoch on the XSUM dataset. For time efﬁciency, preﬁx-tuning is around 30% faster than
+ﬁne-tuning. For GPU memory efﬁciency, preﬁxtuning with batchsize 1 takes 18% of the total GPU
+memory, whereas ﬁne-tuning takes 50%.
+At decoding time, for table-to-text, we use beam
+search with beam size 5. For summarization, we
+use beam size 6 and length normalization 0.8. Decoding takes 1.2 seconds per sentence .
+6The ofﬁcial benchmark model is trained on v.1.0.0 while
+the release dataset is v1.1.1.
+batching) for table-to-text, and 2.6 seconds per
+batch (using a batch size of 10) for summarization.
+Main Results
+Table-to-text Generation
+We ﬁnd that by updating only 0.1% task-speciﬁc parameters,7 preﬁx-tuning is effective in table-to-text
+generation, outperforming other lightweight baselines (ADAPTER and FT-TOP2) even by updating
+30x fewer parameters and achieving a comparable
+performance with (full) ﬁne-tuning. This trend
+holds for all datasets: E2E, WebNLG,8 and DART.
+If we match the number of parameters for preﬁxtuning and adapter-tuning to be 0.1%, Table 2
+shows that preﬁx-tuning is signiﬁcantly better than
+ADAPTER (0.1%), attaining 4.1 BLEU improvement per dataset on average. Even when we compare with ﬁne-tuning (100%) and adapter-tuning
+(3.0%), which update signiﬁcantly more parameters than preﬁx-tuning, preﬁx-tuning still achieves
+results comparable or better than those two systems.
+This demonstrates that preﬁx-tuning is more Pareto
+efﬁcient than adapter-tuning, signiﬁcantly reducing
+parameters while improving generation quality.
+Additionally, attaining good performance on
+DART suggests that preﬁx-tuning can generalize
+to tables with diverse domains and a large number
+of relations. We will delve deeper into extrapolation performance (i.e., generalization to unseen
+categories or topics) in §6.4.
+In summary, preﬁx-tuning is an effective and
+space-efﬁcient method to adapt GPT-2 to table-totext generation. It also maintains the performance
+gains when scaling up to GPT-2LARGE, suggesting
+it has the potential to scale to even larger models
+with a similar architecture, like GPT-3.
+Summarization
+As shown in Table 3, with 2% parameters, preﬁxtuning obtains slightly lower performance than ﬁnetuning (36.05 vs. 37.25 in ROUGE-L). With only
+0.1% parameters, preﬁx-tuning underperforms full
+ﬁne-tuning (35.05 vs. 37.25). There are several
+differences between XSUM and the three table-totext datasets which could account for why preﬁxtuning has comparative advantage in table-to-text:
+7250K for E2E, 250K for WebNLG, and 500K for DART
+versus 345M GPT-2 parameters.
+8The S,U,A columns in WebNLG represents SEEN, UN-
+SEEN, and ALL respectively; SEEN categories appear at
+training time; UNSEEN categories only appears at test time;
+and ALL is the combination of the two.
+(1) XSUM contains 4x more examples than the
+three table-to-text datasets on average; (2) the input
+articles are 17x longer than the linearized table input of table-to-text datasets on average; (3) summarization is more complex than table-to-text because
+it requires selecting key contents from an article.
+Low-data Setting
+Based on the results from table-to-text (§6.1)
+and summarization (§6.2), we observe that preﬁxtuning has a comparative advantage when the number of training examples is smaller. To explore
+the low-data setting more systematically, we subsample the full dataset (E2E for table-to-text and
+XSUM for summarization) to obtain small datasets
+of size {50, 100, 200, 500}. For each size, we sample 5 different datasets and average over 2 training
+random seeds. Thus, we average over 10 models
+for each low-data setting.9
+Figure 3 (right) shows that preﬁx-tuning outperforms ﬁne-tuning in low-data regimes by 2.9 BLEU
+on average, in addition to requiring much fewer parameters, but the gap narrows as the dataset size
+increases.
+Qualitatively, Figure 3 (left) shows 8 examples
+generated by both preﬁx-tuning and ﬁne-tuning
+models trained on different data levels. While both
+methods tend to undergenerate (missing table contents) in low data regimes, preﬁx-tuning tends to be
+more faithful than ﬁne-tuning. For example, ﬁnetuning (100, 200)10 falsely claims a low customer
+rating while the true rating is average, whereas
+preﬁx-tuning (100, 200) generates a description
+that is faithful to the table.
+Extrapolation
+We now investigate extrapolation performance to
+unseen topics for both table-to-text and summarization. In order to construct an extrapolation setting,
+we split the existing datasets so that training and
+test cover different topics. For table-to-text, the
+WebNLG dataset is labeled with table topics. There
+are 9 categories that appear in training and dev, denoted as SEEN and 5 categories that only appear at
+test time, denoted as UNSEEN. So we evaluate extrapolation by training on the SEEN categories and
+testing on the UNSEEN categories. For summarization, we construct two extrapolation data splits:
+9We also sample a dev split (with dev size = 30% × training size) for each training set. We use the dev split to choose
+hyperparameters and perform early stopping.
+10The number in the parenthesis refers to the training size.
+BLEU NIST MET R-L CIDEr
+BLEU MET TER ↓Mover BERT BLEURT
+GPT-2MEDIUM
+64.7 26.7 45.7 0.46 0.30 0.38 0.33 0.78 0.54
+53.6 18.9 36.0 0.38 0.23 0.31 0.49 0.99 0.72
+ADAPTER(3%)
+60.5 47.9 54.8 0.43 0.38 0.41 0.35 0.46 0.39
+ADAPTER(0.1%)
+54.5 45.1 50.2 0.39 0.36 0.38 0.40 0.46 0.43
+PREFIX(0.1%)
+62.9 45.3 55.0 0.44 0.37 0.41 0.35 0.51 0.42
+GPT-2LARGE
+65.3 43.1 55.5 0.46 0.38 0.42 0.33 0.53 0.42
+63.4 47.7 56.3 0.45 0.39 0.42 0.34 0.48 0.40
+63.9 52.8 57.1 0.46 0.41 0.44
+Table 2: Metrics (higher is better, except for TER) for table-to-text generation on E2E (left), WebNLG (middle)
+and DART (right). With only 0.1% parameters, Preﬁx-tuning outperforms other lightweight baselines and achieves
+a comparable performance with ﬁne-tuning. The best score is boldfaced for both GPT-2MEDIUM and GPT-2LARGE.
+name : The Eagle | type : coffee shop | food : Chinese | price : cheap | customer
+rating : average | area : riverside | family friendly : no | near : Burger King
+Preﬁx (50)
+The Eagle is a cheap Chinese coffee shop located near Burger King.
+Preﬁx (100)
+The Eagle is a cheap coffee shop located in the riverside near Burger King. It
+has average customer ratings.
+Preﬁx (200)
+The Eagle is a cheap Chinese coffee shop located in the riverside area near
+Burger King. It has average customer ratings.
+Preﬁx (500)
+The Eagle is a coffee shop that serves Chinese food. It is located in the riverside
+area near Burger King. It has an average customer rating and is not family
+The Eagle coffee shop is located in the riverside area near Burger King.
+The Eagle is a cheap coffee shop near Burger King in the riverside area. It has
+a low customer rating and is not family friendly.
+The Eagle is a cheap Chinese coffee shop with a low customer rating. It is
+located near Burger King in the riverside area.
+The Eagle is a cheap Chinese coffee shop with average customer ratings. It is
+located in the riverside area near Burger King.
+training data size
+training data size
+training data size
+training data size
+Figure 3: (Left) qualitative examples in lowdata settings. (Right) preﬁx-tuning (orange) outperforms ﬁne-tuning
+(blue) in low-data regimes in addition to requiring many fewer parameters. The top two plots correspond to summarization, measured by ROUGE-1 and ROUGE-2. The bottom two plots correspond to table-to-text, measured
+by BLEU and ROUGE-L. The x-axis is the training size and the y-axis is the evaluation metric (higher is better).
+FT-FULL 
+PREFIX(2%)
+PREFIX(0.1%)
+Table 3: Performance of methods on the XSUM summarization dataset.
+Preﬁx-tuning slightly underperforms ﬁne-tuning in the full-data regime.
+news-to-sports
+within-news
+Table 4: Extrapolation performance on XSUM. Preﬁxtuning outperforms ﬁne-tuning on both news-to-sports
+and within-news splits.
+In news-to-sports, we train on news articles
+and test on sports articles. In within-news, we
+train on {world, UK, business} news and test on
+the remaining news categories (e.g., health, tech).
+On both table-to-text and summarization, preﬁxtuning extrapolates better than ﬁne-tuning under all
+metrics, as shown in Table 4 and the ‘U’ columns
+of Table 2 (middle).
+We also ﬁnd that adapter-tuning achieves good
+extrapolation performance, comparable with preﬁxtuning, as shown in Table 2. This shared trend
+suggests that preserving LM parameters indeed has
+a positive impact on extrapolation. However, how
+preﬁx-tuning improves extrapolation is an open
+question and we will discuss this further in §8.
+Intrinsic Evaluation
+We compare different variants of preﬁx-tuning to
+study the impact of various design decisions. §7.1
+studies the impact of the preﬁx length. §7.2 studies
+tuning only the embedding layer, which is more
+akin to tuning a discrete prompt. §7.3 compares
+preﬁxing and inﬁxing, which inserts trainable activations between x and y. §7.4 studies the impact of
+various preﬁx initialization strategies. §7.5 further
+studies the data efﬁciency of preﬁx-tuning.
+Preﬁx Length
+A longer preﬁx means more trainable parameters,
+and therefore more expressive power.11 Figure 4
+shows that performance increases as the preﬁx
+11Empirically, longer preﬁxes have a negligible impact on
+training and inference speed per batch, because attention computation over the entire preﬁx is parallellized on GPUs.
+Prefix Length (XSUM)
+Prefix Length (DART)
+Preﬁx length vs. performance on summerization (left) and table-to-text (right). Performance increases as the preﬁx length increases up to a threshold
+(200 for summarization and 10 for table-to-text) and
+then a slight performance drop occurs. Each plot reports two metrics (on two vertical axes).
+Embedding-only: EMB-{PreﬁxLength}
+Inﬁx-tuning: INFIX-{PreﬁxLength}
+Table 5: Intrinsic evaluation of Embedding-only (§7.2)
+and Inﬁxing (§7.3). Both Embedding-only ablation and
+Inﬁx-tuning underperforms full preﬁx-tuning.
+length increases up to a threshold (200 for summarization, 10 for table-to-text) and then a slight
+performance drop occurs. Preﬁxes longer than the
+threshold lead to lower training loss, but slightly
+worse test performance, suggesting that they tend
+to overﬁt the training data.
+Full vs Embedding-only
+Recall in §4.1, we discussed optimizing the continuous embeddings of the “virtual tokens.” We instantiate that idea and call it embedding-only. The word
+embeddings are free parameters, and the remaining
+activation layers are computed by the Transformer.
+Table 5 (top) shows that the performance drops
+signiﬁcantly, suggesting that tuning only the embedding layer is not sufﬁciently expressive.
+Embedding-only upper bounds the performance
+of discrete prompt optimization ,
+because discrete prompt restricts the embedding
+layer to exactly match the embedding of a real word.
+Consequently, we have this chain of increasing expressive power: discrete prompting < embeddingonly < preﬁx-tuning.
+Preﬁx-tuning vs Inﬁx-tuning
+We also investigate how the trainable activations’
+position in the sequence affects performance. In
+"elephant"
+"summarize"
+"table-to-text:"
+"beautiful"
+Figure 5: Initializing the preﬁx with activations of real
+words signiﬁcantly outperforms random initialization,
+in low-data settings.
+preﬁx-tuning, we place them at the beginning
+[PREFIX; x; y]. We can also place the trainable
+activations between x and y (i.e. [x; INFIX; y]) and
+call this inﬁx-tuning. Table 5 (bottom) shows that
+inﬁx-tuning slightly underperforms preﬁx-tuning.
+We believe this is because preﬁx-tuning can affect
+the activations of x and y whereas inﬁx-tuning can
+only inﬂuence the activations of y.
+Initialization
+We ﬁnd that how the preﬁx is initialized has
+a large impact in low-data settings.
+initialization leads to low performance with high
+variance. Initializing the preﬁx with activations of
+real words signiﬁcantly improves generation, as
+shown in Figure 5. In particular, initializing with
+task relevant words such as “summarization” and
+“table-to-text” obtains slightly better performance
+than task irrelevant words such as “elephant”
+and “divide”, but using real words is still better
+than random. Moreover, in full data settings, the
+initialization trick has no impact, and random
+initialization leads to equally good performance.
+Since we initialize the preﬁx with activations of
+real words computed by the LM, this initialization
+strategy is concordant with preﬁx-tuning’s philosophy, which preserves the pretrained LM as much
+as possible.
+Data Efﬁciency
+We also investigate the data efﬁciency of preﬁxtuning (without initialization trick, a.k.a random
+initialization) and full ﬁne-tuning by comparing
+their performance on 5 different data scales of the
+E2E task (10%, 20%, 40%, 60%, and 80%). Figure 6 shows that preﬁx-tuning has better performance than ﬁne-tuning when using more than 20%
+of the data. For data scale of 10%, preﬁx-tuning
+with random initialization yields comparable or
+slightly lower performance than full ﬁne-tuning,
+percentage of training data
+percentage of training data
+Figure 6: Data efﬁciency curves: percentage of training set vs. performance on table-to-text (E2E). Preﬁxtuning (without the initialization trick) is more dataefﬁcient than ﬁne-tuning when using more than 20%
+of the data.
+necessitating the initialization trick (§6.3) to improve the performance in this low-data regime.
+Discussion
+We will discuss several favorable properties of
+preﬁx-tuning and some open problems.
+Personalization.
+As we note in §1, preﬁx-tuning
+is advantageous when there are a large number
+of tasks that needs to be trained independently.
+One practical setting is user privacy . In order
+to preserve user privacy, each user’s data needs to
+be separated and a personalized model needs to be
+trained independently for each user. Consequently,
+each user can be regarded as an independent task. If
+there are millions of users, preﬁx-tuning can scale
+to this setting and maintain modularity, enabling
+ﬂexible addition or deletion of users by adding or
+deleting their preﬁxes without cross-contamination.
+Batching across users.
+Under the same personalization setting, preﬁx-tuning allows batching different users’ queries even though they are backed
+by different preﬁxes. When multiple users query
+a cloud GPU device with their inputs, it is computationally efﬁcient to put these users in the same
+batch. Preﬁx-tuning keeps the shared LM intact;
+consequently, batching requires a simple step of
+prepending the personalized preﬁx to user input,
+and all the remaining computation is unchanged.
+In contrast, we can’t batch across different users
+in adapter-tuning, which has personalized adapters
+between shared Transformer layers.
+This batching beneﬁt could also help create efﬁcient ensembles of multiple preﬁxes trained on the
+same task .
+Inductive bias of preﬁx-tuning.
+Recall that ﬁnetuning updates all pretrained parameters, whereas
+preﬁx-tuning and adapter-tuning preserve them.
+Since the language models are pretrained on general purpose corpora, preserving the LM parameters might help generalization to domains unseen
+during training. In concordance with this intuition,
+we observe that both preﬁx-tuning and adaptertuning have signiﬁcant performance gain in extrapolation settings (§6.4); however, how these methods
+improve extrapolation is an open question.
+While preﬁx-tuning and adapter-tuning both
+freeze the pretrained parameters, they tune different
+sets of parameters to affect the activation layers of
+the Transformer. Recall that preﬁx-tuning keeps the
+LM intact and uses the preﬁx and the pretrained attention blocks to affect the subsequent activations;
+adapter-tuning inserts trainable modules between
+LM layers, which directly add residual vectors to
+the activations. Moreover, we observe that preﬁxtuning requires vastly fewer parameters compared
+to adapter-tuning while maintaining comparable
+performance. We think this gain in parameter efﬁciency is because preﬁx-tuning keeps the pretrained
+LM intact as much as possible, and therefore exploits the LM more than adapter-tuning.
+Recent work by Aghajanyan et al. uses
+intrinsic dimension to show that there exists a lowdimensional reparameterization that is as effective
+for ﬁne-tuning as the full parametrization. This
+explains why good accuracy on downstream tasks
+can be obtained by updating only a small number of parameters. Our work echoes this ﬁnding
+by showing that good generation performance can
+also be attained by updating a very small preﬁx.
+However, preﬁx-tuning is not just about the size of
+trainable parameters, but more importantly, which
+subset of parameters to modify. Therefore, it would
+be interesting future work to explore other lightweight ﬁne-tuning methods that achieve an even
+better accuracy-size tradeoff.
+Acknowledgments
+We thank the members of p-lambda group as well
+as anonymous reviewers for valuable feedback. We
+gratefully acknowledge the support of a PECASE
+award. XLL is supported by a Stanford Graduate
+Fellowship.
+Reproducibility
+Our code is available at 
+XiangLi1999/PrefixTuning.
+Experiments and data are available at https:
+//worksheets.codalab.org/worksheets/
+0x16e0c8e7ab1f4b22aaccddc8b586541f.

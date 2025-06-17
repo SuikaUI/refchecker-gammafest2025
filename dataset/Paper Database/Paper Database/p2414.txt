@@ -1,0 +1,905 @@
+Sequential Model-Based Optimization for
+General Algorithm Conﬁguration
+(extended version)
+Frank Hutter, Holger H. Hoos and Kevin Leyton-Brown
+University of British Columbia, 2366 Main Mall, Vancouver BC, V6T 1Z4, Canada
+{hutter,hoos,kevinlb}@cs.ubc.ca
+Abstract. State-of-the-art algorithms for hard computational problems often expose many parameters that can be modiﬁed to improve empirical performance.
+However, manually exploring the resulting combinatorial space of parameter settings is tedious and tends to lead to unsatisfactory outcomes. Recently, automated
+approaches for solving this algorithm conﬁguration problem have led to substantial
+improvements in the state of the art for solving various problems. One promising
+approach constructs explicit regression models to describe the dependence of
+target algorithm performance on parameter settings; however, this approach has
+so far been limited to the optimization of few numerical algorithm parameters on
+single instances. In this paper, we extend this paradigm for the ﬁrst time to general algorithm conﬁguration problems, allowing many categorical parameters and
+optimization for sets of instances. We experimentally validate our new algorithm
+conﬁguration procedure by optimizing a local search and a tree search solver for
+the propositional satisﬁability problem (SAT), as well as the commercial mixed
+integer programming (MIP) solver CPLEX. In these experiments, our procedure
+yielded state-of-the-art performance, and in many cases outperformed the previous
+best conﬁguration approach.
+Introduction
+Algorithms for hard computational problems—whether based on local search or tree
+search—are often highly parameterized. Typical parameters in local search include
+neighbourhoods, tabu tenure, percentage of random walk steps, and perturbation and
+acceptance criteria in iterated local search. Typical parameters in tree search include
+decisions about preprocessing, branching rules, how much work to perform at each
+search node (e.g., to compute cuts or lower bounds), which type of learning to perform,
+and when to perform restarts. As one prominent example, the commercial mixed integer
+programming solver IBM ILOG CPLEX has 76 parameters pertaining to its search
+strategy . Optimizing the settings of such parameters can greatly improve performance,
+but doing so manually is tedious and often impractical.
+Automated procedures for solving this algorithm conﬁguration problem are useful
+in a variety of contexts. Their most prominent use case is to optimize parameters on a
+training set of instances from some application (“ofﬂine”, as part of algorithm development) in order to improve performance when using the algorithm in practice (“online”).
+Algorithm conﬁguration thus trades human time for machine time and automates a task
+that would otherwise be performed manually. End users of an algorithm can also apply
+algorithm conﬁguration procedures (e.g., the automated tuning tool built into CPLEX
+versions 11 and above) to conﬁgure an existing algorithm for high performance on
+problem instances of interest.
+The algorithm conﬁguration problem can be formally stated as follows: given a
+parameterized algorithm A (the target algorithm), a set (or distribution) of problem
+instances I and a cost metric c, ﬁnd parameter settings of A that minimize c on I. The
+cost metric c is often based on the runtime required to solve a problem instance, or, in
+the case of optimization problems, on the solution quality achieved within a given time
+budget. Various automated procedures have been proposed for solving this algorithm
+conﬁguration problem. Existing approaches differ in whether or not explicit models are
+used to describe the dependence of target algorithm performance on parameter settings.
+Model-free algorithm conﬁguration methods are relatively simple, can be applied
+out-of-the-box, and have recently led to substantial performance improvements across
+a variety of constraint programming domains. This research goes back to the early
+1990s and has lately been gaining momentum. Some methods focus on optimizing
+numerical (i.e., either integer- or real-valued) parameters (see, e.g., ), while others
+also target categorical (i.e., discrete-valued and unordered) domains .
+The most prominent conﬁguration methods are the racing algorithm F-RACE and our
+own iterated local search algorithm PARAMILS . A recent competitor is the genetic
+algorithm GGA . F-RACE and its extensions have been used to optimize various
+high-performance algorithms, including iterated local search and ant colony optimization
+procedures for timetabling tasks and the travelling salesperson problem . Our
+own group has used PARAMILS to conﬁgure highly parameterized tree search and
+local search solvers for the propositional satisﬁability problem (SAT), as well as
+several solvers for mixed integer programming (MIP), substantially advancing the state
+of the art for various types of instances. Notably, by optimizing the 76 parameters of
+CPLEX—the most prominent MIP solver—we achieved up to 50-fold speedups over the
+defaults and over the conﬁguration returned by the CPLEX tuning tool .
+While the progress in practical applications described above has been based on
+model-free optimization methods, recent progress in model-based approaches promises
+to lead to the next generation of algorithm conﬁguration procedures. Sequential modelbased optimization (SMBO) iterates between ﬁtting models and using them to make
+choices about which conﬁgurations to investigate. It offers the appealing prospects of
+interpolating performance between observed parameter settings and of extrapolating to
+previously unseen regions of parameter space. It can also be used to quantify importance
+of each parameter and parameter interactions. However, being grounded in the “blackbox function optimization” literature from statistics (see, e.g., ), SMBO has inherited
+a range of limitations inappropriate to the automated algorithm conﬁguration setting.
+These limitations include a focus on deterministic target algorithms; use of costly initial
+experimental designs; reliance on computationally expensive models; and the assumption
+that all target algorithm runs have the same execution costs. Despite considerable recent
+advances , all published work on SMBO still has three key limitations that
+prevent its use for general algorithm conﬁguration tasks: (1) it only supports numerical
+parameters; (2) it only optimizes target algorithm performance for single instances; and
+(3) it lacks a mechanism for terminating poorly performing target algorithm runs early.
+The main contribution of this paper is to remove the ﬁrst two of these SMBO limitations, and thus to make SMBO applicable to general algorithm conﬁguration problems
+with many categorical parameters and sets of benchmark instances. Speciﬁcally, we generalize four components of the SMBO framework and—based on them—deﬁne two novel
+SMBO instantiations capable of general algorithm conﬁguration: the simple model-free
+Random Online Adaptive Racing (ROAR) procedure and the more sophisticated Sequential Model-based Algorithm Conﬁguration (SMAC) method. These methods do not yet
+implement an early termination criterion for poorly performing target algorithm runs
+(such as, e.g., PARAMILS’s adaptive capping mechanism ); thus, so far we expect them
+to perform poorly on some conﬁguration scenarios with large captimes. In a thorough
+experimental analysis for a wide range of 17 scenarios with small captimes (involving
+the optimization of local search and tree search SAT solvers, as well as the commercial
+MIP solver CPLEX), SMAC indeed compared favourably to the two most prominent
+approaches for general algorithm conﬁguration: PARAMILS and GGA .
+The remainder of this paper is structured as follows. Section 2 describes the SMBO
+framework and previous work on SMBO. Sections 3 and 4 generalize SMBO’s components to tackle general algorithm conﬁguration scenarios, deﬁning ROAR and SMAC,
+respectively. Section 5 experimentally compares ROAR and SMAC to the existing state
+of the art in algorithm conﬁguration. Section 6 concludes the paper.
+Existing Work on Sequential Model-Based Optimization (SMBO)
+Model-based optimization methods construct a regression model (often called a response
+surface model) that predicts performance and then use this model for optimization.
+Sequential model-based optimization (SMBO) iterates between ﬁtting a model and gathering additional data based on this model. In the context of parameter optimization, the
+model is ﬁtted to a training set {(θ1, o1), . . . , (θn, on)} where parameter conﬁguration
+θi = (θi,1, . . . , θi,d) is a complete instantiation of the target algorithm’s d parameters
+and oi is the target algorithm’s observed performance when run with conﬁguration θi.
+Given a new conﬁguration θn+1, the model aims to predict its performance on+1.
+Sequential model-based optimization (SMBO) iterates between building a model and
+gathering additional data. We illustrate a simple SMBO procedure in Figure 1. Consider
+a deterministic algorithm A with a single continuous parameter x and let A’s runtime as
+a function of its parameter be described by the solid line in Figure 1(a). SMBO searches
+for a value of x that minimizes this runtime. Here, it is initialized by running A with the
+parameter values indicated by the circles in Figure 1(a). Next, SMBO ﬁts a response
+surface model to the data gathered; Gaussian process (GP) models are the most
+common choice. The black dotted line in Figure 1 represents the predictive mean of a GP
+model trained on the data given by the circles, and the shaded area around it quantiﬁes
+the uncertainty in the predictions; this uncertainty grows with distance from the training
+data. SMBO uses this predictive performance model to select a promising parameter
+conﬁguration for the next run of A. Promising conﬁgurations are predicted to perform
+well and/or lie in regions for which the model is still uncertain. These two objectives are
+parameter x
+response y
+DACE mean prediction
+DACE mean +/− 2*stddev
+True function
+Function evaluations
+EI (scaled)
+(a) SMBO, step 1
+parameter x
+response y
+DACE mean prediction
+DACE mean +/− 2*stddev
+True function
+Function evaluations
+EI (scaled)
+(b) SMBO, step 2
+Fig. 1. Two steps of SMBO for the optimization of a 1D function. The true function is shown as a
+solid line, and the circles denote our observations. The dotted line denotes the mean prediction
+of a noise-free Gaussian process model (the “DACE” model), with the grey area denoting its
+uncertainty. Expected improvement (scaled for visualization) is shown as a dashed line.
+combined in a so-called expected improvement (EI) criterion, which is high in regions
+of low predictive mean and high predictive variance (see the light dashed line in Figure
+1(a); an exact formula for EI is given in Equation 3 in Section 4.3). SMBO selects a
+conﬁguration with maximal EI (here, x = 0.705), runs A using it, and updates its model
+based on the result. In Figure 1(b), we show how this new data point changes the model:
+note the additional data point at x = 0.705, the greatly reduced uncertainty around it,
+and that the region of large EI is now split into two.
+While our example captures the essence of SMBO, recent practical SMBO instantiations include more complex mechanisms for dealing with randomness in the algorithm’s
+performance and for reducing the computational overhead. Algorithm Framework 1
+gives the general structure of the time-bounded SMBO framework we employ in this
+paper. It starts by running the target algorithm with some initial parameter conﬁgurations,
+and then iterates three steps: (1) ﬁtting a response surface model using the existing data;
+(2) selecting a list of promising conﬁgurations; and (3) running the target algorithm on
+(some of) the selected conﬁgurations until a given time bound is reached. This time
+bound is related to the combined overhead, tmodel + tei, due to ﬁtting the model and
+selecting promising conﬁgurations.
+SMBO has is roots in the statistics literature on experimental design for global
+continuous (“black-box”) function optimization. Most notable is the efﬁcient global
+optimization (EGO) algorithm by Jones et al. ; this is essentially the algorithm used
+in our simple example above. EGO is limited to optimizing continuous parameters for
+noise-free functions (i.e., the performance of deterministic algorithms). Follow-up work
+in the statistics community included an approach to optimize functions across multiple
+environmental conditions as well as the sequential kriging optimization (SKO)
+algorithm for handling noisy functions (i.e., in our context, randomized algorithms) by
+Huang et al. . In parallel to the latter work, Bartz-Beielstein et al. were
+the ﬁrst to use the EGO approach to optimize algorithm performance. Their sequential
+Algorithm Framework 1: Sequential Model-Based Optimization (SMBO)
+R keeps track of all target algorithm runs performed so far and their performances (i.e.,
+SMBO’s training data {([θ1, x1], o1), . . . , ([θn, xn], on)}), M is SMBO’s model, ⃗Θnew
+is a list of promising conﬁgurations, and tfit and tselect are the runtimes required to ﬁt the
+model and select conﬁgurations, respectively.
+:Target algorithm A with parameter conﬁguration space Θ; instance set Π; cost
+Output:Optimized (incumbent) parameter conﬁguration, θinc
+1 [R, θinc] ←Initialize(Θ, Π);
+[M, tfit] ←FitModel(R);
+[ ⃗Θnew, tselect] ←SelectConﬁgurations(M, θinc, Θ);
+[R, θinc] ←Intensify( ⃗Θnew, θinc, M, R, tfit + tselect, Π, ˆc);
+6 until total time budget for conﬁguration exhausted;
+7 return θinc;
+parameter optimization (SPO) toolbox—which has received considerable attention in the
+evolutionary algorithms community—provides many features that facilitate the manual
+analysis and optimization of algorithm parameters; it also includes an automated SMBO
+procedure for optimizing continuous parameters on single instances. We started our
+own work in SMBO by comparing SKO vs SPO, studying their choices for the four
+SMBO components . We demonstrated that component Intensify mattered most, and
+improved it in our SPO+ algorithm . Subsequently, we showed how to reduce the
+overhead incurred by construction and use of response surface models via approximate
+GP models. We also eliminated the need for a costly initial design by interleaving randomly selected parameters throughout the optimization process instead and exploit that
+different algorithm runs take different amounts of time. The resulting time-bounded
+SPO variant, TB-SPO, is the ﬁrst SMBO method practical for parameter optimization
+given a user-speciﬁed time budget . Although it was shown to signiﬁcantly outperform PARAMILS on some domains, it is still limited to the optimization of continuous
+algorithm parameters on single problem instances. In the following, we generalize the
+components of the time-bounded SMBO framework (of which TB-SPO is an instantiation), extending its scope to tackle general algorithm conﬁguration problems with many
+categorical parameters and sets of benchmark instances.
+Randomized Online Aggressive Racing (ROAR)
+In this section, we ﬁrst generalize SMBO’s Intensify procedure to handle multiple
+instances, and then introduce ROAR, a very simple model-free algorithm conﬁguration
+procedure based on this new intensiﬁcation mechanism.
+Procedure 2: Intensify( ⃗Θnew, θinc, M, R, tintensify, Π, ˆc)
+ˆc(θ, Π′) denotes the empirical cost of θ on the subset of instances Π′ ⊆Π, based on the
+runs in R; maxR is a parameter, set to 2 000 in all our experiments
+:Sequence of parameter settings to evaluate, ⃗Θnew; incumbent parameter setting,
+θinc; model, M; sequence of target algorithm runs, R; time bound, tintensify;
+instance set, Π; cost metric, ˆc
+Output:Updated sequence of target algorithm runs, R; incumbent parameter setting, θinc
+1 for i := 1, . . . , length( ⃗Θnew) do
+θnew ←⃗Θnew[i];
+if R contains less than maxR runs with conﬁguration θinc then
+Π′ ←{π′ ∈Π | R contains less than or equal number of runs using θinc and π′
+than using θinc and any other π′′ ∈Π} ;
+π ←instance sampled uniformly at random from Π′;
+s ←seed, drawn uniformly at random;
+R ←ExecuteRun(R, θinc, π, s);
+while true do
+Smissing ←⟨instance, seed⟩pairs for which θinc was run before, but not θnew;
+Storun ←random subset of Smissing of size min(N, |Smissing|);
+foreach (π, s) ∈Storun do R ←ExecuteRun(R, θnew, π, s);
+Smissing ←Smissing \ Storun;
+Πcommon ←instances for which we previously ran both θinc and θnew;
+if ˆc(θnew, Πcommon) > ˆc(θinc, Πcommon) then break;
+else if Smissing = ∅then θinc ←θnew; break;
+else N ←2 · N;
+if time spent in this call to this procedure exceeds tintensify and i ≥2 then break;
+19 return [R, θinc];
+Generalization I: An Intensiﬁcation Mechanism for Multiple Instances
+A crucial component of any algorithm conﬁguration procedure is the so-called intensiﬁcation mechanism, which governs how many evaluations to perform with each
+conﬁguration, and when to trust a conﬁguration enough to make it the new current best
+known conﬁguration (the incumbent). When conﬁguring algorithms for sets of instances,
+we also need to decide which instance to use in each run. To address this problem,
+we generalize TB-SPO’s intensiﬁcation mechanism. Our new procedure implements a
+variance reduction mechanism, reﬂecting the insight that when we compare the empirical
+cost statistics of two parameter conﬁgurations across multiple instances, the variance in
+this comparison is lower if we use the same N instances to compute both estimates.
+Procedure 2 deﬁnes this new intensiﬁcation mechanism more precisely. It takes as
+input a list of promising conﬁgurations, ⃗Θnew, and compares them in turn to the current
+incumbent conﬁguration until a time budget for this comparison stage is reached.1
+1 If that budget is already reached after the ﬁrst conﬁguration in ⃗Θnew, one more conﬁguration
+is used; see the last paragraph of Section 4.3 for an explanation why.
+In each comparison of a new conﬁguration, θnew, to the incumbent, θinc, we ﬁrst
+perform an additional run for the incumbent, using a randomly selected ⟨instance, seed⟩
+combination. Then, we iteratively perform runs with θnew (using a doubling scheme)
+until either θnew’s empirical performance is worse than that of θinc (in which case
+we reject θnew) or we performed as many runs for θnew as for θinc and it is still at
+least as good as θinc (in which case we change the incumbent to θnew). The ⟨instance,
+seed⟩combinations for θnew are sampled uniformly at random from those on which
+the incumbent has already run. However, every comparison in Procedure 2 is based
+on a different randomly selected subset of instances and seeds, while FOCUSEDILS’s
+Procedure “better” uses a ﬁxed ordering to which it can be very sensitive.
+Deﬁning ROAR
+We now deﬁne Random Online Aggressive Racing (ROAR), a simple model-free instantiation of the general SMBO framework (see Algorithm Framework 1).2 This surprisingly
+effective method selects parameter conﬁgurations uniformly at random and iteratively
+compares them against the current incumbent using our new intensiﬁcation mechanism.
+We consider ROAR to be a racing algorithm, because it runs each candidate conﬁguration
+only as long as necessary to establish whether it is competitive. It gets its name because
+the set of candidates is selected at random, each candidate is accepted or rejected online,
+and we make this online decision aggressively, before enough data has been gathered
+to support a statistically signiﬁcant conclusion. More formally, as an instantiation of
+the SMBO framework, ROAR is completely speciﬁed by the four components Initialize, FitModel, SelectConﬁgurations, and Intensify. Initialize performs a single run with
+the target algorithm’s default parameter conﬁguration (or a random conﬁguration if
+no default is available) on an instance selected uniformly at random. Since ROAR is
+model-free, its FitModel procedure simply returns a constant model which is never used.
+SelectConﬁgurations returns a single conﬁguration sampled uniformly at random from
+the parameter space, and Intensify is as described in Procedure 2.
+Sequential Model-based Algorithm Conﬁguration (SMAC)
+In this section, we introduce our second, more sophisticated instantiation of the general
+SMBO framework: Sequential Model-based Algorithm Conﬁguration (SMAC). SMAC
+can be understood as an extension of ROAR that selects conﬁgurations based on a model
+rather than uniformly at random. It instantiates Initialize and Intensify in the same way
+as ROAR. Here, we discuss the new model class we use in SMAC to support categorical
+parameters and multiple instances (Sections 4.1 and 4.2, respectively); then, we describe
+how SMAC uses its models to select promising parameter conﬁgurations (Section 4.3).
+Finally, we prove a convergence result for ROAR and SMAC (Section 4.4).
+2 We previously considered random sampling approaches based on less powerful intensiﬁcation
+mechanisms; see, e.g., RANDOM∗deﬁned in .
+Generalization II: Models for Categorical Parameters
+The models in all existing SMBO methods of which we are aware are limited to numerical
+parameters. In this section, in order to handle categorical parameters, we adapt the
+most prominent previously used model class (Gaussian stochastic process models) and
+introduce the model class of random forests to SMBO.
+A Weighted Hamming Distance Kernel Function for GP Models. Most recent work
+on sequential model-based optimization uses Gaussian stochastic process
+models (GPs; see ). GP models rely on a parameterized kernel function k : Θ×Θ 7→
+R+ that speciﬁes the similarity between two parameter conﬁgurations. Previous SMBO
+approaches for numerical parameters typically choose the GP kernel function
+k(θi, θj) = exp
+(−λl · (θi,l −θj,l)2)
+where λ1, . . . , λd are the kernel parameters.
+For categorical parameters, we deﬁne a new, similar kernel. Instead of measuring the
+(weighted) squared distance, it computes a (weighted) Hamming distance:
+kcat(θi, θj) = exp
+(−λl · [1 −δ(θi,l, θj,l)])
+where δ is the Kronecker delta function (ones if its two arguments are identical and zero
+otherwise).
+For a combination of continuous parameters Pcont and categorical parameters Pcat,
+we apply the combined kernel
+Kmixed(θi, θj) = exp
+(−λl · (θi,l −θj,l)2) +
+(−λl · [1 −δ(θi,l, θj,l)])
+Although Kmixed is a straightforward generalization of the standard Gaussian kernel in
+Equation 1, we are not aware of any prior use of this kernel or proof that it is indeed a
+valid kernel function.3 We provide this proof in the appendix. Since Gaussian stochastic
+processes are kernel-based learning methods and since Kmixed is a valid kernel function,
+it can be swapped in for the Gaussian kernel without changing any other component
+of the GP model. Here, we use the same projected process (PP) approximation of GP
+models as in TB-SPO .
+Random Forests. The new default model we use in SMAC is based on random forests
+ , a standard machine learning tool for regression and classiﬁcation. Random forests
+are collections of regression trees, which are similar to decision trees but have real
+3 Couto gives a recursive kernel function for categorical data that is related since it is also
+based on a Hamming distance.
+values (here: target algorithm performance values) rather than class labels at their leaves.
+Regression trees are known to perform well for categorical input data; indeed, they
+have already been used for modeling the performance (both in terms of runtime and
+solution quality) of heuristic algorithms (e.g., ). Random forests share this beneﬁt
+and typically yield more accurate predictions ; they also allow us to quantify our
+uncertainty in a given prediction. We construct a random forest as a set of B regression
+trees, each of which is built on n data points randomly sampled with repetitions from
+the entire training data set {(θ1, o1), . . . , (θn, on)}. At each split point of each tree, a
+random subset of ⌈d · p⌉of the d algorithm parameters is considered eligible to be split
+upon; the split ratio p is a parameter, which we left at its default of p = 5/6. A further
+parameter is nmin, the minimal number of data points required to be in a node if it is
+to be split further; we use the standard value nmin = 10. Finally, we set the number of
+trees to B = 10 to keep the computational overhead small.4 We compute the random
+forest’s predictive mean µθ and variance σ2
+θ for a new conﬁguration θ as the empirical
+mean and variance of its individual trees’ predictions for θ. Usually, the tree prediction
+for a parameter conﬁguration θn+1 is the mean of the data points in the leaf one ends up
+in when propagating θn+1 down the tree. We adapted this mechanism to instead predict
+the user-deﬁned cost metric of that data, e.g., the median of the data points in that leaf.
+Transformations of the Cost Metric. Model ﬁt can often be improved by transforming
+the cost metric. In this paper, we focus on minimizing algorithm runtime. Previous work
+on predicting algorithm runtime has found that logarithmic transformations substantially
+improve model quality and we thus use log-transformed runtime data throughout this
+paper; that is, for runtime ri, we use oi = ln(ri). (SMAC can also be applied to optimize
+other cost metrics, such as the solution quality an algorithm obtains in a ﬁxed runtime;
+other transformations may prove more efﬁcient for other metrics.) However, we note
+that in some models such transformations implicitly change the cost metric users aim to
+optimize. For example, take a simple case where there is only one parameter conﬁguration θ for which we measured runtimes (r1, . . . , r10)=(21, 22, . . . , 210). While the true
+arithmetic mean of these runs is roughly 205, a GP model trained on this data using a log
+transformation would predict the mean to be exp (mean((log(r1), . . . , log(r10)))) ≈45.
+This is because the arithmetic mean of the logs is the log of the geometric mean:
+geometric mean =
+= exp (mean of logs).
+For GPs, it is not clear how to ﬁx this problem. We avoid this problem in our random
+forests by computing the prediction in the leaf of a tree by “untransforming” the data,
+computing the user-deﬁned cost metric, and then transforming the result again.
+4 An optimization of these three parameters might improve performance further. We plan on
+studying this in the context of an application of SMAC to optimizing its own parameters.
+Generalization III: Models for Sets of Problem Instances
+There are several possible ways to extend SMBO’s models to handle multiple instances.
+Most simply, one could use a ﬁxed set of N instances for every evaluation of the target
+algorithm run, reporting aggregate performance. However, there is no good ﬁxed choice
+for N: small N leads to poor generalization to test data, while large N leads to a
+prohibitive N-fold slowdown in the cost of each evaluation. (This is the same problem
+faced by the PARAMILS instantiation BASICILS(N) .) Instead, we explicitly integrate
+information about the instances into our response surface models. Given a vector of
+features xi describing each training problem instance πi ∈Π, we learn a joint model that
+predicts algorithm runtime for combinations of parameter conﬁgurations and instance
+features. We then aggregate these predictions across instances.
+Instance Features. Existing work on empirical hardness models has demonstrated
+that it is possible to predict algorithm runtime based on features of a given problem
+instance. Most notably, such predictions have been exploited to construct portfolio-based
+algorithm selection mechanisms, such as SATzilla .
+For SAT instances in the form of CNF formulae, we used 126 features including
+features based on graph representations of the instance, an LP relaxation, DPLL probing,
+local search probing, clause learning, and survey propagation. All features are listed in
+Figure 2. For MIP instances we computed 39 features, including features based on graph
+representations, an LP relaxation, the objective function, and the linear constraint matrix.
+All features are listed in Figure 3. To reduce the computational complexity of learning,
+we applied principal component analysis (see, e.g., ), to project the feature matrix
+into a lower-dimensional subspace spanned by the seven orthogonal vectors along which
+it has maximal variance.
+For new domains, for which no features have yet been deﬁned, SMAC can still
+be applied with an empty feature set or simple domain-independent features, such as
+instance size or the performance of the algorithm’s default setting (which, based on
+preliminary experiments, seems to be a surprisingly effective feature). Note that in
+contrast to per-instance approaches, such as SATzilla , instance features are
+only needed for the training instances: the end result of algorithm conﬁguration is a
+single parameter conﬁguration that is used without a need to compute features for test
+instances. As a corollary, the time required for feature computation is not as crucial in
+algorithm conﬁguration as it is in per-instance approaches: in per-instance approaches,
+feature computation has to be counted as part of the time required to solve test instances,
+while in algorithm conﬁguration no features are computed for test instances at all. In
+fact, features for the training instances may well be the result of an extensive ofﬂine
+analysis of those training instances, or can even be taken from the literature. Computing
+the features we used here took an average of 30 seconds for the SAT domains, and 4.4
+seconds for the MIP domains.
+Predicting Performance Across Instances. So far, we have discussed models trained
+on pairs (θi, oi) of parameter conﬁgurations θi and their observed performance oi.
+Now, we extend this data to include instance features. Let xi denote the vector of
+Problem Size Features:
+1.–2. Number of variables and clauses in original formula: denoted v and c, respectively
+3.–4. Number of variables and clauses after
+simpliﬁcation with SATelite: denoted v’
+and c’, respectively
+5.–6. Reduction of variables and clauses by
+simpliﬁcation: (v-v’)/v’ and (c-c’)/c’
+7. Ratio of variables to clauses: v’/c’
+Variable-Clause Graph Features:
+8.–12. Variable node degree statistics: mean,
+variation coeﬃcient, min, max, and entropy
+13.–17. Clause node degree statistics: mean,
+variation coeﬃcient, min, max, and entropy
+Variable Graph Features:
+18–21. Node degree statistics: mean, variation
+coeﬃcient, min, and max
+22.–26. Diameter:
+coeﬃcient,
+min, max, and entropy
+27.–31. Clustering Coeﬃcient: mean, variation
+coeﬃcient, min, max, and entropy
+Clause Graph Features:
+32–36. Node degree statistics: mean, variation
+coeﬃcient, min, max, and entropy
+Balance Features:
+37.–41. Ratio of positive to negative literals in
+each clause: mean, variation coeﬃcient,
+min, max, and entropy
+42.–46. Ratio of positive to negative occurrences of each variable: mean, variation
+coeﬃcient, min, max, and entropy
+47.–49. Fraction of unary, binary, and ternary
+Proximity to Horn Formula:
+50. Fraction of Horn clauses
+51.–55. Number of occurrences in a Horn clause
+for each variable: mean, variation coeﬃcient, min, max, and entropy
+DPLL Probing Features:
+56.–60. Number of unit propagations: computed
+at depths 1, 4, 16, 64 and 256
+61.–62. Search space size estimate: mean depth
+to contradiction, estimate of the log of
+number of nodes
+LP-Based Features:
+63.–66. Integer slack vector: mean, variation coeﬃcient, min, and max
+67. Ratio of integer variables in LP solution
+68. Objective function value of LP solution
+Local Search Probing Features, based on 2
+seconds of running each of SAPS and GSAT:
+69.–78. Number of steps to the best local minimum in a run: mean, median, variation
+coeﬃcient, 10th and 90th percentiles
+79.–82. Average improvement to best in a run:
+mean and coeﬃcient of variation of improvement per step to best solution
+83.–86. Fraction of improvement due to ﬁrst local minimum: mean and variation coeﬃcient
+87.–90. Coeﬃcient of variation of the number
+of unsatisﬁed clauses in each local minimum: mean and variation coeﬃcient
+Clause Learning Features (based on 2 seconds of running Zchaﬀrand):
+91.–99. Number of learned clauses: mean, variation coeﬃcient, min, max, 10%, 25%,
+50%, 75%, and 90% quantiles
+100.–108. Length of learned clauses: mean, variation coeﬃcient, min, max, 10%, 25%,
+50%, 75%, and 90% quantiles
+Survey Propagation Features
+109.–117. Conﬁdence of survey propagation: For
+each variable, compute the higher of
+P(true)/P(false) or P(false)/P(true).
+Then compute statistics across variables:
+mean, variation coeﬃcient, min, max,
+10%, 25%, 50%, 75%, and 90% quantiles
+118.–126. Unconstrained variables: For each variable, compute P(unconstrained). Then
+compute statistics across variables: mean,
+coeﬃcient,
+25%, 50%, 75%, and 90% quantiles
+Fig. 2. 11 groups of SAT features; these were introduced in .
+features for the instance used in the ith target algorithm run. Concatenating parameter
+values, θi, and instance features, xi, into one input vector yields the training data
+{([θ1, x1], o1), . . . , ([θn, xn], on)}. From this data, we learn a model that takes as input
+a parameter conﬁguration θ and predicts performance across all training instances.
+For GP models, there exists an approach from the statistics literature to predict mean
+Problem Size Features:
+1.–2. Number of variables and constraints: denoted n and m, respectively
+3. Number of nonzero entries in the linear
+constraint matrix, A
+Variable-Constraint Graph Features:
+4–7. Variable node degree statistics:
+max, min, and stddev
+8–11. Constraint node degree statistics: mean,
+max, min, and stddev
+Variable Graph (VG) Features:
+12–17. Node degree statistics: max, min, stddev,
+25% and 75% quantiles
+18–19. Clustering Coefﬁcient: mean and stddev
+20. Edge Density: number of edges in the VG
+divided by the number of edges in a complete graph having the same number of
+LP-Based Features:
+21–23. Integer slack vector: mean, max, L2
+24. Objective function value of LP solution
+Objective Function Features:
+25. Standard deviation of normalized coefﬁcients: {ci/m}n
+26. Standard deviation of {ci/ni}n
+i=1, where
+ni denotes the number of nonzero entries
+in column i of A
+27. Standard deviation of {ci/√ni}n
+Linear Constraint Matrix Features:
+28.–29. Distribution of normalized constraint matrix entries, Ai,j/bi: mean and stddev
+(only of elements where bi ̸= 0)
+30.–31. Variation coefﬁcient of normalized absolute nonzero entries per row: mean and
+Variable Type Features:
+32.–33. Support size of discrete variables: mean
+and stddev
+34. Percent unbounded discrete variables
+35. Percent continuous variables
+General Problem Type Features:
+36. Problem type:
+categorical
+attributed by CPLEX (LP, MILP, FIXED-
+MILP, QP, MIQP, FIXEDMIQP, MIQP,
+QCP, or MIQCP)
+37. Number of quadratic constraints
+38. Number of nonzero entries in matrix of
+quadratic coefﬁcients of objective function,
+39. Number of variables with nonzero entries
+Fig. 3. Eight groups of features for the mixed integer programming problem. These general MIP
+features have been introduced in as a generalization of features for the combinatorial winner
+determination problem in .
+performance across problem instances . However, due to the issue discussed in
+Section 4.1, when using log transformations this approach would not model the cost
+metric the user speciﬁes; e.g., instead of the arithmetic mean it would model geometric
+mean. This problem would be particularly serious in the case of multiple instances, as
+performance often varies by orders of magnitude from one instance to another. As a
+consequence, we did not implement a version of SMAC(PP) for multiple instances at this
+time. Instead, we adapted RF models to handle predictions across multiple instances. All
+input dimensions are handled equally when constructing the random forest, regardless of
+whether they refer to parameter values or instance features. The prediction procedure
+changes as follows: within each tree, we ﬁrst predict performance for the combinations of
+the given parameter conﬁguration and each instance; next, we combine these predictions
+with the user-deﬁned cost metric (e.g., arithmetic mean runtime); ﬁnally, we compute
+means and variances across trees.
+Generalization IV: Using the Model to Select Promising Conﬁgurations in
+Large Mixed Numerical/Categorical Conﬁguration Spaces
+The SelectConﬁguration component in SMAC uses the model to select a list of promising
+parameter conﬁgurations. To quantify how promising a conﬁguration θ is, it uses the
+model’s predictive distribution for θ to compute its expected positive improvement
+(EI(θ)) over the best conﬁguration seen so far (the incumbent). EI(θ) is large for
+conﬁgurations θ with low predicted cost and for those with high predicted uncertainty;
+thereby, it offers an automatic tradeoff between exploitation (focusing on known good
+parts of the space) and exploration (gathering more information in unknown parts of the
+space). Speciﬁcally, we use the E[Iexp] criterion introduced in for log-transformed
+costs; given the predictive mean µθ and variance σ2
+θ of the log-transformed cost of a
+conﬁguration θ, this is deﬁned as
+EI(θ) := E[Iexp(θ)] = fminΦ(v) −e
+θ+µθ · Φ(v −σθ),
+where v := ln(fmin)−µθ
+, Φ denotes the cumulative distribution function of a standard
+normal distribution, and fmin denotes the empirical mean performance of θinc.5
+Having deﬁned EI(θ), we must still decide how to identify conﬁgurations θ with
+large EI(θ). This amounts to a maximization problem across parameter conﬁguration
+space. Previous SMBO methods simply applied random sampling for
+this task (in particular, they evaluated EI for 10 000 random samples), which is unlikely
+to be sufﬁcient in high-dimensional conﬁguration spaces, especially if promising conﬁgurations are sparse. To gather a set of promising conﬁgurations with low computational
+overhead, we perform a simple multi-start local search and consider all resulting conﬁgurations with locally maximal EI.6 This search is similar in spirit to PARAMILS ,
+but instead of algorithm performance it optimizes EI(θ) (see Equation 3), which can
+be evaluated based on the model predictions µθ and σ2
+θ without running the target algorithm. More concretely, the details of our local search are as follows. We compute EI
+for all conﬁguations used in previous target algorithm runs, pick the ten conﬁgurations
+with maximal EI, and initialize a local search at each of them. To seamlessly handle
+mixed categorical/numerical parameter spaces, we use a randomized one-exchange
+neighbourhood, including the set of all conﬁgurations that differ in the value of exactly
+one discrete parameter, as well as four random neighbours for each numerical parameter.
+In particular, we normalize the range of each numerical parameter to and then
+sample four “neighbouring” values for numerical parameters with current value v from
+a univariate Gaussian distribution with mean v and standard deviation 0.2, rejecting
+new values outside the interval . Since batch model predictions (and thus batch EI
+computations) for a set of N conﬁgurations are much cheaper than separate predictions
+for N conﬁgurations, we use a best improvement search, evaluating EI for all neighbours
+at once; we stop each local search once none of the neighbours has larger EI. Since
+5 In TB-SPO , we used fmin = µ(θinc) + σ(θinc). However, we now believe that setting
+fmin to the empirical mean performance of θinc yields better performance overall.
+6 We plan to investigate better mechanisms in the future. However, we note that the best problem
+formulation is not obvious, since we desire a diverse set of conﬁgurations with high EI.
+SMBO sometimes evaluates many conﬁgurations per iteration and because batch EI computations are cheap, we simply compute EI for an additional 10 000 randomly-sampled
+conﬁgurations; we then sort all 10 010 conﬁgurations in descending order of EI. (The ten
+results of local search typically had larger EI than all randomly sampled conﬁgurations.)
+Having selected this list of 10 010 conﬁgurations based on the model, we interleave
+randomly-sampled conﬁgurations in order to provide unbiased training data for future
+models. More precisely, we alternate between conﬁgurations from the list and additional
+conﬁgurations sampled uniformly at random.
+Theoretical Analysis of SMAC and ROAR
+In this section, we provide a convergence proof for SMAC (and ROAR) for ﬁnite
+conﬁguration spaces. Since Intensify always compares at least two conﬁgurations against
+the current incumbent, at least one randomly sampled conﬁguration is evaluated in
+every iteration of SMBO. In ﬁnite conﬁguration spaces, thus, each conﬁguration has a
+positive probability of being selected in each iteration. In combination with the fact that
+Intensify increases the number of runs used to evaluate each conﬁguration unboundedly,
+this allows us to prove that SMAC (and ROAR) eventually converge to the optimal
+conﬁguration when using consistent estimators of the user-deﬁned cost metric. The proof
+is straight-forward, following the same arguments as a previous proof about FocusedILS
+(see ). Nevertheless, we give it here for completeness.
+Deﬁnition 1 (Consistent estimator) ˆcN(θ) is a consistent estimator for c(θ) iff
+N→∞P(|ˆcN(θ) −c(θ)| < ϵ) = 1.
+When we estimate that a parameter conﬁguration’s true cost c(θ) based on N runs
+is ˆcN(θ), and when ˆcN(θ) is a consistent estimator of c(θ), cost estimates become
+increasingly reliable as N approaches inﬁnity, eventually eliminating the possibility of
+mistakes in comparing two parameter conﬁgurations. The following lemma is exactly
+Lemma 8 in ; for the proof, see that paper.
+Lemma 2 (No mistakes for N →∞) Let θ1, θ2 ∈Θ be any two parameter conﬁgurations with c(θ1) < c(θ2). Then, for consistent estimators ˆcN, limN→∞P(ˆcN(θ1) ≥
+ˆcN(θ2)) = 0.
+All that remains to be shown is that SMAC evaluates each parameter conﬁguration
+an unbounded number of times.
+Lemma 3 (Unbounded number of evaluations) Let N(J, θ) denote the number of
+runs SMAC has performed with parameter conﬁguration θ at the end of SMBO iteration J. Then, if SMBO’s parameter maxR is set to ∞, for any constant K and
+conﬁguration θ ∈Θ (with ﬁnite Θ), limJ→∞P[N(J, θ) ≥K] = 1.
+Proof. In each SMBO iteration, SMAC evaluates at least one random conﬁguration
+(performing at least one new run for it since maxR = ∞), and with a probability of
+p = 1/|Θ|, this is conﬁguration θ. Hence, the number of runs performed with θ is
+lower-bounded by a binomial random variable B(k; J, p). Then, for any constant k < K
+we obtain limJ→∞B(k; J, p) Thus, limJ→∞P[N(J, θ) ≥K] = 1.
+Theorem 4 (Convergence of SMAC) When SMAC with maxR = ∞optimizes a cost
+measure c based on a consistent estimator ˆcN and a ﬁnite conﬁguration space Θ, the
+probability that it ﬁnds the true optimal parameter conﬁguration θ∗∈Θ approaches
+one as the time allowed for conﬁguration goes to inﬁnity.
+Proof. Each SMBO iteration takes ﬁnite time. Thus, as time goes to inﬁnity so does
+the number of SMBO iterations, J. According to Lemma 3, as J goes to inﬁnity N(θ)
+grows unboundedly for each θ ∈Θ. For each θ1, θ2, as N(θ1) and N(θ2) go to inﬁnity,
+Lemma 2 states that in a pairwise comparison, the truly better conﬁguration will be
+preferred. Thus eventually, SMAC visits all ﬁnitely many parameter conﬁgurations and
+prefers the best one over all others with probability arbitrarily close to one.
+We note that this convergence result holds regardless of the model type used. In
+fact, it even holds for a simple round robin procedure that loops through parameter
+conﬁgurations. We thus rely on empirical results to assess SMAC. We present these in
+the following sections, after explaining how to build the relevant models.
+Experimental Evaluation
+We now compare the performance of SMAC, ROAR, TB-SPO , GGA , and
+PARAMILS (in particular, FOCUSEDILS 2.3) for a wide variety of conﬁguration
+scenarios, aiming to target algorithm runtime for solving SAT and MIP problems. In
+principle, our ROAR and SMAC methods also apply to optimizing other cost metrics,
+such as the solution quality an algorithm can achieve in a ﬁxed time budget; we plan on
+studying their empirical performance for this case in the near future.
+Experimental Setup
+Conﬁguration scenarios. We used 17 conﬁguration scenarios from the literature, involving the conﬁguration of the local search SAT solver SAPS (4 parameters), the
+tree search solver SPEAR (26 parameters), and the most widely used commercial
+mixed integer programming solver, IBM ILOG CPLEX7 (76 parameters). SAPS is a
+dynamic local search algorithm, and its four continuous parameters control the scaling
+and smoothing of clause weights, as well as the percentage of random steps. We use
+its UBCSAT implementation . SPEAR is a tree search algorithm for SAT solving
+developed for industrial instances, and with appropriate parameter settings it is the best
+available solver for certain types of SAT-encoded hardware and software veriﬁcation
+instances . SPEAR has 26 parameters, including ten categorical, four integer, and
+twelve continuous parameters. The categorical parameters mainly control heuristics
+for variable and value selection, clause sorting, resolution ordering, and also enable or
+disable optimizations, such as the pure literal rule. The continuous and integer parameters
+mainly deal with activity, decay, and elimination of variables and clauses, as well as
+with the interval of randomized restarts and percentage of random choices. CPLEX is
+the most-widely used commercial optimization tool for solving MIPs, currently used
+7 
+by over 1 300 corporations and government agencies, along with researchers at over
+1 000 universities. In deﬁning CPLEX’s conﬁguration space, we were careful to keep
+all parameters ﬁxed that change the problem formulation (e.g., parameters such as the
+optimality gap below which a solution is considered optimal). The 76 parameters we
+selected affect all aspects of CPLEX. They include 12 preprocessing parameters (mostly
+categorical); 17 MIP strategy parameters (mostly categorical); 11 categorical parameters
+deciding how aggressively to use which types of cuts; 9 numerical MIP “limits” parameters; 10 simplex parameters (half of them categorical); 6 barrier optimization parameters
+(mostly categorical); and 11 further parameters. Most parameters have an “automatic”
+option as one of their values. We allowed this value, but also included other values (all
+other values for categorical parameters, and a range of values for numerical parameters).
+In all 17 conﬁguration scenarios, we terminated target algorithm runs at κmax = 5
+seconds, the same per-run cutoff time used in previous work for these scenarios. In
+previous work, we have also applied PARAMILS to optimize MIP solvers with very large
+per-run captimes (up to κmax = 10 000s), and obtained better results than the CPLEX
+tuning tool . We believe that for such large captimes, an adaptive capping mechanism,
+such as the one implemented in ParamILS , is essential; we are currently working
+on integrating such a mechanism into SMAC.8 In this paper, to study the remaining
+components of SMAC, we only use scenarios with small captimes of 5s.
+In order to enable a fair comparison with GGA, we changed the optimization objective
+of all 17 scenarios from the original PAR-10 (penalized average runtime, counting
+timeouts at κmax as 10·κmax, which is not supported by GGA) to simple average runtime
+(PAR-1, counting timeouts at κmax as κmax). 9 However, one difference remains: we
+minimize the runtime reported by the target algorithm, but GGA can only minimize its
+own measurement of target algorithm runtime, including (sometimes large) overheads
+for reading in the instance. All instances we used are available at 
+labs/beta/Projects/AAC.
+Parameter transformations. Some numerical parameters naturally vary on a nonuniform scale (e.g., a parameter θ with an interval that we discretized
+to the values {100, 200, 400, 800, 1600} for use in PARAMILS). We transformed
+such parameters to a domain in which they vary more uniformly (e.g., log(θ) ∈
+[log(100), log(1600)]), un-transforming the parameter values for each call to the target
+algorithm.
+8 In fact, preliminary experiments for conﬁguration scenario CORLAT (from , with κmax =
+10 000s) highlight the importance of developing an adaptive capping mechanism for SMAC:
+e.g., in one of SMAC’s run, it only performed 49 target algorithm runs, with 15 of them timing
+out after κmax = 10 000s, and another 3 taking over 5 000 seconds each. Together, these runs
+exceeded the time budget of 2 CPU days (172 800 seconds), despite the fact that all of them
+could have safely been cut off after less than 100 seconds. As a result, for scenario CORLAT,
+SMAC performed a factor of 3 worse than PARAMILS with κmax = 10 000s. On the other
+hand, SMAC can sometimes achieve strong performance even with relatively high captimes;
+e.g., on CORLAT with κmax = 300s, SMAC outperformed PARAMILS by a factor of 1.28.
+9 Using PAR-10 to compare the remaining conﬁgurators, our qualitative results did not change.
+Comparing conﬁguration procedures. We performed 25 runs of each conﬁguration
+procedure on each conﬁguration scenario. For each such run ri, we computed test
+performance ti as follows. First, we extracted the incumbent conﬁguration θinc at the
+point the conﬁguration procedure exhausted its time budget; SMAC’s overhead due
+to the construction and use of models were counted as part of this budget. Next, in
+an ofﬂine evaluation step using the same per-run cutoff time as during training, we
+measured the mean runtime ti across 1 000 independent test runs of the target algorithm
+parameterized by θinc. In the case of multiple-instance scenarios, we used a test set of
+previously unseen instances. For a given scenario, this resulted in test performances
+t1, . . . , t25 for each conﬁguration procedure. We report medians across these 25 values,
+visualize their variance in boxplots, and perform a Mann-Whitney U test to check
+for signiﬁcant differences between conﬁguration procedures. We ran GGA through
+HAL , using parameter settings recommended by GGA’s author, Kevin Tierney, in
+e-mail communication: we set the population size to 70, the number of generations to
+100, the number of runs to perform in the ﬁrst generation to 5, and the number of runs
+to perform in the last generation to 70. We used default settings for FOCUSEDILS 2.3,
+including aggressive capping. We note that in a previous comparison of GGA and
+FOCUSEDILS, capping was disabled in FOCUSEDILS; this explains its poor performance
+there and its better performance here.
+With the exception of FOCUSEDILS, all of the conﬁguration procedures we study
+here support numerical parameters without a need for discretization. We present results
+both for the mixed numerical/categorical parameter space these methods search, and—to
+enable a direct comparison to FOCUSEDILS—for a fully discretized conﬁguration space.
+Computational environment. We conducted all experiments on a cluster of 55 dual
+3.2GHz Intel Xeon PCs with 2MB cache and 2GB RAM, running OpenSuSE Linux
+11.1. We measured runtimes as CPU time on these reference machines.
+Experimental Results for Single Instance Scenarios
+In order to evaluate our new general algorithm conﬁguration procedures ROAR and
+SMAC one component at a time, we ﬁrst evaluated their performance for optimizing
+the continuous parameters of SAPS and the mixed numerical/categorical parameters of
+SPEAR on single SAT instances; multi-instance scenarios are studied in the next section.
+To enable a comparison with our previous SMBO instantiation TB-SPO, we used the
+6 conﬁguration scenarios introduced in , which aim to minimize SAPS’s runtime
+on 6 single SAT-encoded instances, 3 each from quasigroup completion (QCP )
+and from small world graph colouring (SWGCP ). We also used 5 similar new
+conﬁguration scenarios, which aim to optimize SPEAR for 5 further SAT-encoded
+instances: 3 from software veriﬁcation (SWV ) and 2 from IBM bounded model
+checking (IBM ; we only used 2 low quantiles of this hard distribution since SPEAR
+could not solve the instance at the 75% quantile within the cutoff time). The conﬁguration
+scenarios are named algorithm-distribution-quantile: e.g., SAPS-QCP-MED
+aims to optimize SAPS performance on a median-hard QCP instance. The time budget
+for each algorithm conﬁguration run was 30 CPU minutes, exactly following .
+The model-based approaches SMAC and TB-SPO performed best in this comparison,
+followed by ROAR, FOCUSEDILS, and GGA. Table 1 shows the results achieved by
+each of the conﬁguration procedures, for both the full parameter conﬁguration space
+(which includes numerical parameters) and the discretized version we made for use
+with FOCUSEDILS. For the special case of single instances and a small number of allnumerical parameters, SMAC(PP) and TB-SPO are very similar, and both performed
+best.10 While TB-SPO does not apply in the remaining conﬁguration scenarios, our more
+general SMAC method achieved the best performance in all of them. For all-numerical
+parameters, SMAC performed slightly better using PP models, while in the presence of
+categorical parameters the RF models performed better. ROAR performed well for small
+but not for large conﬁguration spaces: it was among the best (i.e., best or not signiﬁcantly
+different from the best) in most of the SAPS scenarios (4 parameters) but only for one of
+the SPEAR scenarios (26 parameters). Both GGA and FOCUSEDILS performed slightly
+worse than ROAR for the SAPS scenarios, and slightly (but statistically signiﬁcantly)
+worse than SMAC for most SPEAR conﬁguration scenarios. Figure 4 visualizes each
+conﬁgurator’s 25 test performances for all scenarios. We note that SMAC and ROAR
+often yielded more robust results than FOCUSEDILS and GGA: for many scenarios some
+of the 25 FOCUSEDILS and GGA runs did very poorly.
+Our new SMAC and ROAR methods were able to explore the full conﬁguration
+space, which sometimes led to substantially improved performance compared to the
+discretized conﬁguration space PARAMILS is limited to. Comparing the left vs the right
+side of Table 1, we note that the SAPS discretization (the same we used to optimize
+SAPS with PARAMILS in previous work ) left substantial room for improvement
+when exploring the full space: roughly 1.15-fold and 1.55-fold speedups on the QCP
+and SWGCP instances, respectively. GGA did not beneﬁt as much from being allowed
+to explore the full conﬁguration space for the SAPS scenarios; however, in one of the
+SPEAR scenarios (SPEAR-IBM-MED), it did perform 1.15 times better for the full space
+(albeit still worse than SMAC).
+Experimental Results for General Multi-Instance Conﬁguration Scenarios
+We now compare the performance of SMAC, ROAR, GGA, and FOCUSEDILS on six
+general algorithm conﬁguration tasks that aim to minimize the mean runtime of SAPS,
+SPEAR, and CPLEX for various sets of instances. These are the 5 BROAD conﬁguration
+scenarios used in to evaluate PARAMILS’s performance, plus one further CPLEX
+scenario, and we used the same time budget of 5 hours per conﬁguration run. These
+instances come from the following domains: quasigroup completion, QCP ; small
+world graph colouring, SWGCP ; winner determination in combinatorial auctions,
+REGIONS100 ; mixed integer knapsack, MIK .
+Overall, SMAC performed best in this comparison: as shown in Table 2 its performance was among the best (i.e., statistically indistinguishable from the best) in all 6
+conﬁguration scenarios, for both the discretized and the full conﬁguration spaces. Our
+simple ROAR method performed surprisingly well, indicating the importance of the
+10 In this special case, the two only differ in the expected improvement criterion and its optimization.
+Full conﬁguration space
+Discretized conﬁguration space
+SMAC SMAC(PP) TB-SPO ROAR GGA SMAC SMAC(PP) ROAR F-ILS GGA
+SA P S-QCP-M E D
+SA P S-QCP-Q075
+SA P S-QCP-Q095
+SA P S-SWGCP-M E D
+SA P S-SWGCP-Q075 [·10−1s]
+SA P S-SWGCP-Q095 [·10−1s]
+SP E A R-IBM-Q025 [·10−1s]
+SP E A R-IBM-M E D
+SP E A R-SWV-M E D
+SP E A R-SWV-Q075 [·10−1s]
+SP E A R-SWV-Q095 [·10−1s]
+Table 1. Comparison of algorithm conﬁguration procedures for optimizing parameters on single
+problem instances. We performed 25 independent runs of each conﬁguration procedure and report
+the median of the 25 test performances (mean runtimes across 1 000 target algorithm runs with the
+found conﬁgurations). We bold-faced entries for conﬁgurators that are not signiﬁcantly worse than
+the best conﬁgurator for the respective conﬁguration space, based on a Mann-Whitney U test. The
+symbol “—” denotes that the conﬁgurator does not apply for this conﬁguration space.
+SWGCP−q075
+SWGCP−q095
+(a) SAPS (4 continuous parameters)
+(b) SPEAR (26 parameters; 12 of them continuous and 4 integral)
+Fig. 4. Visual comparison of conﬁguration procedures’ performance for setting SAPS and
+SPEAR’s parameters for single instances. For each conﬁgurator and scenario, we show boxplots for the 25 test performances underlying Table 1, for the full conﬁguration space (discretized
+for FOCUSEDILS). ‘S’ stands for SMAC, ‘P’ for SMAC(PP), ‘T’ for TB-SPO, ‘R’ for ROAR,
+‘F’ for FOCUSEDILS, and ‘G’ for GGA.
+intensiﬁcation mechanism: it was among the best in 2 of the 6 conﬁguration scenarios for
+either version of the conﬁguration space. However, it performed substantially worse than
+the best approaches for conﬁguring CPLEX—the algorithm with the largest conﬁguration
+space; we note that ROAR’s random sampling approach lacks the guidance offered by
+either FOCUSEDILS’s local search or SMAC’s response surface model. GGA performed
+Full conﬁguration space
+Discretized conﬁguration space
+SMAC ROAR F-ILS GGA SMAC ROAR F-ILS
+SA P S-QCP
+SA P S-SWGCP
+SP E A R-QCP
+SP E A R-SWGCP
+CPLEX-RE G I O N S100 [·10−1s]
+Table 2. Comparison of algorithm conﬁguration procedures for benchmarks with multiple instances. We performed 25 independent runs of each conﬁguration procedure and report the median
+of the 25 test performances (mean runtimes across 1 000 target algorithm runs with the found
+conﬁgurations on a test set disjoint from the training set). We bold-face entries for conﬁgurators
+that are not signiﬁcantly worse than the best conﬁgurator for the respective conﬁguration space,
+based on a Mann-Whitney U test.
+slightly better for optimizing CPLEX than ROAR, but also signiﬁcantly worse than either
+FOCUSEDILS or SMAC. Figure 5 visualizes the performance each conﬁgurator achieved
+for all 6 scenarios. We note that—similarly to the single instance cases—the results of
+SMAC were often more robust than those of FOCUSEDILS and GGA.
+Although the performance improvements achieved by our new methods might not
+appear large in absolute terms, it is important to remember that algorithm conﬁguration
+is an optimization problem, and that the ability to tease out the last few percent of
+improvement often distinguishes good algorithms. We expect the difference between
+conﬁguration procedures to be clearer in scenarios with larger per-instance runtimes. In
+order to handle such scenarios effectively, we believe that SMAC will require an adaptive
+capping mechanism similar to the one we introduced for PARAMILS ; we are actively
+working on integrating such a mechanism with SMAC’s models.
+As in the single-instance case, for some conﬁguration scenarios, SMAC and ROAR
+achieved much better results when allowed to explore the full space rather than FOCUSED-
+ILS’s discretized search space. Speedups for SAPS were similar to those observed in the
+single-instance case (about 1.15-fold for SAPS-QCP and 1.65-fold for SAPS-SWGCP),
+but now we also observed a 1.17-fold improvement for SPEAR-QCP. In contrast, GGA
+actually performed worse for 4 of the 6 scenarios when allowed to explore the full space.
+Conclusion
+In this paper, we extended a previous line of work on sequential model-based optimization (SMBO) to tackle general algorithm conﬁguration problems. SMBO had previously
+been applied only to the optimization of algorithms with numerical parameters on single
+problem instances. Our work overcomes both of these limitations, allowing categorical
+parameters and conﬁguration for sets of problem instances. The four technical advances
+that made this possible are (1) a new intensiﬁcation mechanism that employs blocked
+comparisons between conﬁgurations; an alternative class of response surface models,
+random forests, to handle (2) categorical parameters and (3) multiple instances; and (4)
+a new optimization procedure to select the most promising parameter conﬁguration in a
+large mixed categorical/numerical space.
+SAPS−SWGCP
+SPEAR−SWGCP
+CPLEX−regions100
+Fig. 5. Visual comparison of conﬁguration procedures for general algorithm conﬁguration scenarios. For each conﬁgurator and scenario, we show boxplots for the runtime data underlying
+Table 2, for the full conﬁguration space (discretized for FOCUSEDILS). ‘S’ stands for SMAC, ‘R’
+for ROAR, ‘F’ for FOCUSEDILS, and ‘G’ for GGA. FOCUSEDILS does not apply for the full
+conﬁguration space, denoted by “—”.
+We presented empirical results for the conﬁguration of two SAT algorithms (one
+local search, one tree search) and the commercial MIP solver CPLEX on a total of
+17 conﬁguration scenarios, demonstrating the strength of our methods. Overall, our
+new SMBO procedure SMAC yielded statistically signiﬁcant—albeit sometimes small—
+improvements over all of the other approaches on several conﬁguration scenarios, and
+never performed worse. In contrast to FOCUSEDILS, our new methods are also able to
+search the full (non-discretized) conﬁguration space, which led to further substantial
+improvements for several conﬁguration scenarios. We note that our new intensiﬁcation mechanism enabled even ROAR, a simple model-free approach, to perform better
+than previous general-purpose conﬁguration procedures in many cases; ROAR only
+performed poorly for optimizing CPLEX, where good conﬁgurations are sparse. SMAC
+yielded further improvements over ROAR and—most importantly—also state-of-the-art
+performance for the conﬁguration of CPLEX.
+In future work, we plan to improve SMAC to better handle conﬁguration scenarios
+with large per-run captimes for each target algorithm run; speciﬁcally, we plan to integrate
+PARAMILS’s adaptive capping mechanism into SMAC, which will require an extension
+of SMACs models to handle the resulting partly censored data. While in this paper we
+aimed to ﬁnd a single conﬁguration with overall good performance, we also plan to use
+SMAC’s models to determine good conﬁgurations on a per-instance basis. Finally, we
+plan to use these models to characterize the importance of individual parameters and
+their interactions, and to study interactions between parameters and instance features.
+Acknowledgements
+We thank Kevin Murphy for many useful discussions on the modelling aspect of this
+work. Thanks also to Chris Fawcett and Chris Nell for help with running GGA through
+HAL, to Kevin Tierney for help with GGA’s parameters, and to James Styles and
+Mauro Vallati for comments on an earlier draft of this paper. FH gratefully acknowledges
+support from a postdoctoral research fellowship by the Canadian Bureau for International
+Education. HH and KLB gratefully acknowledge support from NSERC through their
+respective discovery grants, and from the MITACS NCE through a seed project grant.
+Proof of Theorem 1
+In order to prove the validity of kernel function Kmixed, we ﬁrst prove the following
+Lemma 5 (Validity of Kham) For any ﬁnite domain Θ, the kernel function Kham :
+Θ × Θ →R deﬁned as
+Kham(x, z) = exp(−λ · [1 −δ(x, z)])
+is a valid kernel function.
+Proof. We use the facts that any constant is a valid kernel function, and that the space
+of kernel functions is closed under addition and multiplication. We also use the fact that
+a kernel function k(x, z) is valid if we can ﬁnd an embedding φ such that k(x, z) =
+φ(x)T · φ(z) .
+Let a1, . . . , am denote the ﬁnitely many elements of Θi, and for each element ai
+deﬁne an m-dimensional indicator vector vai that contains only zeros except at position
+i, where it is one. Deﬁne a kernel function k1(x, z) for x, z ∈Θi as the dot-product of
+embeddings φ(x) and φ(z) in an m-dimensional space:
+k1(x, z) = v
+vx(i) · vz(i) = 1 −δ(x, z).
+To bring this in the form of Equation 4, we add the constant kernel function
+k2(x, z) = c =
+1 −exp(−λ),
+and then multiply by the constant kernel function
+k3(x, z) = 1/(1 + c) = 1 −exp(−λ).
+We can thus rewrite function Kham as the product of valid kernels, thereby proving its
+Kham(x, z) = (k1(x, z) + k2(x, z)) · k3(x, z)
+exp(−λ) otherwise
+= exp [−λδ(x ̸= z)] .
+Theorem 1 (Validity of Kmixed). The kernel Kmixed : Θ × Θ →R deﬁned as
+Kmixed(θi, θj) = exp
+(−λl · (θi,l −θj,l)2) +
+(−λl · [1 −δ(θi,l, θj,l)])
+is a valid kernel function for arbitrary conﬁguration spaces.
+Proof. Since Kmixed is a product of the valid Gaussian kernel
+K(θi, θj) = exp
+(−λl · (θi,l −θj,l)2)
+and one Kham kernel for each categorical parameter, it is a valid kernel.

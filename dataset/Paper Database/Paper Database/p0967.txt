@@ -1,0 +1,411 @@
+Variational Diffusion Models
+Diederik P. Kingma∗, Tim Salimans∗, Ben Poole, Jonathan Ho
+Google Research
+Diffusion-based generative models have demonstrated a capacity for perceptually
+impressive synthesis, but can they also be great likelihood-based models? We
+answer this in the afﬁrmative, and introduce a family of diffusion-based generative
+models that obtain state-of-the-art likelihoods on standard image density estimation
+benchmarks. Unlike other diffusion-based models, our method allows for efﬁcient
+optimization of the noise schedule jointly with the rest of the model. We show
+that the variational lower bound (VLB) simpliﬁes to a remarkably short expression
+in terms of the signal-to-noise ratio of the diffused data, thereby improving our
+theoretical understanding of this model class. Using this insight, we prove an
+equivalence between several models proposed in the literature. In addition, we
+show that the continuous-time VLB is invariant to the noise schedule, except
+for the signal-to-noise ratio at its endpoints. This enables us to learn a noise
+schedule that minimizes the variance of the resulting VLB estimator, leading to
+faster optimization. Combining these advances with architectural improvements,
+we obtain state-of-the-art likelihoods on image density estimation benchmarks,
+outperforming autoregressive models that have dominated these benchmarks for
+many years, with often signiﬁcantly faster optimization. In addition, we show
+how to use the model as part of a bits-back compression scheme, and demonstrate
+lossless compression rates close to the theoretical optimum. Code is available at
+ 
+Introduction
+Likelihood-based generative modeling is a central task in machine learning that is the basis for a wide
+range of applications ranging from speech synthesis [Oord et al., 2016], to translation [Sutskever
+et al., 2014], to compression [MacKay, 2003], to many others. Autoregressive models have long been
+the dominant model class on this task due to their tractable likelihood and expressivity, as shown in
+Figure 1. Diffusion models have recently shown impressive results in image [Ho et al., 2020, Song
+et al., 2021b, Nichol and Dhariwal, 2021] and audio generation [Kong et al., 2020, Chen et al., 2020]
+in terms of perceptual quality, but have yet to match autoregressive models on density estimation
+benchmarks. In this paper we make several technical contributions that allow diffusion models to
+challenge the dominance of autoregressive models in this domain. Our main contributions are as
+• We introduce a ﬂexible family of diffusion-based generative models that achieve new stateof-the-art log-likelihoods on standard image density estimation benchmarks (CIFAR-10 and
+ImageNet). This is enabled by incorporating Fourier features into the diffusion model and
+using a learnable speciﬁcation of the diffusion process, among other modeling innovations.
+• We improve our theoretical understanding of density modeling using diffusion models by
+analyzing their variational lower bound (VLB), deriving a remarkably simple expression in
+* Equal contribution.
+35th Conference on Neural Information Processing Systems .
+ 
+Bits per dimension (test set)
+Transformer
+Transformer
+Transformer
+Autoregressive models
+10 without data augmentation
+State-of-the-art models in each of the 5 past years
+(lower is better)
+(a) CIFAR-10 without data augmentation
+Bits per dimension (test set)
+Gated PixelCNN
+Transformer
+Transformer
+Autoregressive models
+ImageNet 64x64
+State-of-the-art models in each of the 5 past years
+(lower is better)
+(b) ImageNet 64x64
+Figure 1: Autoregressive generative models were long dominant in standard image density estimation
+benchmarks. In contrast, we propose a family of diffusion-based generative models, Variational
+Diffusion Models (VDMs), that outperforms contemporary autoregressive models in these benchmarks.
+See Table 1 for more results and comparisons.
+terms of the signal-to-noise ratio of the diffusion process. This result delivers new insight
+into the model class: for the continuous-time (inﬁnite-depth) setting we prove a novel
+invariance of the generative model and its VLB to the speciﬁcation of the diffusion process,
+and we show that various diffusion models from the literature are equivalent up to a trivial
+time-dependent rescaling of the data.
+Related work
+Our work builds on diffusion probabilistic models (DPMs) [Sohl-Dickstein et al., 2015], or diffusion
+models in short. DPMs can be viewed as a type of variational autoencoder (VAE) [Kingma and
+Welling, 2013, Rezende et al., 2014], whose structure and loss function allows for efﬁcient training
+of arbitrarily deep models. Interest in diffusion models has recently reignited due to their impressive
+image generation results [Ho et al., 2020, Song and Ermon, 2020].
+Ho et al. introduced a number of model innovations to the original DPM, with impressive
+results on image generation quality benchmarks. They showed that the VLB objective, for a diffusion
+model with discrete time and diffusion variances shared across input dimensions, is equivalent to multiscale denoising score matching, up to particular weightings per noise scale. Further improvements
+were proposed by Nichol and Dhariwal , resulting in better log-likelihood scores. Gao et al.
+ show how diffusion can also be used to efﬁciently optimize energy-based models (EBMs)
+towards a close approximation of the log-likelihood objective, resulting in high-ﬁdelity samples even
+after long MCMC chains.
+Song and Ermon ﬁrst proposed learning generative models through a multi-scale denoising
+score matching objective, with improved methods in Song and Ermon . This was later
+extended to continuous-time diffusion with novel sampling algorithms based on reversing the diffusion
+process [Song et al., 2021b].
+Concurrent to our work, Song et al. [2021a], Huang et al. , and Vahdat et al. also
+derived variational lower bounds to the data likelihood under a continuous-time diffusion model.
+Where we consider the inﬁnitely deep limit of a standard VAE, Song et al. [2021a] and Vahdat
+et al. present different derivations based on stochastic differential equations. Huang et al.
+ considers both perspectives and discusses the similarities between the two approaches. An
+advantage of our analysis compared to these other works is that we present an intuitive expression
+of the VLB in terms of the signal-to-noise ratio of the diffused data, leading to much simpliﬁed
+expressions of the discrete-time and continuous-time loss, allowing for simple and numerically stable
+implementation. This also leads to new results on the invariance of the generative model and its VLB
+to the speciﬁcation of the diffusion process. We empirically compare to these works, as well as others,
+in Table 1.
+Previous approaches to diffusion probabilistic models ﬁxed the diffusion process; in contrast optimize
+the diffusion process parameters jointly with the rest of the model. This turns the model into a type of
+VAE [Kingma and Welling, 2013, Rezende et al., 2014]. This is enabled by directly parameterizing
+the mean and variance of the marginal q(zt|z0), where previous approaches instead parameterized the
+individual diffusion steps q(zt+ϵ|zt). In addition, our denoising models include several architecture
+changes, the most important of which is the use of Fourier features, which enable us to reach much
+better likelihoods than previous diffusion probabilistic models.
+We will focus on the most basic case of generative modeling, where we have a dataset of observations
+of x, and the task is to estimate the marginal distribution p(x). As with most generative models, the
+described methods can be extended to the case of multiple observed variables, and/or the task of
+estimating conditional densities p(x|y). The proposed latent-variable model consists of a diffusion
+process (Section 3.1) that we invert to obtain a hierarchical generative model (Section 3.3). As we
+will show, the model choices below result in a surprisingly simple variational lower bound (VLB) of
+the marginal likelihood, which we use for optimization of the parameters.
+Forward time diffusion process
+Our starting point is a Gaussian diffusion process that begins with the data x, and deﬁnes a sequence
+of increasingly noisy versions of x which we call the latent variables zt, where t runs from t = 0
+(least noisy) to t = 1 (most noisy). The distribution of latent variable zt conditioned on x, for any
+t ∈ is given by:
+q(zt|x) = N
+where αt and σ2
+t are strictly positive scalar-valued functions of t. Furthermore, let us deﬁne the
+signal-to-noise ratio (SNR):
+SNR(t) = α2
+We assume that the SNR(t) is strictly monotonically decreasing in time, i.e. that SNR(t) < SNR(s)
+for any t > s. This formalizes the notion that the zt is increasingly noisy as we go forward in time.
+We also assume that both αt and σ2
+t are smooth, such that their derivatives with respect to time t are
+ﬁnite. This diffusion process speciﬁcation includes the variance-preserving diffusion process as used
+by [Sohl-Dickstein et al., 2015, Ho et al., 2020] as a special case, where αt =
+t . Another
+special case is the variance-exploding diffusion process as used by [Song and Ermon, 2019, Song
+et al., 2021b], where α2
+t = 1. In experiments, we use the variance-preserving version.
+The distributions q(zt|zs) for any t > s are also Gaussian, and given in Appendix A. The joint
+distribution of latent variables (zs, zt, zu) at any subsequent timesteps 0 ≤s < t < u ≤1 is Markov:
+q(zu|zt, zs) = q(zu|zt). Given the distributions above, it is relatively straightforward to verify
+through Bayes rule that q(zs|zt, x), for any 0 ≤s < t ≤1, is also Gaussian. This distribution is also
+given in Appendix A.
+Noise schedule
+In previous work, the noise schedule has a ﬁxed form (see Appendix H, Fig. 4a). In contrast, we learn
+this schedule through the parameterization
+t = sigmoid(γη(t))
+where γη(t) is a monotonic neural network with parameters η, as detailed in Appendix H.
+Motivated by the equivalence discussed in Section 5.1, we use αt =
+t in our experiments for
+both the discrete-time and continuous-time models, i.e. variance-preserving diffusion processes. It is
+straightforward to verify that α2
+t and SNR(t), as a function of γη(t), then simplify to:
+t = sigmoid(−γη(t))
+SNR(t) = exp(−γη(t))
+Reverse time generative model
+We deﬁne our generative model by inverting the diffusion process of Section 3.1, yielding a hierarchical generative model that samples a sequence of latents zt, with time running backward from t = 1 to
+t = 0. We consider both the case where this sequence consists of a ﬁnite number of steps T, as well
+as a continuous time model corresponding to T →∞. We start by presenting the discrete-time case.
+Given ﬁnite T, we discretize time uniformly into T timesteps (segments) of width τ = 1/T. Deﬁning
+s(i) = (i −1)/T and t(i) = i/T, our hierarchical generative model for data x is then given by:
+p(z1)p(x|z0)
+p(zs(i)|zt(i)).
+With the variance preserving diffusion speciﬁcation and sufﬁciently small SNR(1), we have that
+q(z1|x) ≈N(z1; 0, I). We therefore model the marginal distribution of z1 as a spherical Gaussian:
+p(z1) = N(z1; 0, I).
+We wish to choose a model p(x|z0) that is close to the unknown q(x|z0). Let xi and z0,i be the i-th
+elements of x, z0, respectively. We then use a factorized distribution of the form:
+p(xi|z0,i),
+where we choose p(xi|z0,i) ∝q(z0,i|xi), which is normalized by summing over all possible discrete
+values of xi (256 in the case of 8-bit image data). With sufﬁciently large SNR(0), this becomes a
+very close approximation to the true q(x|z0), as the inﬂuence of the unknown data distribution q(x)
+is overwhelmed by the likelihood q(z0|x). Finally, we choose the conditional model distributions as
+p(zs|zt) = q(zs|zt, x = ˆxθ(zt; t)),
+i.e. the same as q(zs|zt, x), but with the original data x replaced by the output of a denoising model
+ˆxθ(zt; t) that predicts x from its noisy version zt. Note that in practice we parameterize the denoising
+model as a function of a noise prediction model (Section 3.4), bridging the gap with previous work
+on diffusion models [Ho et al., 2020]. The means and variances of p(zs|zt) simplify to a remarkable
+degree; see Appendix A.
+Noise prediction model and Fourier features
+We parameterize the denoising model in terms of a noise prediction model ˆϵθ(zt; t):
+ˆxθ(zt; t) = (zt −σtˆϵθ(zt; t))/αt,
+where ˆϵθ(zt; t) is parameterized as a neural network. The noise prediction models we use in
+experiments closely follow Ho et al. , except that they process the data solely at the original
+resolution. The exact parameterization of the noise prediction model and noise schedule is discussed
+in Appendix B.
+Prior work on diffusion models has mainly focused on the perceptual quality of generated samples,
+which emphasizes coarse scale patterns and global consistency of generated images. Here, we
+optimize for likelihood, which is sensitive to ﬁne scale details and exact values of individual pixels.
+To capture the ﬁne scale details of the data, we propose adding a set of Fourier features to the
+input of our noise prediction model. Let x be the original data, scaled to the range [−1, 1], and
+let z be the resulting latent variable, with similar magnitudes. We then append channels sin(2nπz)
+and cos(2nπz), where n runs over a range of integers {nmin, ..., nmax}. These features are high
+frequency periodic functions that amplify small changes in the input data zt; see Appendix C
+for further details. Including these features in the input of our denoising model leads to large
+improvements in likelihood as demonstrated in Section 6 and Figure 5, especially when combined
+with a learnable SNR function. We did not observe such improvements when incorporating Fourier
+features into autoregressive models.
+Variational lower bound
+We optimize the parameters towards the variational lower bound (VLB) of the marginal likelihood,
+which is given by
+−log p(x) ≤−VLB(x) = DKL(q(z1|x)||p(z1))
+Prior loss
++ Eq(z0|x) [−log p(x|z0)]
+Reconstruction loss
+Diffusion loss
+The prior loss and reconstruction loss can be (stochastically and differentiably) estimated using
+standard techniques; see [Kingma and Welling, 2013]. The diffusion loss, LT (x), is more complicated,
+and depends on the hyperparameter T that determines the depth of the generative model.
+Discrete-time model
+In the case of ﬁnite T, using s(i) = (i −1)/T, t(i) = i/T, the diffusion loss is:
+Eq(zt(i)|x)DKL[q(zs(i)|zt(i), x)||p(zs(i)|zt(i))].
+In appendix E we show that this expression simpliﬁes considerably, yielding:
+LT (x) = T
+2 Eϵ∼N(0,I),i∼U{1,T }
+(SNR(s) −SNR(t)) ||x −ˆxθ(zt; t)||2
+where U{1, T} is the uniform distribution on the integers {1, . . . , T}, and zt = αtx + σtϵ. This is
+the general discrete-time loss for any choice of forward diffusion parameters (σt, αt). When plugging
+in the speciﬁcations of σt, αt and ˆxθ(zt; t) that we use in experiments, given in Sections 3.2 and 3.4,
+the loss simpliﬁes to:
+LT (x) = T
+2 Eϵ∼N(0,I),i∼U{1,T }
+(exp(γη(t) −γη(s)) −1) ∥ϵ −ˆϵθ(zt; t)∥2
+where zt = sigmoid(−γη(t))x + sigmoid(γη(t))ϵ. In the discrete-time case, we simply jointly
+optimize η and θ by maximizing the VLB through a Monte Carlo estimator of Equation 14.
+Note that exp(.) −1 has a numerically stable primitive expm1(.) in common numerical computing
+packages; see ﬁgure 6. Equation 14 allows for numerically stable implementation in 32-bit or
+lower-precision ﬂoating point, in contrast with previous implementations of discrete-time diffusion
+models , which had to resort to 64-bit ﬂoating point.
+More steps leads to a lower loss
+A natural question to ask is what the number of timesteps T should be, and whether more timesteps is
+always better in terms of the VLB. In Appendix F we analyze the difference between the diffusion loss
+with T timesteps, LT (x), and the diffusion loss with double the timesteps, L2T (x), while keeping
+the SNR function ﬁxed. We then ﬁnd that if our trained denoising model ˆxθ is sufﬁciently good,
+we have that L2T (x) < LT (x), i.e. that our VLB will be better for a larger number of timesteps.
+Intuitively, the discrete time diffusion loss is an upper Riemann sum approximation of an integral of
+a strictly decreasing function, meaning that a ﬁner approximation yields a lower diffusion loss. This
+result is illustrated in Figure 2.
+Continuous-time model: T →∞
+Since taking more time steps leads to a better VLB, we now take T →∞, effectively treating
+time t as continuous rather than discrete. The model for p(zt) can in this case be described as a
+continuous time diffusion process [Song et al., 2021b] governed by a stochastic differential equation;
+see Appendix D. In Appendix E we show that in this limit the diffusion loss LT (x) simpliﬁes further.
+Letting SNR′(t) = dSNR(t)/dt, we have, with zt = αtx + σtϵ:
+L∞(x) = −1
+2Eϵ∼N(0,I)
+SNR′(t) ∥x −ˆxθ(zt; t)∥2
+2Eϵ∼N(0,I),t∼U(0,1)
+SNR′(t) ∥x −ˆxθ(zt; t)∥2
+Figure 2: Illustration of the diffusion loss with few segments T (left), more segments T (middle), and
+inﬁnite segments T (continuous time, right). The continuous-time loss (Equation 18) is an integral of
+mean squared error (MSE) over SNR, here visualized as a black curve. The black curve is strictly
+decreasing when the model is sufﬁciently well trained, so the discrete-time loss (Equation 13) is
+an upper bound (an upper Riemann sum approximation) of this integral that becomes better when
+segments are added.
+This is the general continuous-time loss for any choice of forward diffusion parameters (σt, αt).
+When plugging in the speciﬁcations of σt, αt and ˆxθ(zt; t) that we use in experiments, given in
+Sections 3.2 and 3.4, the loss simpliﬁes to:
+2Eϵ∼N(0,I),t∼U(0,1)
+η(t) ∥ϵ −ˆϵθ(zt; t)∥2
+η(t) = dγη(t)/dt. We use the Monte Carlo estimator of this loss for evaluation and
+optimization.
+Equivalence of diffusion models in continuous time
+The signal-to-noise function SNR(t) is invertible due to the monotonicity assumption in Section
+3.1. Due to this invertibility, we can perform a change of variables, and make everything a function
+of v ≡SNR(t) instead of t, such that t = SNR−1(v). Let αv and σv be the functions αt and
+σt evaluated at t = SNR−1(v), and correspondingly let zv = αvx + σvϵ. Similarly, we rewrite
+our noise prediction model as ˜xθ(z, v) ≡ˆxθ(z, SNR−1(v)). With this change of variables, our
+continuous-time loss in Equation 15 can equivalently be written as:
+2Eϵ∼N(0,I)
+∥x −˜xθ(zv, v)∥2
+where instead of integrating w.r.t. time t we now integrate w.r.t. the signal-to-noise ratio v, and where
+SNRmin = SNR(1) and SNRmax = SNR(0).
+What this equation shows us is that the only effect the functions α(t) and σ(t) have on the diffusion
+loss is through the values SNR(t) = α2
+t at endpoints t = 0 and t = 1. Given these values SNRmax
+and SNRmin, the diffusion loss is invariant to the shape of function SNR(t) between t = 0 and t = 1.
+The VLB is thus only impacted by the function SNR(t) through its endpoints SNRmin and SNRmax.
+Furthermore, we ﬁnd that the distribution p(x) deﬁned by our generative model is also invariant
+to the speciﬁcation of the diffusion process. Speciﬁcally, let pA(x) denote the distribution deﬁned
+by the combination of a diffusion speciﬁcation and denoising function {αA
+θ }, and similarly
+let pB(x) be the distribution deﬁned through a different speciﬁcation {αB
+θ }, where both
+speciﬁcations have equal SNRmin, SNRmax; as shown in Appendix G, we then have that pA(x) =
+pB(x) if ˜xB
+θ (z, v) ≡˜xA
+v )z, v). The distribution on all latents zv is then also the same under
+both speciﬁcations, up to a trivial rescaling. This means that any two diffusion models satisfying
+the mild constraints set in 3.1 , can thus be seen as equivalent in continuous time.
+Weighted diffusion loss
+This equivalence between diffusion speciﬁcations continues to hold even if, instead of the VLB, these
+models optimize a weighted diffusion loss of the form:
+L∞(x, w) = 1
+2Eϵ∼N(0,I)
+w(v) ∥x −˜xθ(zv, v)∥2
+(Bits per dim on test set)
+no data aug.
+Previous work
+ResNet VAE with IAF [Kingma et al., 2016]
+Very Deep VAE [Child, 2020]
+NVAE [Vahdat and Kautz, 2020]
+Glow [Kingma and Dhariwal, 2018]
+Flow++ [Ho et al., 2019a]
+PixelCNN [Van Oord et al., 2016]
+PixelCNN++ [Salimans et al., 2017]
+Image Transformer [Parmar et al., 2018]
+SPN [Menick and Kalchbrenner, 2018]
+Sparse Transformer [Child et al., 2019]
+Routing Transformer [Roy et al., 2021]
+Sparse Transformer + DistAug [Jun et al., 2020]
+DDPM [Ho et al., 2020]
+EBM-DRL [Gao et al., 2020]
+Score SDE [Song et al., 2021b]
+Improved DDPM [Nichol and Dhariwal, 2021]
+Concurrent work
+CR-NVAE [Sinha and Dieng, 2021]
+LSGM [Vahdat et al., 2021]
+ScoreFlow [Song et al., 2021a] (variational bound)
+ScoreFlow [Song et al., 2021a] (cont. norm. ﬂow)
+VDM (variational bound)
+Table 1: Summary of our ﬁndings for density modeling tasks, in terms of bits per dimension (BPD) on
+the test set. Model types are autoregressive (AR), normalizing ﬂows (Flow), variational autoencoders
+(VAE), or diffusion models (Diff). Our results were obtained using the continuous-time formulation of
+our model. CIFAR-10 data augmentations are: (A) extensive, (B) small translations, or (C) horizontal
+ﬂips. The numbers for VDM are variational bounds, and can likely be improved by estimating
+the marginal likelihood through importance sampling, or through evaluation of the corresponding
+continuous normalizing ﬂow as done by Song et al. [2021a].
+which e.g. captures all the different objectives discussed by Song et al. [2021b], see Appendix K. Here,
+w(v) is a weighting function that generally puts increased emphasis on the noisier data compared to
+the VLB, and which thereby can sometimes improve perceptual generation quality as measured by
+certain metrics like FID and Inception Score. For the models presented in this paper, we further use
+w(v) = 1 as corresponding to the (unweighted) VLB.
+Variance minimization
+Lowering the variance of the Monte Carlo estimator of the continuous-time loss generally improves
+the efﬁciency of optimization. We found that using a low-discrepancy sampler for t, as explained in
+Appendix I.1, leads to a signiﬁcant reduction in variance. In addition, due to the invariance shown in
+Section 5.1 for the continous-time case, we can optimize the schedule between its endpoints w.r.t. to
+minimize the variance of our estimator of loss, as detailed in Appendix I. The endpoints of the noise
+schedule are simply optimized w.r.t. the VLB.
+Experiments
+We demonstrate our proposed class of diffusion models, which we call Variational Diffusion
+Models (VDMs), on the CIFAR-10 [Krizhevsky et al., 2009] dataset, and the downsampled ImageNet [Van Oord et al., 2016, Deng et al., 2009] dataset, where we focus on maximizing likelihood.
+For our result with data augmentation we used random ﬂips, 90-degree rotations, and color channel
+swapping. More details of our model speciﬁcations are in Appendix B.
+Figure 3: Non cherry-picked unconditional samples from our Imagenet 64x64 model, trained in
+continuous time and generated using T = 1000. The model’s hyper-parameters and parameters are
+optimized w.r.t. the likelihood bound, so the model is not optimized for synthesis quality.
+Likelihood and samples
+Table 1 shows our results on modeling the CIFAR-10 dataset, and the downsampled ImageNet dataset.
+We establish a new state-of-the-art in terms of test set likelihood on all considered benchmarks, by a
+signiﬁcant margin. Our model for CIFAR-10 without data augmentation surpasses the previous best
+result of 2.80 about 10x faster than it takes the Sparse Transformer to reach this, in wall clock time
+on equivalent hardware. Our CIFAR-10 model, whose hyper-parameters were tuned for likelihood,
+results in a FID (perceptual quality) score of 7.41. This would have been state-of-the-art until recently,
+but is worse than recent diffusion models that speciﬁcally target FID scores [Nichol and Dhariwal,
+2021, Song et al., 2021b, Ho et al., 2020]. By instead using a weighted diffusion loss, with the
+weighting function w(SNR) used by Ho et al. and described in Appendix K, our FID score
+improves to 4.0. We did not pursue further tuning of the model to improve FID instead of likelihood.
+A random sample of generated images from our model is provided in Figure 3. We provide additional
+samples from this model, as well as our other models for the other datasets, in Appendix M.
+Next, we investigate the relative importance of our contributions. In Table 2 we compare our discretetime and continuous-time speciﬁcations of the diffusion model: When evaluating our model with a
+small number of steps, our discretely trained models perform better by learning the diffusion schedule
+to optimize the VLB. However, as argued theoretically in Section 4.1, we ﬁnd experimentally that
+more steps T indeed gives better likelihood. When T grows large, our continuously trained model
+performs best, helped by training its diffusion schedule to minimize variance instead.
+Minimizing the variance also helps the continuous time model to train faster, as shown in Figure 5.
+This effect is further examined in Table 4b, where we ﬁnd dramatic variance reductions compared to
+our baselines in continuous time. Figure 4a shows how this effect is achieved: Compared to the other
+schedules, our learned schedule spends much more time in the high SNR(t) / low σ2
+In Figure 5 we further show training curves for our model including and excluding the Fourier
+features proposed in Appendix C: with Fourier features enabled our model achieves much better
+likelihood. For comparison we also implemented Fourier features in a PixelCNN++ model [Salimans
+et al., 2017], where we do not see a beneﬁt. In addition, we ﬁnd that learning the SNR is necessary
+to get the most out of including Fourier features: if we ﬁx the SNR schedule to that used by Ho
+et al. , the maximum log-SNR is ﬁxed to approximately 8 (see ﬁgure 7), and test set negative
+likelihood stays above 4 bits per dim. When learning the SNR endpoints, our maximum log-SNR
+ends up at 13.3, which, combined with the inclusion of Fourier features, leads to the SOTA test set
+likelihoods reported in Table 1.
+Lossless compression
+For a ﬁxed number of evaluation timesteps Teval, our diffusion model in discrete time is a hierarchical
+latent variable model that can be turned into a lossless compression algorithm using bits-back
+coding [Hinton and Van Camp, 1993]. As a proof of concept of practical lossless compression,
+Table 2 reports net codelengths on the CIFAR10 test set for various settings of Teval using BB-
+(a) log SNR vs time t
+SNR(t) schedule
+Learned (ours)
+log SNR-linear
+β-Linear 
+α-Cosine 
+(b) Variance of VLB estimate
+Figure 4: Our learned continuous-time variance-minimizing noise schedule SNR(t) for CIFAR-10,
+compared to its log-linear initialization and to schedules from the literature: The β-Linear schedule
+from Ho et al. , The α-Cosine schedule from Nichol and Dhariwal . All schedules
+were scaled and shifted on the log scale such that the resulting SNRmin, SNRmax were the equal to
+our learned endpoints, resulting in the same VLB estimate of 2.66. We report the variance of our
+VLB estimate per data point, computed on the test set, and conditional on the data: This does not
+include the noise due to sampling minibatches of data.
+Table 2: Discrete versus continuous-time training and evaluation with CIFAR-10, in terms of
+bits per dimension (BPD).
+Figure 5: Test set likelihoods during training,
+with/without Fourier features, and with/without
+learning the noise schedule to minimize variance.
+ANS [Townsend et al., 2018], an implementation of bits-back coding based on asymmetric numeral
+systems [Duda, 2009]. Details of our implementation are given in Appendix N. We achieve state-ofthe-art net codelengths, proving our model can be used as the basis of a lossless compression algorithm.
+However, for large Teval a gap remains with the theoretically optimal codelength corresponding to
+the negative VLB, and compression becomes computationally expensive due to the large number of
+neural network forward passes required. Closing this gap with more efﬁcient implementations of
+bits-back coding suitable for very deep models is an interesting avenue for future work.
+Conclusion
+We presented state-of-the-art results on modeling the density of natural images using a new class of
+diffusion models that incorporates a learnable diffusion speciﬁcation, Fourier features for ﬁne-scale
+modeling, as well as other architectural innovations. In addition, we obtained new theoretical insight
+into likelihood-based generative modeling with diffusion models, showing a surprising invariance of
+the VLB to the forward time diffusion process in continuous time, as well as an equivalence between
+various diffusion processes from the literature previously thought to be different.
+Acknowledgments
+We thank Yang Song, Kevin Murphy, Mohammad Norouzi and Chin-Yun Yu for helpful feedback on
+the paper, and Ruiqi Gao for helping with writing an open source version of the code.

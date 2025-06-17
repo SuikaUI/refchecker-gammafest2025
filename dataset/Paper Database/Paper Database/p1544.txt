@@ -1,0 +1,857 @@
+Mining Large Graphs:
+Algorithms, Inference, and Discoveries
+U Kang 1, Duen Horng Chau 2, Christos Faloutsos 3
+School of Computer Science, Carnegie Mellon University
+5000 Forbes Ave, Pittsburgh PA 15213, United States
+ 
+ 
+ 
+Abstract—How do we ﬁnd patterns and anomalies, on graphs
+with billions of nodes and edges, which do not ﬁt in memory?
+How to use parallelism for such terabyte-scale graphs? In this
+work, we focus on inference, which often corresponds, intuitively,
+to “guilt by association” scenarios. For example, if a person is
+a drug-abuser, probably its friends are so, too; if a node in a
+social network is of male gender, his dates are probably females.
+We show how to do inference on such huge graphs through our
+proposed HADOOP LINE GRAPH FIXED POINT (HA-LFP), an
+efﬁcient parallel algorithm for sparse billion-scale graphs, using
+the HADOOP platform.
+Our contributions include (a) the design of HA-LFP, observing
+that it corresponds to a ﬁxed point on a line graph induced
+from the original graph; (b) scalability analysis, showing that
+our algorithm scales up well with the number of edges, as well
+as with the number of machines; and (c) experimental results on
+two private, as well as two of the largest publicly available graphs
+— the Web Graphs from Yahoo! (6.6 billion edges and 0.24 Tera
+bytes), and the Twitter graph (3.7 billion edges and 0.13 Tera
+bytes). We evaluated our algorithm using M45, one of the top 50
+fastest supercomputers in the world, and we report patterns and
+anomalies discovered by our algorithm, which would be invisible
+otherwise.
+Index Terms—HA-LFP, Belief Propagation, Hadoop, Graph
+I. INTRODUCTION
+Given a large graph, with millions or billions of nodes, how
+can we ﬁnd patterns and anomalies? One method to do that
+is through “guilt by association”: if we know that nodes of
+type “A” (say, males) tend to interact/date nodes of type “B”
+(females), we can infer the unknown gender of a node, by
+checking the gender of the majority of its contacts. Similarly,
+if a node is a telemarketer, most of its contacts will be normal
+phone users (and not telemarketers, or 800 numbers).
+We show that the “guilt by association” approach can ﬁnd
+useful patterns and anomalies, in large, real graphs. The typical
+way to handle this is through the so-called Belief Propagation
+(BP) , . BP has been successfully used for social network
+analysis, fraud detection, computer vision, error-correcting
+codes , , , and many other domains. In this work,
+we address the research challenge of scalability — we show
+how to run BP on a very large graph with billions of nodes
+and edges. Our contributions are the following:
+1) We observe that the Belief Propagation algorithm is essentially a recursive equation on the line graph induced
+from the original graph. Based on this observation, we
+formulate the BP problem as ﬁnding a ﬁxed point on the
+line graph. We propose the LINE GRAPH FIXED POINT
+(LFP) algorithm and show that it is a generalized form
+of a linear algebra equation.
+2) We formulate and devise an efﬁcient algorithm for the
+LFP that runs on the HADOOP platform, called HADOOP
+LINE GRAPH FIXED POINT (HA-LFP).
+3) We run experiments on a HADOOP cluster and analyze
+the running time. We analyze the large real-world graphs
+including YahooWeb and Twitter with HA-LFP, and
+show patterns and anomalies.
+The rest of the paper is organized as follows. Section II
+discusses the related works on the Belief Propagation and
+HADOOP. Section III describes our formulation of the Belief
+Propagation in terms of LINE GRAPH FIXED POINT (LFP), and
+Section IV provides a fast algorithm in HADOOP. Section V
+shows the scalability results, and Section VI gives the results
+of analyzing the large, real-world graphs. We conclude in
+Section VII.
+To enhance readability of this paper, we have listed the
+symbols frequently used in this paper in Table I. The reader
+may want to return to this table throughout this paper for a
+quick reference of their meanings.
+Set of nodes in a graph
+Set of edges in a graph
+Number of nodes in a graph
+Number of edges in a graph
+Set of states
+Prior of node i being in state s
+ψij(s′, s)
+Edge potential when nodes i and j being
+in states s′ and s, respectively
+Message that node i sends to node j expressing
+node i’s belief of node j’s being in state s
+Belief of node i being in state s
+TABLE OF SYMBOLS
+II. BACKGROUND
+The related work forms two groups, Belief Propagation(BP)
+and large graph mining with MAPREDUCE/HADOOP.
+A. Belief Propagation(BP)
+Belief Propagation(BP) is an efﬁcient inference algorithm for probabilistic graphical models. Since its proposal,
+it has been widely, and successfully, used in a myriad of domains to solve many important problems (some are seemingly
+unrelated at the ﬁrst glance). For example, BP is used in some
+of the best error-correcting codes, such as the Turbo code and
+low-density parity-check code, that approach channel capacity.
+In computer vision, BP is among the top contenders for stereo
+shape estimation and image restoration (e.g., denoising) .
+BP has also been used for fraud detection, such as for
+unearthing fraudsters and their accomplices lurking in online
+auctions , and pinpointing misstated accounts in general
+ledger data for the ﬁnancial domain .
+BP is typically used for computing the marginal distribution
+for the unobserved nodes in a graph, conditional on the
+observed ones; we will only discuss this version in this
+paper, though with slight and trivial modiﬁcations to our
+implementation, the most probable distribution of node states
+can also be computed.
+BP was ﬁrst proposed for trees and it could compute the
+exact marginal distributions; it was later applied on general
+graphs as an approximate algorithm. When the graph
+contains cycles or loops, the BP algorithm applied on it is
+called loopy BP, which is also the focus of this work.
+BP is generally applied on graphs whose nodes have ﬁnite
+number of states (treating each node as a discrete random
+variable). Gaussian BP is a variant of BP where its underlying
+distributions are Gaussian
+ . Generalized BP allows
+messages to be passed between subgraphs, which can improve
+accuracy in the computed beliefs and promote convergence.
+BP is computationally-efﬁcient; its running time scales
+linearly with the number of edges in the graph. However,
+for graphs with billions of nodes and edges — a focus of
+our work — this cost becomes signiﬁcant. There are several
+recent works that investigated parallel BP on multicore shared
+memory and MPI , . However, all of them assume
+the graphs would ﬁt in the main memory (of a single computer,
+or a computer cluster). Our work speciﬁcally tackles the
+important, and increasingly prevalent, situation where the
+graphs would not ﬁt in main memory.
+B. Large Graph Mining with MapReduce and Hadoop
+Large scale graph mining poses challenges in dealing with
+massive amount of data. One might consider using a sampling
+approach to decrease the amount of data. However, sampling
+from a large graph can lead to multiple nontrivial problems that
+do not have satisfactory solutions . For example, which
+sampling methods should we use? Should we get a random
+sample of the edges, or the nodes? Both options have their
+own share of problems: the former gives poor estimation of the
+graph diameter, while the latter may miss high-degree nodes.
+A promising alternative for large graph mining is MAPRE-
+DUCE, a parallel programming framework for processing
+web-scale data. MAPREDUCE has two advantages: (a) The
+data distribution, replication, fault-tolerance, load balancing is
+handled automatically; and furthermore (b) it uses the familiar
+concept of functional programming. The programmer needs to
+deﬁne only two functions, a map and a reduce. The general
+framework is as follows : (a) the map stage reads the input
+ﬁle and emits (key, value) pairs; (b) the shufﬂing stage sorts the
+output and distributes them to reducers; (c) the reduce stage
+processes the values with the same key and emits another (key,
+value) pairs which become the ﬁnal result.
+HADOOP is the open source version of MAPREDUCE.
+HADOOP uses its own distributed ﬁle system HDFS, and
+provides a high-level language called PIG . Due to its
+excellent scalability and ease of use, HADOOP is widely used
+for large scale data mining(see ). Other
+variants which provide advanced MAPREDUCE-like systems
+include SCOPE , Sphere , and Sawzall .
+III. PROPOSED METHOD
+In this section, we describe LINE GRAPH FIXED POINT
+(LFP), our proposed parallel formulation of the BP on
+HADOOP. We ﬁrst describe the standard BP algorithm, and
+then explains our method in detail.
+A. Belief Propagation
+We provide a quick overview of the Belief Propagation(BP)
+algorithm, which brieﬂy explains the key steps in the algorithm and their formulation; this information will help our
+readers better understand how our implementation nontrivially
+captures and optimizes the algorithm in latter sections. For
+detailed information regarding BP, we refer our readers to the
+excellent article by Yedidia et al. .
+The BP algorithm is an efﬁcient method to solve inference
+problems for probabilistic graphical models, such as Bayesian
+networks and pairwise Markov random ﬁelds (MRF). In this
+work, we focus on pairwise MRF, which has seen empirical
+success in many domains (e.g., Gallager codes, image restoration) and is also simpler to explain; the BP algorithms for other
+types of graphical models are mathematically equivalent .
+When we view an undirected simple graph G = (V, E) as
+a pairwise MRF, each node i in the graph becomes a random
+variable Xi, which can be in a discrete number of states S.
+The goal of the inference is to ﬁnd the marginal distribution
+P(xi) for all node i, which is an NP-complete problem.
+Fortunately, BP may be used to solve this problem approximately (for MRF; exactly for trees). At a high level, BP
+infers the “true” (or so-called “hidden”) distribution of a node
+from some prior (or “observed”) knowledge about the node,
+and from the node’s neighbors. This is accomplished through
+iterative message passing between all pairs of nodes vi and
+vj. We use mij(xj) to denote the message sent from i to j,
+which intuitively represents i’s opinion about j’s likelihood
+of being in state xj. The prior knowledge about a node i, or
+the prior probabilities of the node being in each possible state
+are expressed through the node potential function φ(xi). This
+prior probability may simply be called a prior. The messagepassing procedure stops if the messages no longer change
+much from one iteration to the another — or equivalently
+when the nodes’ marginal probabilities are no longer changing
+much. The estimated marginal probability is called belief, or
+symbolically bi(xi) (≈P(xi)).
+In detail, messages are obtained as follows. Each edge eij
+is associated with messages mij(xj) and mji(xi) for each
+possible state. Provided that all messages are passed in every
+iteration, the order of passing can be arbitrary. Each message
+vector mij is normalized to sum to one. Normalization also
+prevents numerical underﬂow (or zeroing-out values). Each
+outgoing message from a node i to a neighbor j is generated based on the incoming messages from the node’s other
+neighbors. Mathematically, the message-update equation is:
+φi(xi)ψij(xi, xj)
+k∈N(i) mki(xi)
+where N (i) is the set of nodes neighboring node i, and
+ψij (xi, xj) is called the edge potential; intuitively, it is a
+function that transforms a node’s incoming messages collected
+into the node’s outgoing ones. Formally, ψij (xi, xj) equals the
+probability of a node i being in state xi and that its neighbor
+j is in state xj.
+The algorithm stops when the beliefs converge (within some
+threshold, e.g., 10−5), or a maximum number of iterations has
+ﬁnished. Although convergence is not guaranteed theoretically
+for general graphs, except for those that are trees, the algorithm
+often converges in practice, where convergence is quick and
+the beliefs are reasonably accurate. When the algorithm ends,
+the node beliefs are determined as follows:
+bi(xi) = cφi(xi)
+where c is a normalizing constant.
+B. Recursive Equation
+As seen in the last section, BP is computed by iteratively
+running equations (1) and (2), as described in Algorithm 1.
+In a shared-memory system in which random access to
+memory is allowed, the implementation of Algorithm 1
+might be straightforward. However, large scale algorithm
+for MAPREDUCE requires careful thinking since the random
+access is not allowed and the data are read sequentially within
+mappers and reducers. A good news is that the two equations (1) and (2) involve only local communications between
+neighboring nodes, and thus it seems hopeful to develop a
+parallel algorithm for HADOOP. Naturally, one might think
+of an iterative algorithm in which nodes exchange messages
+to update its beliefs using an extended form of matrix-vector
+multiplication . In such formulation, a current belief vector
+and the message matrix is combined to compute the next belief
+vector. Thus, we want a recursive equation to update the belief
+Algorithm 1: Belief Propagation
+Input : Edge E,
+node prior φn×1, and
+propagation matrix ψS×S
+Output: Belief matrix bn×S
+while m does not converge do
+for (i, j) ∈E do
+for s ∈S do
+s′ φi(s′)ψij(s′, s) Q
+k∈N(i)\j mki(s′);
+for i ∈V do
+for s ∈S do
+bi(s) ←cφi(s) Q
+k∈N(i) mki(s);
+vector. However, such an equation cannot be derived due to
+the denominator mji(xi) in Equation (1). If it were not for
+the denominator, we could get the following modiﬁed equation
+where the superscript t and t −1 mean the iteration number:
+mij(xj)(t)
+φi(xi)ψij(xi, xj)
+mki(xi)(t−1)
+ψij(xi, xj)bi(xi)(t−1)
+mki(xi)(t−1)
+ψki(xk, xi)bk(xk)(t−2)(3)
+Notice that the recursive equation (3) is a fake, imaginary
+equation derived from the assumption that equation (1) has no
+denominator. Although the recursive equation for the belief
+vector cannot be acquired by this way, there is a more direct
+and intuitive way to get a recursive equation. We will describe
+how to get it in the next section.
+C. Main Idea: Line graph Fixed Point(LFP)
+How can we get the recursive equation for the BP? What
+we need is a tractable recursive equation well-suited for large
+scale MAPREDUCE framework. In this section, we describe
+LINE GRAPH FIXED POINT (LFP), our formulation of BP in
+terms of ﬁnding the ﬁxed point of an induced graph from
+the original graph. As seen in the last section, a recursive
+equation to update the beliefs cannot be acquired due to the
+denominator in the message update equation. Our main idea
+to solve the problem is to ﬂip the notion of the nodes and
+edges in the original graph and thus use the equation (1),
+without modiﬁcation, as the recursive equation for updating
+the ‘nodes’ in the new formulation. The ‘ﬂipping’ means we
+consider an induced graph, called the line graph, whose nodes
+correspond to edges in the original graph, and the two nodes
+in the induced graph are connected if the corresponding edges
+in the original graph are incident. Notice that for each edge
+(i, j) in the original graph, two messages need to be deﬁned
+since mij and mji are different. Thus, the line graph should be
+directed, although the original graph is undirected. Formally,
+we deﬁne the ‘directed line graph’ as follows.
+Deﬁnition 1 (Directed Line Graph): Given
+graph G, its directed line graph L(G) is a graph such that
+each node of L(G) represents an edge of G, and there is an
+edge from vi to vj of L(G) if the corresponding edges ei and
+ej form a length-two directed path from ei to ej in G.
+For example, see Figure 1 for a graph and its directed line
+graph. To convert a undirected line graph G to a directed
+line graph L(G), we ﬁrst convert G to a directed graph by
+converting each undirected edge to two directed edges. Then,
+a directed edge from vi to vj in L(G) is created if their
+corresponding edges ei and ej form a directed path ei to ej
+Now, we derive the exact recursive equation on the line
+graph. Let G be the original undirected graph with n nodes
+and l edges, and L(G) be the directed line graph of G with 2l
+nodes as deﬁned by Deﬁnition 1. The (i, j)th element L(G)i,j
+is deﬁned to be 1 if the edge exist, or 0 otherwise. Let m be
+a 2l-vector whose element corresponding to the edge (i, j) in
+G contains the reverse directional message mji. The reason
+of this reverse directional message will be described soon. Let
+φ be a n-vector containing priors of each node. We build a
+2l-vector ϕ as follows: if the kth element ϕk of ϕ corresponds
+to an edge (i, j) in G, then set ϕk to φ(i). A standard matrixvector multiplication with vector addition operation on L(G),
+m′ = L(G) × m + ϕ
+j=1 L(G)i,j × mj + ϕi.
+In the above equation, four operations are used to get the
+result vector:
+1) combine2(L(G)i,j, mj): multiply L(G)i,j and mj.
+2) combineAlli(y1, ..., yn): sum n multiplication results
+for node i.
+3) sumVector(ϕi, vaggr): add ϕi to the result vaggr of
+combineAll.
+4) assign(mi, oldvali, newvali): overwrite the previous
+value oldvali of mi with the new value newvali to make
+Now, we generalize the operators × and + to ×G and +G,
+respectively, so that the four operations can be any functions of
+their arguments. In this generalized setting, the matrix-vector
+multiplication with vector addition operation becomes
+m′ = L(G) ×G m +G ϕ
+i = assign(mi, oldvali,
+sumVector(ϕi,combineAlli({yj | j = 1..n,
+and yj =combine2(L(G)i,j, mj)}))).
+An important observation is that the BP equation (1) can
+be represented by this generalized form of the matrix-vector
+multiplication with vector addition. For simplifying the explanation, we omit the edge potential ψij since it is a tiny
+information(e.g. 2 by 2 or 3 by 3 table), and the summation
+over xi, both of which can be accommodated easily. Then, the
+BP equation (1) is expressed by
+L(G)T ×G m +G ϕ
+ChangeMessageDirection(m′)
+i = sumVector(ϕi,combineAlli({yj | j =
+1..n, and yj =combine2(L(G)T
+i,j, mj)}))
+, the four operations are deﬁned by
+1) combine2(L(G)i,j, mj) = L(G)i,j × mj
+2) combineAlli(y1, ..., yn) = Qn
+3) sumVector(ϕi, vaggr) = ϕi × vaggr
+4) assign(mi, oldvali, newvali) = newvali/vali
+, and the ChangeMessageDirection function is deﬁned by
+Algorithm 2. The computed m′′ of equation (5) is the updated
+message which can be used as m in the next iteration. Thus,
+our LINE GRAPH FIXED POINT (LFP) comprises running the
+equation (4) and (5) iteratively until a ﬁxed point, where the
+message vector converges, is found.
+Two details should be addressed for the complete description of our method. First, notice that L(G)T , instead
+of L(G), is used in the equation (4). The reason is that a
+message should aggregate other messages pointing to itself,
+which is the reverse direction of the line graph construction.
+Second, what is the use of ChangeMessageDirection function?
+We mentioned earlier that the bp equation (1) contained a
+denominator mji which is the reverse directional message.
+Thus, the input message vector m of equation (4) contains
+the reverse directional message. However, the result message
+vector m′ of equation (4) contains the forward directional
+message. For the m′ to be used in the next iteration, it needs
+to change the direction of the messages, and that is what
+ChangeMessageDirection does.
+Algorithm 2: ChangeMessageDirection
+Input: message vector m of length 2l
+Output: new message vector m′ of length 2l
+1: for k ∈1..2l do
+(i, j) ←edge in G corresponding to mk;
+k′ ←element index of m corresponding to the edge
+(j, i) in G
+5: end for
+In sum, a generalized matrix-vector multiplication with
+addition is the recursive message update equation which is run
+(a) Original graph
+(b) Directed graph
+(c) Directed line graph
+Converting a undirected graph to a directed line graph. (a to b): replace a undirected edge with two directed edges. (b to c): for an edge (i, j) in
+(b), make a node (i, j) in (c). Make a directed edge from (i, j) to (k, l) in (c) if j = k and i ̸= l. The rectangular nodes in (c) corresponds to edges in (b).
+until convergence. The resulting algorithm LFP is summarized
+in Algorithm 3.
+Algorithm 3: LINE GRAPH FIXED POINT (LFP)
+Input : Edge E of a undirected graph G = (V, E),
+node prior φn×1, and
+propagation matrix ψS×S
+Output: Belief matrix bn×S
+L(G) ←directed line graph from E;
+ϕ ←line prior vector from φ;
+while m does not converge do
+for s ∈S do
+m(s)next = L(G) ×G mcur +G ϕ;
+for i ∈V do
+for s ∈S do
+bi(s) ←cφi(s) Q
+j∈N(i) mji(s);
+IV. FAST ALGORITHM FOR HADOOP
+In this section, we ﬁrst describe the naive algorithm for LFP
+and propose an efﬁcient algorithm.
+A. Naive Algorithm
+The formulation of BP in terms of the ﬁxed point in the line
+graph provides an intuitive way to understand the computation.
+However, a naive algorithm without careful design is not
+efﬁcient for the following reason. In a naive algorithm, we
+ﬁrst build the matrix for the line graph L(G) and the message
+vector, and apply the recursive equation on them. The problem
+is that a node in G with degree d will generate d(d−1) edges
+in L(G). Since there exists many nodes with a very large
+degree in real-world graphs due to the well-known power-law
+degree distribution, the number of nonzero elements will grow
+too large. For example, the YahooWeb graph in Section V has
+several nodes with the several-million degree. As a result, the
+number of nonzero elements in the corresponding line graph
+is more than 1 trillion. Thus, we need an efﬁcient algorithm
+for dealing with the problem.
+B. Lazy Multiplication
+The main idea to solve the problem in the previous section
+is not to build the line graph explicitly: instead, we do the
+same computation on the original graph, or perform a ‘lazy’
+multiplication. The crucial observation is that the edges in the
+original graph G contain all the edge information in L(G):
+each edge e ∈E of G is a node in L(G), and e1, e2 ∈G
+are adjacent in L(G) if and only if they share the node in G.
+For each edge (i, j) in G, we associate the reverse message
+mji. Then, grouping edges by source node id i enables us
+to get all the messages pointing to the source node. Thus,
+for each node j of i’s neighbors, the updated message mij is
+computed by calculating
+k∈N(i) mki(xi)
+from the messages in
+the grouped edges (incorporating priors and the propagation
+matrix is described soon). Since we associate the reverse
+message for each edge, the output triple (src, dst, reverse
+message) is (j, i, mij).
+An issue in computing
+k∈N(i) mki(xi)
+is that a straightforward implementation requires N(i)(N(i) −1) multiplication which is prohibitively large. However, we decrease
+the number of multiplication to 2N(i) by ﬁrst computing
+k∈N(i) mki(s′), and for each j ∈N(i) computing
+t/mji(s′).
+The only remaining pieces of the computation is to incorporate the prior φ and the propagation matrix ψ. The propagation
+matrix ψ is a tiny bit of information, so it can be sent to every
+reducer by a variable passing functionality of HADOOP. The
+prior vector φ can be large, since the length of the vector
+can be the number of nodes in the graph. In the HADOOP
+algorithm, we also group the φ by the node id: each node
+prior is grouped together with the edges(messages) whose
+source id is the node id. Algorithm 4 shows the high-level
+algorithm of HADOOP LINE GRAPH FIXED POINT (HA-LFP).
+Algorithm 5 shows the BP message initialization algorithm
+which requires only a Map function. Algorithm 6 shows the
+HADOOP algorithm for the message update which implements
+the algorithm described above. After the messages converge,
+the ﬁnal belief is computed by Algorithm 7.
+C. Analysis
+We analyze the time and the space complexity of HA-LFP.
+The main result is that one iteration of the message update on
+the line graph has the same complexity as one matrix-vector
+Algorithm 4: HADOOP LINE GRAPH FIXED POINT (HA-
+Input : Edge E of a undirected graph G = (V, E),
+node prior φn×1, and
+propagation matrix ψS×S
+Output: Belief matrix bn×S
+Initialization(); // Algorithm 5
+while m does not converge do
+MessageUpdate(); // Algorithm 6
+BeliefComputation(); // Algorithm 7
+Algorithm 5: HA-LFP Initialization
+Input : Edge E = {(idsrc, iddst)},
+Set of states S = {s1, ..., sp}
+Output: Message Matrix M =
+{(idsrc, iddst, mdst,src(s1), ..., mdst,src(sp))}
+Initialization-Map(Key k, Value v);
+Output((k, v), ( 1
+// (k: idsrc, v: iddst)
+multiplication on the original graph. In the lemmas below, M
+is the number of machines.
+Lemma 1 (Time Complexity of HA-LFP ): One iteration
+of HA-LFP takes O( V +E
+M log V +E
+M ) time. It could take
+M ) time if HADOOP uses only hashing, not sorting, on
+its shufﬂing stage.
+Proof: Notice that the number of states is usually very
+small(2 or 3), thus can be considered as a constant. Assuming
+uniform distribution of data to machines, the time complexity
+is dominated by the MessageUpdate job. Thanks to the ‘lazy
+multiplication’ described in the previous section, both Map
+and Reduce takes linear time to the input. Thus, the time
+complexity is O( V +E
+M log V +E
+M ), which is the sorting time for
+records. It could be O( V +E
+M ), if HADOOP performs only
+hashing without sorting on its shufﬂing stage.
+A similar results holds for space complexity.
+Lemma 2 (Space Complexity of HA-LFP ): HA-LFP
+requires O(V + E) space.
+Proof: The prior vector requires O(V ) space, and the
+message matrix requires O(2E) space. Since the number of
+edges is greater than the number of nodes, HA-LFP requires
+O(V + E) space, in total.
+V. EXPERIMENTS
+In this section, we present experimental results to answer
+the following questions:
+Q1 How fast is HA-LFP, compared to a single-machine diskbased Belief Propagation algorithm?
+Q2 How does HA-LFP scale up on the number of machines?
+Algorithm 6: HA-LFP Message Update
+Input : Set of states S = {s1, ..., sp},
+Current Message Matrix M cur =
+{(sid, did, mdid,sid(s1), ..., mdid,sid(sp))},
+Prior Matrix Φ = {(id, φid(s1), ..., φid(sp))},
+Propagation Matrix ψ
+Output: Updated Message Matrix M next =
+{(idsrc, iddst, mdst,src(s1), ..., mdst,src(sp))}
+MessageUpdate-Map(Key k, Value v);
+if (k, v) is of type M then
+Output(k, v);
+// (k: sid, v:
+did, mdid,sid(s1), ..., mdid,sid(sp))
+else if (k, v) is of type Φ then
+Output(k, v);
+// (k: id, v: φid(s1), ..., φid(sp))
+MessageUpdate-Reduce(Key k, Value
+temps[1..p] ←[1..1];
+saved prior ←[ ];
+HashTable<int, double[1..p]> h;
+foreach v ∈v[1..r] do
+if (k, v) is of type Φ then
+saved prior[1..p] ←v;
+else if (k, v) is of type M then
+(did, mdid,sid(s1), ..., mdid,sid(sp)) ←v;
+h.add(did, (mdid,sid(s1), ..., mdid,sid(sp)));
+foreach i ∈1..p do
+temps[i] = temps[i] × mdid,sid(si);
+foreach (did, (mdid,sid(s1), ..., mdid,sid(sp))) ∈h do
+outm[1..p] ←0;
+foreach u ∈1..p do
+foreach v ∈1..p do
+outm[u] = outm[u] +
+saved prior[v]ψ(v, u)temps[v]/mdid,sid(sv);
+Output(did, (sid, outm , ..., outm[p]));
+Q3 How does HA-LFP scale up on the number of edges?
+We performed experiments in the M45 HADOOP cluster by
+Yahoo!. The cluster has total 480 machines with 1.5 Petabyte
+total storage and 3.5 Terabyte memory. The single-machine
+experiment was done in a machine with 3 Terabyte of disk and
+48 GB memory. The single-machine BP algorithm is a scaledup version of a memory-based BP which reads all the nodes,
+not the edges, into a memory. That is, the single-machine BP
+Algorithm 7: HA-LFP Belief Computation
+Input : Set of states S = {s1, ..., sp},
+Current Message Matrix M cur =
+{(sid, did, mdid,sid(s1), ..., mdid,sid(sp))},
+Prior Matrix Φ = {(id, φid(s1), ..., φid(sp))}
+Output: Belief Vector b = {(id, bid(s1), ..., bid(sp))}
+BeliefComputation-Map(Key k, Value v);
+if (k, v) is of type M then
+Output(k, v);
+// (k: sid, v:
+did, mdid,sid(s1), ..., mdid,sid(sp))
+else if (k, v) is of type Φ then
+Output(k, v);
+// (k: id, v: φid(s1), ..., φid(sp))
+BeliefComputation-Reduce(Key k, Value
+b[1..p] ←[1..1];
+foreach v ∈v[1..r] do
+if (k, v) is of type Φ then
+prior[1..p] ←v;
+foreach i ∈1..p do
+b[i] = b[i] × prior[i];
+else if (k, v) is of type M then
+(did, mdid,sid(s1), ..., mdid,sid(sp)) ←v;
+foreach i ∈1..p do
+b[i] = b[i] × mdid,sid(si);
+Output(k, (b , ..., b[p]));
+loads only the node information into a memory, but it reads
+the edges sequentially from the disk for every message update,
+instead of loading all the edges into a memory once for all.
+The graphs we used in our experiments at Section V and
+VI are summarized in Table II 1 , with the following details.
+• YahooWeb: web pages and their links, crawled by Yahoo!
+at year 2002.
+• Twitter: social network(who follows whom) extracted
+from Twitter, at June 2010 and Nov 2009.
+• Kronecker: synthetic Kronecker graph with similar
+properties as real-world graphs.
+• VoiceCall: phone call records(who calls whom) during
+Dec. 2007 to Jan. 2008 from an anonymous phone service
+1YahooWeb: released under NDA.
+Twitter: 
+Kronecker: 
+VoiceCall, SMS: not public data.
+• SMS: short message service records(who sends to whom)
+during Dec. 2007 to Jan. 2008 from an anonymous phone
+service provider.
+Twitter’10
+person-person
+Twitter’09
+person-person
+who calls whom
+who sends to whom
+ORDER AND SIZE OF NETWORKS. M: MILLON.
+Running time of 1 iterations of message update in HA-LFP on
+Kronecker graphs. Notice that the running time scales-up linear to the number
+A. Results
+Between HA-LFP and the single-machine BP, which one
+runs faster? At which point does the HA-LFP outperform
+the single-machine BP? Figure 2 (a) shows the comparison
+of running time of the HA-LFP and the single-machine BP.
+Notice that HA-LFP outperforms the single-machine BP when
+the number of machines exceeds 40. The HA-LFP requires
+more machines to beat the single-machine BP due to the ﬁxed
+costs for writing and reading the intermediate results to and
+from the disk. However, for larger graphs whose nodes do not
+ﬁt into a memory, HA-LFP is the only solution to the best of
+our knowledge.
+The next question is, how does our HA-LFP scale up on
+the number of machines and edges? Figure 2 (b) shows the
+scalability of HA-LFP on the number of machines. We see
+that our HA-LFP scales up linearly close to the ideal scaleup. Figure 3 shows the linear scalability of HA-LFP on the
+number of edges.
+(a) Running Time
+(b) Scale-Up with Machines
+Running time of HA-LFP with 10 iterations on the YahooWeb graph with 1.4 billion nodes and 6.7 billion edges. (a) Comparison of the running times
+of HA-LFP and the single-machine BP. Notice that HA-LFP outperforms the single-machine BP when the number of machines exceed ≈40. (b) “Scale-up”
+(throughput 1/TM) versus number of machines M, for the YahooWeb graph. Notice the near-linear scale-up close to the ideal(dotted line).
+B. Discussion
+Based on the experimental results, what are the advantages
+of HA-LFP? In what situations should it be used? For a
+small graph whose nodes and edges ﬁt in the memory, the
+single-machine BP is recommended since it runs faster. For a
+medium-to-large graph whose nodes ﬁt in the memory but the
+edges do not ﬁt in the memory, HA-LFP gives the reasonable
+solution since it runs faster than the single-machine BP. For a
+very large graph whose nodes do not ﬁt in the memory, HA-
+LFP is the only solution. We summarize the advantages of the
+HA-LFP here:
+• Scalability: HA-LFP is the only solution when the nodes
+information can not ﬁt in memory. Moreover, HA-LFP
+scales up near-linearly.
+• Running Time: Even for a graph whose node information ﬁts into a memory, HA-LFP ran 2.4 times faster.
+• Fault Tolerance: HA-LFP enjoys the fault tolerance that
+HADOOP provides: data are replicated, and the failed
+programs due to machine errors are restarted in working
+VI. ANALYSIS OF REAL GRAPHS
+In this section, we analyze real-world graphs using HA-LFP
+and show important ﬁndings.
+HA-LFP on YahooWeb
+Given a web graph, how can we separate the educational(‘good’) web pages from the adult(‘bad’) web pages?
+Manually investigating billions of web pages would take so
+much time and efforts. In this section, we show how to do it
+using HA-LFP. We use a simple heuristic to set priors: the web
+pages which contain ‘edu’ have high goodness prior(0.95), and
+the web pages which contain either ‘sex’, ‘adult’, or ‘porno’
+have low goodness prior(0.05). Among 11.8 million web pages
+containing sexually explicit keywords, we keep 10% of the
+pages as a validation set (goodness prior 0.5), and use the rest
+90% as a training set by setting the goodness prior 0.05. Also,
+among 41.7 million web pages containing ‘edu’, we randomly
+sample 11.8 million web pages, so that the number equals with
+that of adult pages given prior, and use 10% as a validation
+set(goodness prior 0.5), and use the rest 90% as a training
+set(goodness prior 0.95). The edge potential function is given
+by Table III. It is given by our observation that good pages
+tend to point to other good pages, while bad pages might point
+to good pages, as well as bad pages, to boost their ranking in
+web search engines.
+EDGE POTENTIAL FOR THE YAHOOWEB. ϵ IS SET TO 0.05 IN THE
+EXPERIMENTS. GOOD PAGES POINT TO OTHER GOOD PAGES WITH HIGH
+PROBABILITY. BAD PAGES POINT TO BAD PAGES, BUT ALSO GOOD PAGES
+WITH EQUAL CHANCES, TO BOOST THEIR RANK IN WEB SEARCH ENGINES.
+Figure 4 shows the HA-LFP scores and the number of pages
+in the test set having such scores. Notice that almost all the
+pages with LFP score less than 0.9 in our test data contain
+adult web sites. Thus, the LFP score 0.9 can be used as a
+decision boundary for adult web pages.
+Figure 5 shows the HA-LFP scores vs. PageRank scores of
+pages in our test set. We see that the PageRank cannot be used
+for differentiating between educational and adult web pages.
+However, HA-LFP can be used to spotting adult web pages,
+by using the threshold 0.9.
+HA-LFP on Twitter and VoiceCall
+We run HA-LFP on Twitter and VoiceCall data which are
+both social networks representing who follows whom or who
+HA-LFP scores vs. PageRank scores of pages in our test set. The vertical dashed line is the same decision boundary as in Figure 4. Note that in
+contrast to HA-LFP, PageRank scores cannot be used to differentiating the good from the bad pages.
+HA-LFP scores and the number of pages in the test set having such
+scores. Note that pages whose goodness scores are less than 0.9(the left side
+of the vertical bar) are likely to be adult pages with very high chances.
+calls whom. We deﬁne the three roles: ’celebrity’, ’spammer’,
+and normal people. We deﬁne a celebrity as a person with high
+in-degree (>=1000), and not-too-large out-degree(< 10 ×
+indegree). We deﬁne a spammer as a person with high outdegree (>=1000), but low in-degree (< 0.1 × outdegree).
+For celebrities, we set (0.8, 0.1, 0.1) for (celebrity, spammer,
+normal) prior probabilities. For spammers, we set (0.1, 0.8,
+0.1) for (celebrity, spammer, normal) prior probabilities. The
+edge potential function is given by Table IV. It encodes our
+observation that celebrities tend to follow normal persons the
+most, spammers follow other spammers or normal persons,
+and normal persons follow other normal persons or celebrities.
+EDGE POTENTIAL FOR THE TWITTER AND VOICECALL.
+Figure 6 shows the HA-LFP scores of people in the Twitter
+and VoiceCall data. There are two clusters in both of the data.
+The large cluster starting from the ‘Normal’ vertex contains
+high degree nodes, and the small cluster below the large cluster
+contains low degree nodes.
+C. Finding Roles And Anomalies
+In the experiments of previous sections, we used several
+classes(‘bad’ web sites, ‘spammers’, ‘celebrities’, etc.) of
+nodes. The question is, how can we ﬁnd classes of a given
+graph? Finding out such classes is important for BP since
+it helps to set reasonable priors which could lead to quick
+convergence. In this section, we analyze real world graphs
+using the PEGASUS package and give observations
+on the patterns and anomalies, which could potentially help
+determine the classes. We focus on the structural properties of
+graphs, including degree, connected component, and radius.
+Using Degree Distributions. We ﬁrst show the degree
+distributions of real world graphs in Figure 7. Notice that
+there are nodes with very high in or out degrees, which gives
+valuable information for setting priors.
+Observation 1 (High In or Out Degree Nodes): The nodes
+with high in-degree can have a high prior for ‘celebrity’, and
+the nodes with high out-degree but low in-degree can have a
+high prior for ‘spammer’.
+Most of the degree distributions in Figure 7 follow
+power law or log-normal. The VoiceCall in degree distribution(Figure 7 (e)) is different from other distributions since it
+contains mixture of distributions:
+Observation 2 (Mixture of Lognormals in Degree Distribution):
+VoiceCall in degree distributions in Figure 7 seems to
+comprise two lognormal distributions shown in D1(red color)
+and D2(green color).
+Another observation is that there are several anomalous
+spikes in the degree distributions in Figure 7 (b) and (d).
+Observation 3 (Spikes in Degree Distribution): There is a
+huge spike at the out degree 1200 of YahooWeb data in
+Figure 7 (b). They came from online market pages from
+Germany, where the pages are linked to each other and forming
+link farms. Two outstanding spikes are also observed at the out
+degree 20 and 2001 of Twitter data in Figure 7 (d). The reason
+seems to be a hard limit in the maximum number of people
+to follow.
+(a) Twitter
+(b) VoiceCall
+HA-LFP scores of people in the Twitter and VoiceCall data. The points represent the scores of the ﬁnal beliefs in each state, forming simplex in
+3-dimensional space whose axes are the red lines that meet at the center(origin). Notice that people seem to form two groups, in both datasets, despite the
+fact that the two datasets are completely of different nature.
+Finally, we study the highest degrees that are beyond
+the power-law or lognormal cutoff points using rank plot.
+Figure 8 shows the top 1000 highest in and out degrees and its
+rank(from 1 to 1000) which we summarize in the following
+observation.
+Observation 4 (Tilt in Rank Plot): The
+plot of Twitter data in Figure 8 (b) follows a power law
+with a single exponent. The in degree rank plot, however,
+comprises two ﬁtting lines with a tilting point around rank
+240. The tilting point divides the celebrities in two groups:
+super-celebrities (e.g., possibly, of international caliber) and
+plain celebrities (possibly, of national or regional caliber).
+(a) In degree vs. Rank
+(b) Out degree vs. Rank
+Fig. 8. Degree vs. Rank. in Twitter Jun. 2010 data. Notice the change of slope
+around the tilting point in (a). The point can be used to distinguishing supercelebrities (e.g., of international caliber) versus plain celebrities (of national
+or regional caliber).
+Using Connected Component Distributions. The distributions of the sizes of connected components in a graph
+informs us of the connectivity of the nodes (component size
+vs. number of components having that size). When these
+distributions are plotted over time, we may observe when
+certain nodes participate in various activities — patterns such
+as periodicity or anomalous deviations from such patterns can
+generate important insights.
+Observation 5 (Periodic Dips and Surges): Figure 9 shows
+the temporal connected component distribution of the Voice-
+Call (who-calls-whom) data, where each data point was
+computed using one day’s worth of data (i.e., a one-day
+snapshot). On every Sunday, we see a dip in the size of
+the giant connected component (largest component), and an
+accompanying surge in the number of connected components
+for the day. This periodicity highlights the typical and rather
+constant call volume during the work days, and lower volume
+outside them. Equipped with this information, we may infer
+that “business” phone numbers (nodes) are those that are
+regularly active during work days but not weekends; we may
+in turn characterize these “business” numbers as one class of
+nodes in our algorithm. The sizes of the second and third
+largest component oscillate about some small numbers (68
+and 50 respectively), echoing previous research ﬁndings .
+Fig. 9. [Best Viewed In Color] Temporal connected component distributions
+of the VoiceCall data, from Dec 1, 2007 to Jan 31, 2008, inclusively. Each
+data point computed using one day’s worth of data (i.e., a one-day snapshot.)
+GCC, 2CC, and 3CC are the ﬁrst (giant), second, and third largest components
+respectively. The turquoise line denotes the number of connected components.
+The temporal trend may be used to set priors for HA-LFP. See the text for
+Using Radius Distributions. We next analyze the radius
+distributions of real graphs. Radius of a node is deﬁned to be
+the 90%th percentile of all the distances to other nodes from
+it. Thus, nodes with low radii can reach other nodes in a small
+number of steps. Figure 10 shows the radius distributions of
+(a) YahooWeb: In Degree
+(b) Yahoo Web: Out Degree
+(c) Twitter: In Degree
+(d) Twitter: Out Degree
+(e) VoiceCall: In Degree
+(f) VoiceCall: Out Degree
+(g) SMS: In Degree
+(h) SMS: Out Degree
+[(e): Best Viewed In Color] Degree distributions of real world graphs. Notice many high in-degree or out-degree nodes which can be used to
+determine the classes for HA-LFP. Most distributions follow power-law or lognormal, except (e) which seems to be a mixture of two lognormal distributions.
+Also notice the several spikes which suggest anomalous nodes, suspicious activities, or software limits on the number of connections.
+real graphs. In contrast to the VoiceCall and the SMS data, the
+Twitter data contains several anomalous nodes with long(>10)
+Observation 6 (Suspicious Accounts Created By A User):
+The Twitter data contain several nodes with long radii. They
+form chains shown in Figure 11. Each chain seems to be
+created by one user, since the times in which accounts are
+created are regular.
+VII. CONCLUSION
+In this paper we proposed HADOOP LINE GRAPH FIXED
+POINT (HA-LFP), a HADOOP algorithm for the inferences of
+graphical models in billion-scale graphs. The main contributions are the followings:
+• Efﬁciency: We show that the solution of inference problem in graphical models is a ﬁxed point in line graph. We
+propose LINE GRAPH FIXED POINT (LFP), a formulation
+of BP on a line graph induced from the original graph,
+and show that it is a generalized version of a linear
+algebra operation. We propose HADOOP LINE GRAPH
+FIXED POINT (HA-LFP), an efﬁcient algorithm carefully
+designed for LFP in HADOOP.
+• Scalability: We do the experiments to compare the running time of the HA-LFP and a single-machine BP. We
+also gives the scalability results and show that HA-LFP
+has a near-linear scale up.
+• Effectiveness: We show that our method can ﬁnd interesting patterns and anomalies, on some of the largest
+publicly available graphs (Yahoo Web graph of 0.24 Tb,
+and twitter, of 0.13 Tb).
+Future research directions include algorithms for mining
+based on graphical models, and tensor analysis on HADOOP
+ACKNOWLEDGMENT
+The authors would like to thank YAHOO! for providing
+us with the web graph and access to the M45, and Brendan
+Meeder in CMU for providing Twitter data.
+This material is based upon work supported by the National Science Foundation under Grants No. IIS-0705359,
+IIS0808661, and under the auspices of the U.S. Department
+of Energy by Lawrence Livermore National Laboratory under
+contract No. DE-AC52-07NA27344.
+Research was sponsored by the Army Research Laboratory
+and was accomplished under Cooperative Agreement Number
+W911NF-09-2-0053. The views and conclusions contained
+in this document are those of the authors and should not
+be interpreted as representing the ofﬁcial policies, either
+expressed or implied, of the Army Research Laboratory or
+the U.S. Government. The U.S. Government is authorized
+to reproduce and distribute reprints for Government purposes
+notwithstanding any copyright notation here on.
+This work is also partially supported by an IBM Faculty
+Award. Any opinions, ﬁndings, and conclusions or recommendations expressed in this material are those of the author(s) and
+do not necessarily reﬂect the views of the National Science
+Foundation, or other funding parties.

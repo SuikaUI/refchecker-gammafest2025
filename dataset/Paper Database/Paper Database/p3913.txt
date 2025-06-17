@@ -1,0 +1,348 @@
+SRINIVAS, BABU: DATA-FREE PARAMETER PRUNING FOR DEEP NEURAL NETWORKS
+Data-free Parameter Pruning for
+Deep Neural Networks
+Suraj Srinivas
+ 
+R. Venkatesh Babu
+ 
+Supercomputer Education and
+Research Centre,
+Indian Institute of Science,
+Bangalore, India
+Deep Neural nets (NNs) with millions of parameters are at the heart of many stateof-the-art computer vision systems today. However, recent works have shown that much
+smaller models can achieve similar levels of performance. In this work, we address the
+problem of pruning parameters in a trained NN model. Instead of removing individual
+weights one at a time as done in previous works, we remove one neuron at a time. We
+show how similar neurons are redundant, and propose a systematic way to remove them.
+Our experiments in pruning the densely connected layers show that we can remove upto
+85% of the total parameters in an MNIST-trained network, and about 35% for AlexNet
+without signiﬁcantly affecting performance. Our method can be applied on top of most
+networks with a fully connected layer to give a smaller network.
+Introduction
+I have made this letter longer than usual, only because I have not had the time
+to make it shorter 1 - Blaise Pascal
+Aspiring writers are often given the following advice: produce a ﬁrst draft, then remove
+unnecessary words and shorten phrases whenever possible. Can a similar recipe be followed
+while building deep networks? For large-scale tasks like object classiﬁcation, the general
+practice has been to use large networks with powerful regularizers . This
+implies that the overall model complexity is much smaller than the number of model parameters. A smaller model has the advantage of being faster to evaluate and easier to store - both
+of which are crucial for real-time and embedded applications.
+Given such a large network, how do we make it smaller? A naive approach would be to
+remove weights which are close to zero. However, this intuitive idea does not seem to be
+theoretically well-founded. LeCunn et al. proposed Optimal Brain Damage (OBD) , a
+theoretically sound technique which they showed to work better than the naive approach. A
+few years later, Hassibi et al. came up with Optimal Brain Surgeon (OBS) , which was
+shown to perform much better than OBD, but was much more computationally intensive.
+This line of work focusses on pruning unnecessary weights in a trained model.
+There has been another line of work in which a smaller network is trained to mimic a
+much larger network. Bucila et al. proposed a way to achieve the same - and trained
+c⃝2015. The copyright of this document resides with its authors.
+It may be distributed unchanged freely in print or electronic forms.
+1Loosly translated from French
+ 
+2 SRINIVAS, BABU: DATA-FREE PARAMETER PRUNING FOR DEEP NEURAL NETWORKS
+smaller models which had accuracies similar to larger networks. Ba and Caruna used the
+approach to show that shallower (but much wider) models can be trained to perform as well
+as deep models. Knowledge Distillation (KD) is a more general approach, of which
+Bucila et al.’s is a special case. FitNets use KD at several layers to learn networks
+which are deeper but thinner (in contrast to Ba and Caruna’s shallow and wide), and achieve
+high levels of compression on trained models.
+Many methods have been proposed to train models that are deep, yet have a lower parameterisation than conventional networks. Collins and Kohli propose a sparsity inducing
+regulariser for backpropogation which promotes many weights to have zero magnitude. They
+achieve reduction in memory consumption when compared to traditionally trained models.
+Denil et al. demonstrate that most of the parameters of a model can be predicted given
+only a few parameters. At training time, they learn only a few parameters and predict the
+rest. Ciresan et al. train networks with random connectivity, and show that they are more
+computationally efﬁcient than densely connected networks.
+Some recent works have focussed on using approximations of weight matrices to perform
+compression. Jenderberg et al. and Denton et al. use SVD-based low rank approximations of the weight matrix. Gong et al. , on the other hand, use a clustering-based
+product quantization approach to build an indexing scheme that reduces the space occupied
+by the matrix on disk. Unlike the methods discussed previously, these do not need any training data to perform compression. However, they change the network structure in a way that
+prevents operations like ﬁne-tuning to be done easily after compression. One would need to
+‘uncompress’ the network, ﬁne-tune and then compress it again.
+Similar to the methods discussed in the paragraph above, our pruning method doesn’t
+need any training/validation data to perform compression. Unlike these methods, our method
+merely prunes parameters, which ensures that the network’s overall structure remains same
+- enabling operations like ﬁne-tuning on the ﬂy. The following section explains this in more
+Wiring similar neurons together
+Given the fact that neural nets have many redundant parameters, how would the weights
+conﬁgure themselves to express such redundancy? In other words, when can weights be
+removed from a neural network, such that the removal has no effect on the net’s accuracy?
+Suppose that there are weights which are exactly equal to zero. It is trivial to see that
+these can be removed from the network without any effect whatsoever. This was the motivation for the naive magnitude-based removal approach discussed earlier.
+In this work we look at another form of redundancy. Let us consider a toy example of
+a NN with a single hidden layer, and a single output neuron. This is shown in ﬁgure 1. Let
+W1,W2,... ∈Rd be vectors of weights (or ‘weight-sets’) which includes the bias terms, and
+a1,a2,... ∈R be scalar weights in the next layer. Let X ∈Rd denote the input, with the bias
+term absorbed. The output is given by
+z = a1h(W T
+1 X)+a2h(W T
+2 X)+a3h(W T
+3 X)+...+anh(W T
+where h(·) is a monotonically increasing non-linearity, such as sigmoid or ReLU.
+Now let us suppose that W1 = W2. This means that h(W T
+1 X) = h(W T
+2 X). Replacing W2
+by W1 in (1), we get
+SRINIVAS, BABU: DATA-FREE PARAMETER PRUNING FOR DEEP NEURAL NETWORKS
+Figure 1: A toy example showing the effect of equal weight-sets (W1 = W4). The circles in
+the diagram are neurons and the lines represent weights. Weights of the same colour in the
+input layer constitute a weight-set.
+z = (a1 +a2)h(W T
+1 X)+0 h(W T
+2 X)+a3h(W T
+3 X)+...+anh(W T
+This means whenever two weight sets (W1,W2) are equal, one of them can effectively be
+removed. Note that we need to alter the co-efﬁcient a1 to a1 +a2 in order to achieve this. We
+shall call this the ‘surgery’ step. This reduction also resonates with the well-known Hebbian
+principle, which roughly states that “neurons which ﬁre together, wire together”. If we ﬁnd
+neurons that ﬁre together (W1 = W2), we wire them together (a1 = a1 + a2). Hence we see
+here that along with single weights being equal to zero, equal weight vectors also contribute
+to redundancies in a NN. Note that this approach assumes that the same non-linearity h(·) is
+used for all neurons in a layer.
+The case of dissimilar neurons
+Using the intuition presented in the previous section, let us try to formally derive a process
+to eliminate neurons in a trained network. We note that two weight sets may never be exactly
+equal in a NN. What do we do when ∥W1 −W2∥= ∥ε1,2∥≥0 ? Here εi,j = Wi −Wj ∈Rd.
+As in the previous example, let zn be the output neuron when there are n hidden neurons.
+Let us consider two similar weight sets Wi and Wj in zn and that we have chosen to remove
+Wj to give us zn−1.
+We know that the following is true.
+zn = a1h(W T
+1 X)+...+aih(W T
+i X)+...+ajh(W T
+zn−1 = a1h(W T
+1 X)+...+(ai +aj)h(W T
+If Wi = Wj (or εi,j = 0), we would have zn = zn−1. However, since ∥εi,j∥≥0, this need
+not hold true. Computing the squared difference (zn −zn−1)2, we have
+(zn −zn−1)2 = a2
+j X)−h(W T
+To perform further simpliﬁcation, we use the following Lemma.
+Lemma 1. Let a,b ∈R and h(·) be a monotonically increasing function,
+such that max
+≤1,∀x ∈R. Then,
+4 SRINIVAS, BABU: DATA-FREE PARAMETER PRUNING FOR DEEP NEURAL NETWORKS
+(h(a)−h(b))2 ≤(a−b)2
+The proof for this is provided in the Appendix. Note that non-linearities like sigmoid and
+ReLU satisfy the above property. Using the Lemma and (2), we have
+(zn −zn−1)2 ≤a2
+This can be further simpliﬁed using Cauchy-Schwarz inequality.
+(zn −zn−1)2 ≤a2
+Now, let us take expectation over the random variable X on both sides. Here, X is assumed to belong to the input distribution represented by the training data.
+E(zn −zn−1)2 ≤a2
+Note that E∥X∥2
+2 is a scalar quantity, independent of the network architecture. Given the
+above expression, we ask which (i, j) pair least changes the output activation. To answer
+this, we take minimum over (i, j) on both sides, yielding
+min(E(zn −zn−1)2) ≤min(a2
+To minimize an upper bound on the expected value of the squared difference, we thus
+need to ﬁnd indicies (i, j) such that a2
+2 is the least. Note that we need not compute
+the value of E∥X∥2
+2 to do this - making it dataset independent. Equation (3) takes into
+consideration both the naive approach of removing near-zero weights (based on a2
+j) and the
+approach of removing similar weight sets (based on ∥εi,j∥2
+The above analysis was done for the case of a single output neuron. It can be trivially
+extended to consider multiple output neurons, giving us the following equation
+min(E⟨(zn −zn−1)2⟩) ≤min(⟨a2
+where ⟨·⟩denotes the average of the quantity over all output neurons. This enables us to
+apply this method to intermediate layers in a deep network. For convenience, we deﬁne the
+saliency of two weight-sets in (i, j) as si,j = ⟨a2
+We elucidate our procedure for neuron removal here:
+1. Compute the saliency si,j for all possible values of (i, j). It can be stored as a square
+matrix M, with dimension equal to the number of neurons in the layer being considered.
+2. Pick the minimum entry in the matrix. Let it’s indices be (i′, j′). Delete the j′th neuron,
+and update ai′ ←ai′ +aj′.
+3. Update M by removing the j′th column and row, and updating the i′th column (to
+account for the updated ai′.)
+The most computationally intensive step in the above algorithm is the computation of the
+matrix M upfront. Fortunately, this needs to be done only once before the pruning starts, and
+only single columns are updated at the end of pruning each neuron.
+SRINIVAS, BABU: DATA-FREE PARAMETER PRUNING FOR DEEP NEURAL NETWORKS
+Connection to Optimal Brain Damage
+In the case of toy model considered above, with the constraint that only weights from the
+hidden-to-output connection be pruned, let us analyse the OBD approach.
+The OBD approach looks to prune those weights which have the least effect on the training/validation error. In contrast, our approach looks to prune those weights which change
+the output neuron activations the least. The saliency term in OBD is sj = h j ja2
+j/2, where
+hii is the ith diagonal element of the Hessian matrix. The equivalent quantity in our case
+is the saliency si,j = a2
+2. Note that both contain a2
+j. If the change in training error is
+proportional to change in output activation, then both methods are equivalent. However, this
+does not seem to hold in general. Hence it is not always necessary that the two approaches
+remove the same weights.
+In general, OBD removes a single weight at a time, causing it to have a ﬁner control
+over weight removal than our method, which removes a set of weights at once. However,
+we perform an additional ‘surgery’ step (ai ←ai +aj) after each removal, which is missing
+in OBD. Moreover, for large networks which use a lot of training data, computation of the
+Hessian matrix (required for OBD) is very heavy. Our method provides a way to remove
+weights quickly.
+Connection to Knowledge Distillation
+Hinton et al. proposed to use the ‘softened’ output probabilities of a learned network
+for training a smaller network. They showed that as T →∞, their procedure converges to
+the case of training using output layer neurons (without softmax). This reduces to Bucila et
+al.’s method. Given a larger network’s output neurons zl and smaller network’s neurons
+zs, they train the smaller network so that (zl −zs)2 is minimized.
+In our case, zl corresponds to zn and zs to zn−1. We minimize an upper bound on
+E((zl −zs)2), whereas KD exactly minimizes (zl −zs)2 over the training set. Moreover, in
+the KD case, the minimization is performed over all weights, whereas in our case it is only
+over the output layer neurons. Note that we have the expectation term (and the upper bound)
+because our method does not use any training data.
+Weight normalization
+In order for our method to work well, we need to ensure that we remove only those weights
+for which the RHS of (3) is small. Let Wi = αWj, where α is a positive constant (say 0.9).
+Clearly, these two weight sets compute very similar features. However, we may not be able to
+eliminate this pair because of the difference in magnitudes. We hence propose to normalise
+all weight sets while computing their similarity.
+Result 1. For the ReLU non-linearity, deﬁned by max(0,·), and for any α ∈R+ and any
+x ∈R, we have the following result:
+max(0,αx) = α max(0,x)
+Using this result, we scale all weight sets (W1,W2,...) such that their norm is one. The
+α factor is multiplied with the corresponding co-efﬁcient in the next layer. This helps us
+identify better weight sets to eliminate.
+6 SRINIVAS, BABU: DATA-FREE PARAMETER PRUNING FOR DEEP NEURAL NETWORKS
+Some heuristics
+While the mathematics in the previous section gives us a good way of thinking about the
+algorithm, we observed that certain heuristics can improve performance.
+The usual practice in neural network training is to train the bias without any weight
+decay regularization. This causes the bias weights to have a much higher magnitude than the
+non-bias weights. For this reason, we normalize only the non-bias weights. We also make
+sure that the similarity measure ε takes ‘sensible-sized’ contributions from both weights and
+biases. This is accomplished for fully connected layers as follows.
+Let W = [W ′ b], and let W ′
+(n) correspond to the normalized weights. Rather than using
+∥εi,j∥= ∥Wi −Wj∥, we use ∥εi,j∥=
++ |bi −bj|
+Note that both are measures of similarity between weight sets. We have empirically
+found the new similarity measure performs much better than just using differences. We
+hypothesize that this could be a tighter upper bound on the quantity E((zn −zn−1)2).
+Similar heuristics can be employed for deﬁning a similarity term for convolutional layers.
+In this work, however, we only consider fully connected layers.
+How many neurons to remove?
+One way to use our technique would be to keep removing neurons until the test accuracy
+starts going below certain levels. However, this is quite laborious to do for large networks
+with multiple layers.
+We now ask whether it is possible to somehow determine the number of removals automatically. Is there some indication given by removed weights that tell us when it is time to
+stop? To investigate the same, we plot the saliency si,j of the removed neuron as a function
+of the order of removal. For example, the earlier pruned neurons would have a low value of
+saliency si,j, while the later neurons would have a higher value. The red line in Figure 2(a)
+shows the same. We observe that most values are very small, and the neurons at the very end
+have comparatively high values. This takes the shape of a distinct exponential-shaped curve
+towards the end.
+One heuristic would probably be to have the cutoff point near the foot of the exponential
+curve. However, is it really justiﬁed? To answer the same, we also compute the increase in
+test error (from baseline levels) at each stage of removal (given by the blue line). We see that
+the error stays constant for the most part, and starts increasing rapidly near the exponential.
+Scaled appropriately, the saliency curve could be considered as a proxy for the increase in
+test error. However, computing the scale factor needs information about the test error curve.
+Instead, we could use the slope of saliency curve to estimate how densely we need to sample
+the test error. For example, fewer measurements are needed near the ﬂatter region and more
+measurements are needed near the exponential region. This would be a data-driven way to
+determine number of neurons to remove.
+We also plot the histogram of values of saliency. We see that the foot of the exponential
+(saliency ≈1.2) corresponds to the mode of the gaussian-like curve (Figure 2(b)). If we
+require a data-free way of ﬁnding the number of neurons to remove, we simply ﬁnd the
+saliency value of the mode in the histogram and use that as cutoff. Experimentally, we see
+that this works well when the baseline accuracy is high to begin with. When it is low, we see
+that using this method causes a substantial decrease in accuracy of the resulting classiﬁer.
+SRINIVAS, BABU: DATA-FREE PARAMETER PRUNING FOR DEEP NEURAL NETWORKS
+Figure 2: (a) Scaled appropriately, the saliency curve closely follows that of increase in
+test error ; (b) The histogram of saliency values. The black bar indicates the mode of the
+gaussian-like curve.
+In this work, we use fractions (0.25, 0.5, etc) of the number given by the above method for
+large networks. We choose the best among the different pruned models based on validation
+data. A truly data-free method, however, would require us to not use any validation data
+to ﬁnd the number of neurons to prune. Note that only our pruning method is data-free.
+The formulation of such a complete data-free method for large networks demands further
+investigation.
+Experiments and Results
+In most large scale neural networks , the fully connected layers contain most of
+the parameters in the network. As a result, reducing just the fully connected layers would
+considerably compress the network. We hence show experiments with only fully connected
+Comparison with OBS and OBD
+Given the fact that Optimal Brain Damage/Surgery methods are very difﬁcult to evaluate for
+mid-to-large size networks, we attempted to compare it against our method on a toy problem. We use the SpamBase dataset , which comprises of 4300 datapoints belonging to
+two classes, each having 57 dimensional features. We consider a small neural network architecture - with a single hidden layer composed of 20 neurons. The network used a sigmoidal
+non-linearity (rather than ReLU), and was trained using Stochastic Gradient Descent (SGD).
+The NNSYSID 2 package was used to conduct these experiments.
+Figure 3 is a plot of the test error as a function of the number of neurons removed. A
+‘ﬂatter’ curve indicates better performance, as this means that one can remove more weights
+for very little increase in test error. We see that our method is able to maintain is low test error
+as more weights are removed. The presence of an additional ‘surgery’ step in our method
+improves performance when compared to OBD. Figure 4 shows performance of our method
+when surgery is not performed. We see that the method breaks down completely in such a
+scenario. OBS performs inferior to our method because it presumably prunes away important
+2 
+8 SRINIVAS, BABU: DATA-FREE PARAMETER PRUNING FOR DEEP NEURAL NETWORKS
+Figure 3: Comparison of proposed approach with OBD and OBS. Our method is able to
+prune many more weights than OBD/OBS at little or no increase in test error
+weights early on - so that any surgery is not able to recover the original performance level.
+In addition to this, our method took < 0.1 seconds to run, whereas OBD took 7 minutes
+and OBS took > 5 hours. This points to the fact that our method could scale well for large
+Figure 4: Comparison with and without surgery. Our method breaks down when surgery is
+not performed. Note that the y-axis is the log of test error.
+Experiments on LeNet
+We evaluate our method on the MNIST dataset, using a LeNet-like architecture. This set
+of experiments was performed using the Caffe Deep learning framework . The network
+consisted of a two 5×5 convolutional layers with 20 and 50 ﬁlters, and two fully connected
+layers with 500 and 10 (output layer) neurons. Noting the fact that the third layer contains
+99% of the total weights, we perform compression only on that layer.
+The results are shown in Table 1. We see that our method performs much better than the
+naive method of removing weights based on magnitude, as well as random removals - both
+of which are data-free techniques.
+Our data-driven cutoff selection method predicts a cut-off of 420, for a 1% decrease in
+accuracy. The data-free method, on the other hand, predicts a cut-off of 440. We see that
+immediately after that point, the performance starts decreasing rapidly.
+SRINIVAS, BABU: DATA-FREE PARAMETER PRUNING FOR DEEP NEURAL NETWORKS
+Neurons pruned
+Naive method
+Random removals
+Compression (%)
+Table 1: The numbers represent accuracies in (%) of the models on a test set. ‘Naive method’
+refers to removing neurons based on magnitude of weights. The baseline model with 500
+neurons had an accuracy of 99.06%. The highlighted values are those predicted for cutoff by
+our cut-off selection methods.
+Experiments on AlexNet
+For networks like AlexNet , we note that there exists two sets of fully connected layers,
+rather than one. We observe that pruning a given layer changes the weight-sets for the next
+layer. To incorporate this, we ﬁrst prune weights in earlier layers before pruning weights in
+later layers.
+For our experiments, we use an AlexNet-like architecture, called CaffeNet, provided
+with the Caffe Deep Learning framework. It is very similar to AlexNet, except that the order
+of max-pooling and normalization have been interchanged. We use the ILSVRC 2012 
+validation set to compute accuracies in the following table.
+# FC6 pruned
+# FC7 pruned
+Accuracy (%)
+Compression (%)
+# weights removed
+Table 2: Compression results for CaffeNet. The ﬁrst two columns denote the number of
+neurons pruned in each of the FC6 and FC7 layers. The validation accuracy of the unpruned
+CaffeNet was found to be 57.84%. Note that it has 60.9M weights in total. The numbers in
+red denote the best performing models, and those in blue denote the numbers predicted by
+our data-free cutoff selection method.
+We observe that using fractions (0.25, 0.5, 0.75) of the prediction made by our data-free
+method gives us competitive accuracies. We observe that removing as many as 9.3 million
+parameters in case of 700 removed neurons in FC6 only reduces the base accuracy by 0.2%.
+Our best method was able to remove upto 21.3 million weights, reducing the base accuracy
+10SRINIVAS, BABU: DATA-FREE PARAMETER PRUNING FOR DEEP NEURAL NETWORKS
+by only 2.2%.
+Conclusion
+We proposed a data-free method to perform NN model compression. Our method weakly
+relates to both Optimal Brain Damage and a form of Knowledge Distillation. By minimizing
+the expected squared difference of logits we were able to avoid using any training data for
+model compression. We also observed that the saliency curve has low values in the beginning
+and exponentially high values towards the end. This fact was used to decide on the number
+of neurons to prune. Our method can be used on top of most existing model architectures, as
+long as they contain fully connected layers.
+Proof of Lemma 1. Given h(·) is monotonically increasing, and max
+≤1, ∀x ∈R.
+=⇒0 < dh(x)
+b dx =⇒0 < h(a)−h(b) ≤a−b
+Since both h(a)−h(b) > 0, and a−b > 0, we can square both sides of the inequality.
+(h(a)−h(b))2 ≤(a−b)2
+Acknowledgement
+We gratefully acknowledge the support of NVIDIA Corporation for the donation of the K40
+GPU used for this research.

@@ -1,0 +1,803 @@
+ESE: Efﬁcient Speech Recognition Engine
+with Sparse LSTM on FPGA
+Song Han1,2, Junlong Kang2, Huizi Mao1,2, Yiming Hu2,3, Xin Li2, Yubin Li2, Dongliang Xie2
+Hong Luo2, Song Yao2, Yu Wang2,3, Huazhong Yang3 and William J. Dally1,4
+1 Stanford University, 2 DeePhi Tech, 3 Tsinghua University, 4 NVIDIA
+1 {songhan,dally}@stanford.edu, 2 , 3 
+Long Short-Term Memory (LSTM) is widely used in speech
+recognition. In order to achieve higher prediction accuracy,
+machine learning scientists have built increasingly larger models.
+Such large models are both computation and memory intensive. Deploying such bulky models results in high
+power consumption and leads to a high total cost of ownership (TCO) for a data center.
+To speedup prediction and make it energy eﬃcient, we
+ﬁrst propose a load-balance-aware pruning method that can
+compress the LSTM model size by 20× (10× from pruning
+and 2× from quantization) with negligible loss of prediction
+accuracy. Also we proposed load-balance-aware pruning to
+ensure high hardware utilization. Next, we propose a scheduler that encodes and partitions the compressed model to
+multiple PEs for parallelism and schedules the complicated
+LSTM data ﬂow. Finally, we design a hardware architecture
+named ESE that works directly on the sparse LSTM model.
+Implemented on Xilinx XCKU060 FPGA running at 200MHz,
+ESE has a performance of 282 GOPS working directly on the
+sparse LSTM network, corresponding to 2.52 TOPS on the
+dense one, and processes a full LSTM for speech recognition with a power dissipation of 41 Watts. Evaluated on the
+LSTM for speech recognition benchmark, ESE is 43× and
+3× faster than Core i7 5930k CPU and Pascal Titan X GPU
+implementations. It achieves 40× and 11.5× higher energy
+eﬃciency compared with the CPU and GPU respectively.
+Deep Learning; Speech Recognition; Model Compression;
+Hardware Acceleration; Software-Hardware Co-Design; FPGA
+INTRODUCTION
+Deep neural network is widely used for speech recognition . Long Short-Term Memory (LSTM) and Gated
+Recurrent Unit (GRU) are two popular types of recurrent
+neural networks (RNNs) used for speech recognition. In this
+work, we evaluated the most complex one: LSTM . A
+Permission to make digital or hard copies of all or part of this work for personal or
+classroom use is granted without fee provided that copies are not made or distributed
+for proﬁt or commercial advantage and that copies bear this notice and the full citation
+on the ﬁrst page. Copyrights for components of this work owned by others than the
+author(s) must be honored. Abstracting with credit is permitted. To copy otherwise, or
+republish, to post on servers or to redistribute to lists, requires prior speciﬁc permission
+and/or a fee. Request permissions from .
+FPGA ’17, February 22 - 24, 2017, Monterey, CA, USA
+c⃝2017 Copyright held by the owner/author(s). Publication rights licensed to ACM.
+ISBN 978-1-4503-4354-1/17/02...$15.00
+DOI: 
+Accelerated
+Compression
+Quantization
+Conventional
+Figure 1: Proposed eﬃcient DNN deployment ﬂow:
+model compression+accelerated inference.
+LSTM Model
+Compression
+20x smaller
+similar accuracy
+Scheduling
+relative-indexed
+blocked CSC
+Acceleration
+3x speedup
+11.5x lower energy
+Figure 2: ESE optimizes LSTM computation across
+algorithm, software and hardware stack.
+similar methodology could be easily applied to other types
+of recurrent neural networks.
+Despite its high prediction accuracy, LSTM is hard to deploy because of its high computation complexity and memory footprint, leading to high power consumption. Memory
+reference consumes more than two orders of magnitude more
+energy than ALU operations, thus we focus on optimizing
+the memory footprint.
+To reduce the memory footprint, we design a novel method
+to optimize across the algorithm, software and hardware
+stack: we ﬁrst optimize the algorithm by compressing the
+LSTM model to 5% of it’s original size (10% density and
+2× narrower weights) while retaining similar accuracy; then
+we develop a software mapping strategy to represent the
+compressed model in a hardware-friendly way; ﬁnally we design specialized hardware to work directly on the compressed
+LSTM model.
+The proposed ﬂow for eﬃcient deep learning inference
+is illustrated in Fig. 1.
+It shows a new paradigm for ef-
+ﬁcient deep learning inference, from Training=>Inference,
+to Training=>Compression=>Accelerated Inference, which
+has advantage of faster inference speed and energy eﬃciency
+ 
+compared with the conventional method. Using LSTM as a
+case study for the proposed paradigm, the design ﬂow is
+illustrated in Fig. 2.
+The main contributions of this work are
+1. We present an eﬀective model compression algorithm
+for LSTM, which is composed of pruning and quantization. We highlight our load-balance-aware pruning
+and automatic ﬂow for dynamic-precision data quantization.
+2. The recurrent nature of RNN and LSTM produces
+complicated data dependency, which is more challenging than feedforward neural nets. We design a scheduler that can eﬃciently schedule the complex LSTM
+operations with memory reference overlapped with computation.
+3. The irregular computation pattern after compression
+posed a challenge to hardware.
+We design a hardware architecture that can work directly on the sparse
+model. ESE achieves high eﬃciency by load balancing
+and partitioning both the computation and storage.
+ESE also supports processing multiple user’s speech
+data concurrently.
+4. We present an in-depth study of the LSTM and speech
+recognition system and optimize across the algorithm,
+software, hardware boundary. We jointly analyze the
+trade-oﬀbetween prediction accuracy and prediction
+BACKGROUND
+Speech recognition is the process of converting speech
+signals to a sequence of words.
+As shown in Fig. 3, the
+speech recognition system contains the front-end and backend units, where the front-end unit is used for extracting features from speech signals, and the back-end unit processes
+the features and converts speech to text. The back-end includes an acoustic model (AM), language model (LM), and
+decoder. Here, the Long Short-Term Memory (LSTM) recurrent neural network is used in the acoustic model.
+The feature vectors extracted from the front-end unit are
+processed by the acoustic model; then the decoder uses both
+acoustic and language models to generate the sequence of
+words by maximum a posteriori probability (MAP) estimation, which can be described as
+W = arg max
+P(W|X) = arg max
+P(X|W)P(W)
+where for the given feature vector X = X1X2 . . . Xn, the
+goal of speech recognition is to ﬁnd the word sequence ˆ
+W1W2 . . . Wm with maximum posterior probability P(W|X).
+Because X is ﬁxed, the above equation can be rewritten as
+W = arg max
+P(X|W)P(W)
+where P(X|W) and P(W) are the probabilities computed
+by acoustic and language models shown respectively in Fig. 3
+In modern speech recognition system, LSTM architecture
+is often used in large-scale acoustic modeling and for computing acoustic output probabilities.
+LSTM is the most
+computation and memory intensive part of the speech recognition pipeline. Thus we focus on accelerating the LSTM.
+Extraction
+Figure 3: The speech recognition pipeline.
+takes more than 90% of the total execution time in
+the whole computation pipeline.
+Figure 4: Data ﬂow of the LSTM model.
+The LSTM architecture is shown in Fig. 4, which is the
+same as the standard LSTM implementation . LSTM is
+one type of RNN, where the input at time T depends on
+the output at T −1.
+Compared to the traditional RNN,
+LSTM contains special memory blocks in the recurrent hidden layer. The memory cells with self-connections in memory blocks can store the temporal state of the network.
+The memory blocks also contain special multiplicative units
+called gates: input gate, output gate and forget gate. As in
+Fig. 4, the input gate i controls the ﬂow of input activations
+into the memory cell. The output gate o controls the output
+ﬂow into the rest of the network. The forget gate f scales
+the internal state of the cell before adding it as input to the
+cell, which can adaptively forget the cell’s memory.
+An LSTM network accepts an input sequence x = (x1; . . . ; xT ),
+and computes an output sequence y = (y1; . . . ; yT ) by using
+the following equations iteratively from t = 1 to T:
+it = σ(Wixxt + Wiryt−1 + Wicct−1 + bi)
+ft = σ(Wfxxt + Wfryt−1 + Wfcct−1 + bf)
+gt = σ(Wcxxt + Wcryt−1 + bc)
+ot = σ(Woxxt + Woryt−1 + Wocct + bo)
+yt = Wymmt
+Here the big O dot operator means element-wise multiplication, the W terms denote weight matrices (e.g. Wix is the
+matrix of weights from the input to the input gate), and
+Wic, Wfc, Woc are diagonal weight matrices for peephole
+connections. The b terms denote bias vectors, while σ is the
+logistic sigmoid function. The symbols i, f, o, c and m are
+respectively the input gate, forget gate, output gate, cell activation vectors and cell output activation vectors, and all
+of which are the same size. The symbols g and h are the cell
+input and cell output activation functions.
+MODEL COMPRESSION
+It has been widely observed that deep neural networks
+usually have a lot of redundancy .
+Getting rid of
+the redundancy doesn’t hurt prediction accuracy. From the
+hardware perspective, model compression is critical for saving the computation as well as the memory footprint, which
+means lower latency and better energy eﬃciency. We’ll discuss two steps of model compression that consist of pruning
+and quantization in the next three subsections.
+In the pruning phase we ﬁrst train the model to learn
+which weights are necessary, then prune away weights that
+are not contributing to the prediction accuracy; ﬁnally, we
+retrain the model given the sparsity constraint. The process
+is the same as . In step two, the saliency of the weight
+is determined by the weight’s absolute value: if the weight’s
+absolute value is smaller than a threshold, then we prune
+it away. The pruning threshold is empirical: pruning too
+much will hurt the accuracy while pruning at the right level
+Our pruning experiments are performed on the Kaldi speech
+recognition toolkit . The trade-oﬀcurve of the percentage of parameters pruned away and phone error rate (PER)
+is shown in Fig.6. The LSTM is evaluated on the TIMIT
+dataset . Not until we prune away more than 93% of parameters did the PER begin to increase dramatically. We
+further experimented on a proprietary dataset that is much
+larger: it has 1000 hours of training speech data, 100 hours
+of validation speech data, and 10 hours of test speech data.
+We ﬁnd that we can prune away 90% of the parameters without hurting word error rate (WER), which aligns with our
+result on the TIMIT dataset. In our later discussions, we
+use 10% density (90% sparsity).
+Load Balance-Aware Pruning
+On top of the basic deep compression method, we highlight our practical design considerations for hardware eﬃciency. To execute sparse matrix multiplication in parallel,
+we propose the load-balance-aware pruning method, which
+is very critical for better load balancing and higher utilization on the hardware.
+Pruning could lead to a potential problem of unbalanced
+non-zero weights distribution. The workload imbalance over
+PEs may cause a gap between the real performance and peak
+performance. This problem is further addressed in Section 4.
+Load-balance-aware pruning is designed to solve this problem and obtain hardware-friendly sparse network, which produces the same sparsity ratio among all the submatrices.
+During pruning, we make eﬀorts to avoid the scenario when
+the density of one submatrix is 5% while the other is 15%.
+Although the overall density is about 10%, the submatrix
+with a density of 5% has to wait for the other one with more
+computation, which leads to idle cycles. Load-balance-aware
+pruning assigns the same sparsity quota to submatrices, thus
+ensures an even distribution of non-zero weights.
+Unbalanced
+0 w4,2 w4,3
+Overall: 5 cycles
+Overall: 3 cycles
+Figure 5: Load Balance Aware Pruning and its Beneﬁt for Parallel Processing
+10% 20% 30% 40% 50% 60% 70% 80% 90% 100%
+Phone Error Rate
+Parameters Pruned Away
+with load balance
+without load balance
+Accuracy curve of load-balance-aware
+pruning and original pruning.
+In Fig. 5, the matrix is divided into four colors, and each
+color belongs to a PE for parallel processing.
+With conventional pruning, PE0 might have ﬁve non-zero weights
+while PE3 may have only one. The total processing time is
+restricted to the longest one, which is ﬁve cycles. With loadbalance-aware pruning, all PEs have three non-zero weights;
+thus only three cycles are necessary to carry out the operation. Both cases have the same non-zero weights in total,
+but load-balance-aware pruning needs fewer cycles. The difference of prediction accuracy with/without load-balanceaware pruning is very small, as shown in Fig. 6. There is
+some noise around 70% sparsity, so we focused our experiments around 90% sparsity, which is the sweet spot. We
+ﬁnd the performance is very similar.
+To show that load-balance-aware pruning still obtains comparable prediction accuracy, we compare it with original
+pruning on the TIMIT dataset. As demonstrated in Fig.6,
+the accuracy margin between two methods is within the variance of pruning process itself.
+Weight and Activation Quantization
+We further compressed the model by quantizing 32bit
+ﬂoating point weights into 12bit integer.
+We used linear
+quantization strategy on both the weights and activations.
+In the weight quantization phase, the dynamic ranges of
+weights for all matrices in each LSTM layer are analyzed
+ﬁrst, then the length of the fractional part is initialized to
+avoid data overﬂow.
+Table 1: Weight Quantization under diﬀerent Bits.
+Weight Matrices1
+W gifo x2 -4.9285
+W gifo r2 -0.6909
+1 Only weights in LSTM layers are qunantized.
+2 In Kaldi, Wcx, Wix, Wfx, Wox are saved together as W gifo x,
+and so does W gifo r mean.
+Table 2: Activation Function Lookup Table.
+Activation
+sampling range
+sampling points
+Sigmoid Input
+Tanh Input
+The activation quantization phase aims to ﬁgure out the
+optimal solution to the activation functions and the intermediate results. We built lookup tables and use linear interpolation for the activation functions, such as sigmoid and
+tanh, and analyze the dynamic range of their inputs to decide the sampling strategies. We also investigated the minimum amount of bits to maintain the accuracy.
+We explored diﬀerent data quantization strategies with
+LSTM trained under TIMIT corpus. Performing the weight
+and activation quantization, we can achieve 12bit quantization without any accuracy loss.
+The data quantization
+strategies are shown in Table .1, 2, 3. For the lookup tables of activation functions sigmoid and tanh, the sampling
+ranges are [-64, 64] and [-128, 128] respectively. The sampling points are both 2048, and the outputs are 16bit with
+15bit decimals. All the results are obtained using the Kaldi
+framework.
+For TIMIT, as shown in Table .4, the PER is 20.4% for
+the original network and changes to 20.7% after the pruning
+and ﬁne-tune procedure when 32-bit ﬂoating-point numbers
+are used. The PER remains as 20.7% without any accuracy
+loss under 16/12-bit quantization, and deteriorates to 84.5%
+while 8-bit quantization is employed.
+ENCODING AND COMPILING
+The LSTM computation includes sparse matrices multiplication, element-wise multiplication, and memory reference.
+We designed a data ﬂow scheduler to make full use of the
+hardware accelerator.
+align with DDR
+align with PCIE
+weight column
+relative index
+zero padding
+(weight column)
+encoded weight
+(encoded weight column)
+Figure 7: Encoding in CSC format and data align
+using zero-padding.
+Table 3: Other Activation Quantization.
+Activation
+LSTM Input
+Intermediate Results
+Table 4: PER Before and After Compression.
+Quantization Scheme
+Phone Error Rate %
+32bit ﬂoating original network
+32bit ﬂoating pruned network
+16bit ﬁxed pruned network
+12bit ﬁxed pruned network
+8bit ﬁxed pruned network
+Data is divided into n blocks by row where n is the number
+of PEs in one channels of our hardware accelerator. The ﬁrst
+n rows are put in n diﬀerent PEs. The n + 1 row is put in
+the ﬁrst PE again. This ensures that the ﬁrst part of the
+matrix will be read in the ﬁrst reading cycle and can be used
+in the next step computation immediately.
+Because of the sparsity of pruned matrices. We only store
+the nonzero number in weight matrices to save redundant
+We use relative row index and column pointer
+to help store the sparse matrix. The relative row index for
+each weight shows the relative position from the last nonzero
+weight. The column pointer indicates where the new column
+begins in the matrix. The accelerator will read the weight
+according to the column pointer.
+Considering the byte-aligned bit width limitation of DDR,
+we use 16bit data to store the weight. The quantized weight
+and relative row index are put together (i.e. 12bit for quantized weight and 4bit for relative row index).
+Fig.7 shows an example for the compressed sparse column
+(CSC) storage format and zero-padding method. We locate
+one column in the weight matrix through a pointer and calculate the absolute address of weights by accumulating relative indexes. In Fig. 8, we demonstrate the computation
+pattern using a simple example where the input vector has
+6 elements {a0,a1,a2,a3,a4,a5}, and the weight matrix contains 8×6 elements. There are 2 PEs calculating a3×w ,
+where a3 is the fourth element in the input vector and w 
+represents the fourth column in the weight matrix.
+HARDWARE IMPLEMENTATION
+In this section, we ﬁrst present challenges in hardware
+design and then propose the Eﬃcient Speech Recognition
+Engine (ESE) accelerator system and detail how ESE accelerates the sparse LSTM.
+Motivation
+computation
+weights in a column are assigned to 2 PEs, and every PE multiply-add their weights with the same
+element from the shared vector.
+computation time
+Figure 9: Imbalanced workload results in more waiting time.
+Although pruning and quantization can reduce the memory footprint, three new challenges are introduced. General
+purpose processors cannot implement these challenges eﬃciently.
+First, irregular computation is introduced by compression.
+After pruning, dense computation becomes sparse computation; After quantization, the weight and index are not bytealigned and must be grouped. We group the 4-bit pointer,
+and 12-bit weight into 2 bytes.
+Second, load imbalance introduced by sparsity will reduce
+the hardware eﬃciency. In the sparse LSTM, a single element in the voice vector will be consumed by multiple PEs.
+As a result, operations of all PEs have to be synchronized.
+It will create a long waiting period if some PEs have fewer
+non-zero weights, as shown in Fig.9.
+Moreover, general-purpose processors cannot fully exploit
+the parallelism in the compressed LSTM network. In the
+custom design, however, we have the freedom to take advantage of the parallelism of both the inter sparse SpMV
+operation and the intra SpMV operation.
+Many challenges exist in the specialized hardware accelerator design on FPGA. First, customized decoding circuits
+are needed to recover the original weight matrix. The index
+is relative, so accumulation is needed to recover the absolute
+index. We use only 4-bits to represent relative oﬀset. If a
+real oﬀset is more than 16, the largest oﬀset that 4 bits can
+represent, a padding zero is introduced.
+Second, data representation should be carefully designed.
+The data width of the PCIE interface, external DDR3 memory interface, and data itself are not aligned. Moreover, the
+dynamic-precision quantization makes hardware computation on diﬀerent data more complex and irregular. Bit shifts
+are necessary for diﬀerent layers.
+Third, a carefully designed scheduler/controller is needed.
+The LSTM network involves a complicated data ﬂow and
+many diﬀerent types of weights. Computations in the LSTM
+network have dependency on each other. Some computation
+can be executed concurrently, while other computation has
+to be executed sequentially. Moreover, the hardware design
+should support input vector sharing in the multi-channel system, which aims to perform multiple LSTM networks with
+diﬀerent voice vectors concurrently. Therefore, a carefully
+designed scheduler is necessary for a highly pipelined design,
+which can overlap the data communication and computation.
+System Overview
+Fig.10 (a) shows the overview architecture of the ESE
+system. It is a CPU+FPGA heterogeneous architecture to
+accelerate LSTM. The whole system can be divided into
+three parts: the hardware accelerator on a FPGA chip, the
+software program on CPU, and the external memory on the
+FPGA board.
+The software part consists of a CPU and host memory. It
+Table 5: Two types of LSTM operations: matrixvector multiplication and element-wise multiplication.
+SpMV Group
+ElemMul Group
+Wixxt, Wiryt−1
+Wfxxt, Wfryt−1
+Wcxxt, Wcryt−1
+ftct−1, itgt
+Woxxt, Woryt−1
+communicates with FPGA via the PCI-Express bus. In the
+initialization procedure, it sends parameters of the LSTM
+model to FPGA. It can transmit voice vectors and receive
+corresponding results if the hardware accelerator on FPGA
+The external memory together with the FPGA chip on
+one development board stores all the parameters and voice
+vectors. The on-chip BRAM is limited while the amount of
+data in the LSTM model is larger than it can hold. The
+accelerator accesses the DRAM through memory controller
+(MEM Controller), which is built using the memory interface
+generator (MIG) IP.
+On the FPGA chip, we put the ESE Accelerator, ESE
+Controller, PCIE Controller, MEM Controller, and On-chip
+The ESE Accelerator consists of Processing Elements (PEs) which take charge of the majority of computation tasks in the LSTM model. PE is the basic computation unit for a slice of voice vectors with partial weight matrix. Each ESE channel implements the LSTM network for
+one voice vector sequence independently. On-chip buﬀers,
+including input buﬀer and output buﬀer, prepare data to
+be consumed by PEs and store the generated results. The
+ESE Controller determines the behavior of other circuits on
+the FPGA chip.
+It schedules the PCIE/MEM Controller
+for data-fetch and the LSTM computation pipeline ﬂow of
+the ESE Accelerator. The accelerator reads parameters and
+voice vectors from, and writes computation results to, the
+DRAM memory. When the MEM Controller is in the idle
+state, the accelerator can read results currently stored in the
+memory and feed them to the software part.
+ESE Controller (Scheduler)
+The most expensive operations are sparse matrix vector
+multiplication (SpMV) and element-wise multiplication (ElemMul). We partition the operations involved in the LSTM
+network described by equations (1) to (6), into the such two
+operations, as shown in Table 5.
+LSTM is a complicated dataﬂow. We want to meet the
+data dependency and ensure more parallelism at the same
+time. Fig.11 shows the state machine in the ESE scheduler.
+It overlaps computation and memory reference. From state
+INITIAL to STATE 6, the ESE accelerator completes the
+computation of a LSTM. The ﬁrst three lines operations are
+fetching weights, pointers, and vectors/diagonal matrix/bias
+respectively to prepare for the next computation. Operations in the fourth line are matrix-vector multiplications,
+and in the ﬁfth line are element-wise multiplications (indigo
+blocks) or accumulations (orange blocks). Operations in the
+horizontal direction have to be executed sequentially, while
+those in the vertical direction can be executed concurrently.
+For example, we can calculate Wfryt−1 and it concurrently,
+External Memory
+PCIE Controller
+MEM Controller
+ESE Controller
+Input Buffer
+Output Buffer
+ESE Accelerator
+External Memory
+Software Program
+Adder Tree
+Channel with
+multiple PEs
+Act Buffer
+Weight Buffer
+Pointer Buffer
+Act Buffer
+Weight Buffer
+Pointer Buffer
+Act Buffer
+Weight Buffer
+Pointer Buffer
+Act Buffer
+Weight Buffer
+Pointer Buffer
+Figure 10: The Eﬃcient Speech Recognition Engine (ESE) accelerator system: (a) the overall ESE system
+architecture; (b) one channel with multiple processing elements (PEs).
+Computation
+Data Fetch
+Sparse matrix-vector multiplication by SpMV
+Element-wise multiplication by ElemMul
+Accumulate operations by Adder Tree
+N/A Idle state
+Fetch data for the next operation
+Figure 11: The state ﬂow of the ESE accelerator system: operations in the horizontal direction and vertical
+direction are executed sequentially and concurrently respectively.
+because the two operations are not dependent on each other
+in the LSTM network, and they can be executed by two independent computation units. Wiryt−1/Wicct−1 and it have
+to be executed sequentially, because it is dependent on the
+former operations in LSTM network.
+Wixxt and Wfxxt are not dependent on each other in the
+LSTM network, but they cannot be calculated concurrently
+because they have resource conﬂict. Weights are stored in
+one piece of DDR3 memory because even after compression
+the real world network cannot ﬁt in the limited block RAM
+(4.25MB). Other parameters and input vector are stored in
+the other piece of DDR3 memory. Pointers are required for
+the same computations as weights, because we use pointers to look up weights in the compressed LSTM network.
+But the memory overhead necessary to store the pointers is
+small. Note that x, bias b and diagonal matrix Wc are not
+accessed at the same time, and all these parameters have
+a relatively small quantity. Therefore, pointers, vectors, diagonal matrix and bias can be stored in the same external
+memory and prepared accordingly during weight fetching
+The latency of the element-wise operations and non-linear
+functions is not on the critical path. These operations are
+executed in parallel with the matrix-vector multiplication
+and weights-fetching.
+ESE Channel Architecture
+Fig.10 (b) shows the architecture of one ESE channel with
+multiple PEs.
+It is composed of Activation Queue (ActQueue), Sparse Matix-vector Multiplier (SpMV), Accumulator, Element-wise Multiplier (ElemMul), Adder Tree, Sigmoid/Tanh Units and local buﬀers.
+Activation Vector Queue (ActQueue).
+consists of several FIFOs. Each FIFO stores some elements
+of the input voice vector aj for each PE. ActQueue is shared
+by all the PEs in one channel, while each FIFO is owned by
+each PE independently.
+ActQueue is used for decoupling the imbalanced workload among diﬀerent PEs. Load imbalance arises when the
+number of multiply accumulation operations performed by
+every PE is diﬀerent, due to the imbalanced sparsity. Those
+PEs with fewer computation tasks have to wait until the
+PE with the most computation tasks ﬁnishes. Thus if we
+have a FIFO, the fast PE can fetch a new element from the
+FIFO and won’t need to be blocked by slow PEs. The data
+width of FIFO is 16-bit, the depth is adjusted from 1 to 16
+to investigate its eﬀects on the latency, and the results are
+discussed in the experiment section. These FIFOs are built
+on the distributed RAM on chip.
+Sparse Matrix Read (SpmatRead).
+Pointer Read
+Unit (PtrRead) and Sparse Matrix Read (SpmatRead) manage the encoded weight matrix storage and output.
+start and end pointers pj and pj+1 for column j determine
+the start location and length of elements in one encoded
+weight column that should be fetched for each element of
+a voice vector.
+SpmatRead uses pointers pj and pj+1 to
+look up the non-zero elements in weight column j.
+PtrRead and SpmatRead consist of ping-pong buﬀers. Each
+buﬀer can store 512 16-bit values and is implemented with
+block rams. Each 16-bit data in SpmatRead buﬀers consists
+of a 4-bit index and a 12-bit weight. Here are the four basic
+components.
+Sparse Matrix-vector Multiplication (SpMV). Each
+element in the voice vector is multiplied by its corresponding weight column. Multiplication results in the same row
+of all new vectors are summed to generate an element in the
+result vector, which is a local reduction. In ESE, SpMV
+multiplies an element from the input activation by a column
+of weight, and the current partial result is written into the
+partial result buﬀer ActBuffer. Accumulator Accu sums
+the new output of SpMV and previous data stored in Act
+Buﬀer. The multiplier instantiated in the design can perform 16bitx12bit functions.
+Element-wise Multiplication (ElemMul). ElemMul
+in Fig.10 (b) generates one vector by consuming two vectors.
+Each element in the output vector is the element-wise multiplication of two input vectors.
+There are 16 multipliers
+instantiated for element-wise multiplications per channel.
+Adder Tree. AdderTree performs summation by consuming the intermediate data produced by other units or
+bias data from input buﬀer.
+Sigmoid/Tanh.
+SigmoidandTanh units are the nonlinear modules applied as activation functions to some intermediate summation results.
+Here we explain how ESE computes it.
+In the initial
+state, PE receives weight Wix, pointers P and voice vector x. Then SpMV calculates WixXt in the ﬁrst phase of
+Wiryt−1 and Wicct−1 are generated by SpMV
+and ElemMul respectively in the ﬁrst phase of STATE 2. In
+the second phase of STATE 2, Adder Tree accumulates these
+output and bias data from the input buﬀer and then the
+following non-linear activation function unit Sigmoid/Tanh
+produces intermediate data it. PE will fetch required parameters in the previous phase to overlap with the computation. The other LSTM network operations are similar. In
+Fig.11, either SpMV or ElemMul is in the idle state at some
+phases. This is because both matrix-vector multiplication
+and element-wise multiplication consume weight data, while
+PE cannot pre-fetch enough weight data for both computations in the period of one phase.
+Memory System
+In the hardware design, on-chip buﬀers are built upon a
+basic idea of double-buﬀering, in which double buﬀers are
+operated in a ping-pong manner to overlap data transfer
+with computation. We use two pieces of 4GB DDR3 DRAMs
+as the oﬀ-chip memory, named DDR 1 and DDR 2 in Fig.12,
+and design a memory controller (MEM Controller). Fig.12
+shows the MEM Controller architecture. On the one hand,
+it receives instructions from the ESE Controller and schedules the data ﬂow among the ESE accelerator, PCIE interface, and DDR3 interface. On the other hand, it rearranges
+received data into structures required by the destination interface. We take the data ﬂow of result y as an example.
+Data y at the output port of PE is 16-bit wide, while the
+FIFO_WR_W128_
+FIFO_RD_W512_
+Y_ASSEMBLE
+(16BIT–128BIT)
+FIFO_WR_W128_
+FIFO_RD_W512_
+FIFO_WR_W128_
+DDR_1_Controller
+DDR_2_Controller
+FIFO_W512_
+PE DATA BUS
+Figure 12: Memory management unit.
+PCIE interface is 128-bit wide. In order to increase the data
+transmission speed, we assemble eight 16-bit data into one
+128-bit value by Y ASSEMBLE unit. Then the value will
+be stored in DDR 1 temporarily and fed back to the software via PCIE interface when both PCIE and DDR 1 are
+in idle state. The behavior described above is shown as the
+green arrow line in Fig.12. Similarly, vector x is split into
+32 16-bit values from a 512-bit value through asynchronous
+FIFOs. Moreover, asynchronous FIFOs, FIFO WR XX and
+FIFO RD XX also play an important role of asynchronous
+clock domains isolation.
+EXPERIMENTAL RESULTS
+In this section, the performance of the hardware system
+is evaluated. First, we introduce the environment setup of
+our experiments. Then, hardware resource utilization and
+comprehensive experimental results are provided.
+Experimental Setup
+The proposed ESE hardware system is built on XCKU060
+FPGA running at 200 MHz.
+Two external 4GB DDR3
+DRAMs are used. Our host program is responsible for sending parameters and vectors into the programmable logic
+part, and collecting corresponding results.
+We use the TIMIT dataset to evaluate the performance
+of model compression. TIMIT is an acoustic-phonetic continuous speech corpus. It contains broadband recordings of
+630 speakers of eight major dialects of American English,
+each reading ten phonetically rich sentences. We also use
+a proprietary, much larger speech recognition dataset that
+contains 1000 hours of training data, 100 hours of validation
+data and 10 hours of test data.
+Our baseline software program runs on i7-5930k CPU and
+Pascal Titan X GPU. We use MKL BLAS / cuBLAS on
+CPU / GPU for dense matrix operation implementations,
+and MKL SPARSE / cuSPARSE on CPU / GPU for sparse
+matrix implementations.
+Resource Utilization
+Table 6 shows the resource utilization for our ESE design
+conﬁgured with 32 channels, and each channel has 32 PEs on
+XCKU060 FPGA. The ESE accelerator design almost fully
+Table 6: ESE Resource Utilization.
+1 LUTRAM is 64b each, BRAM is 36Kb each.
+Utilization
+(Busy Cycles /
+Total Cycles)
+Figure 13: FIFO improves load balancing and decreases latency. The ALU utilization is more than
+90% when FIFO depth is 8 for load balancing.
+utilizes the FPGA’s hardware resource.
+We conﬁgured each channel with 32 PEs, which is determined by balancing computation and data transfer.
+required that the speed of data transfer is no less than that
+of computation in order not to starve the DSP. As a result,
+we get Equation ??. The expression to the left of the equal
+sign means that the amount of computations is divided by
+the computation speed. Multiplied by 2 in the numerator
+part means each piece of data needs multiplication and accumulation operations, and that in the denominator part indicates twice multiply-accumulate operations for 2 bytes (16bit). ESE implements the multiply-accumulate operation in
+a pipeline manner. The expression to the right represents
+the cycles that ESE fetch the required amount of data from
+external memory.
+In our hardware implementation, both
+the frequencies of PE and memory interface controller are
+200MHz. The width of external DRAM is 512-bit. Therefore, the proper number of PEs per channel is 32.
+data size × compress ratio × 2
+PE num × 2 × freq PE
+≥data size × compress ratio × 16bit
+ddr width × freq ddr
+FIFO Depth. ESE uses FIFO to decouple the PEs and
+solves the load imbalance problem.
+Load imbalance here
+means the number of non-zero weight assigned to every PE
+is diﬀerent. The FIFO for each PE reduces the waiting time
+for PEs with fewer computations. We adjust the cache depth
+to investigate its eﬀect. The FIFO width is 16-bit, and its
+depth is set at 1, 4, 8, 16. In Fig.13, when the FIFO depth is
+one (no FIFO), the utilization, which is deﬁned as busy cycle
+divided by total cycles, is low (80%) due to load imbalance.
+When the FIFO depth is 4, the utilization is above 90%.
+When the FIFO depth is increased to 8 and 16, the utilization increased but has a marginal gain. Thus we choose the
+FIFO depth to be 8. Note that even when the FIFO depth
+is 8, the last matrix (Wym) still has low utilization. This is
+because that matrix has very few rows and each PE has few
+elements, and thus the FIFO cannot fully solve this problem
+for this matrix.
+Accuracy, Speed and Energy Efﬁciency
+We evaluate the trade-oﬀbetween accuracy and speedup
+of ESE in Fig.15. The speedup increases as more parameters
+get pruned away. The sparse model which is pruned to 10%
+Table 7: Power consumption of diﬀerent platforms.
+Figure 14: Measured at the socket, the total power
+consumption of the machine with FPGA fully loaded
+is 132W. Without FPGA the idle machine consumes
+91W. Subtracting the two, ESE consumes 41W.
+achieved 6.2× speedup over the dense baseline model. Comparing the red and green lines, we ﬁnd that load-balanceaware pruning improves the speedup from 5.5× to 6.2×.
+We measured power consumption of CPU, GPU and ESE.
+CPU power is measured by the pcm-power utility. GPU
+power is measured with nvidia-smi utility. We measure
+the power consumption of ESE by taking diﬀerence with
+/ without the FPGA board installed. ESE takes 41 watts;
+CPU takes 111 watts (38 watts when using MKLSparse) and
+GPU takes 202 watts (136 watts when using cuSparse).
+The performance comparison of LSTM on ESE, CPU,
+and GPU is shown in Table 8. The CPU implementation
+used MKL BLAS and MKL SPBLAS for dense/sparse implementation, and the GPU implementation used cuBlas
+and cuSparse. We optimized the CPU/GPU speed by combining the four matrices of the i, f, o, c gates that have
+no dependency into one large matrix. Both mklSparse and
+cuSparse implementation results in signiﬁcant lower utilization of peak CPU/GPU performance for the interested matrix size (relatively small) and sparsity (around 10% nonzeros).
+We implemented the whole LSTM on ESE. The
+model was pruned to 10% non-zeros. There are 11.2% nonzeros taking padding zeros into account. On ESE, the total throughput is 282 GOPS with the sparse LSTM, which
+corresponds to 2.52 TOPS on the dense LSTM. Processing
+the LSTM with 1024 hidden elements, ESE takes 82.7 us,
+CPU takes 6017.3/3569.9 us (dense/sparse), and GPU takes
+240.2/287.4 us (dense/sparse). With batch=32, CPU sparse
+is faster than dense because CPU is good at serial processing, while GPU sparse is slower than dense because GPU is
+throughput oriented. With no batching, we observed both
+CPU and GPU are faster for the sparse LSTM because the
+saving of memory bandwidth is more salient.
+Performance wise, ESE is 43× faster than CPU 3× faster
+than GPU. Considering both performance and power consumption, ESE is 197.0×/40.0× (dense/sparse) more energy
+eﬃcient than CPU, and 14.3×/11.5× (dense/sparse) more
+energy eﬃcient than GPU. Sparse LSTM makes both CPU
+and GPU more energy eﬃcient as well, which shows the advantage of our pruning technique.
+Table 8: Performance comparison of running LSTM on ESE, CPU and GPU
+ESE on FPGA (ours)
+Sparsity Compres. Theoreti.
+Real Comput. Real Comput.
+Comput. Comput. Operat. Perform. Operat. Perform.
+(Bytes)2 Time (µs) Time (µs) (GOP) (GOP/s) (GOP) (GOP/s)
+Sparse Dense Sparse
+1518.43 670.4
+3225.04 2288.0
+3569.9 240.3
+1 Pruned with 10% sparsity, but padding zeros incurred about 1% more non-zero weights.
+2 Sparse matrix index is included, and weight takes 12 bits, index takes 4 bits => 2 Bytes per weight in total.
+3 Concatenating Wix, Wfx, Wcx and Wox into one large matrix Wifoc x, whose size is 4096×153.
+4 Concatenating Wir, Wfr, Wcr and Wor as one large matrix Wifoc r, whose size is 4096×512. These matrices don’t have dependency
+and combining matrices can achieve 2× speedup on GPU due to better utilization.
+RELATED WORK
+Deep Compression Deep Compression is a method
+that can compress convolutional neural network models by
+35x-59x without hurting the accuracy.
+It is comprised of
+pruning, weight sharing and Huﬀman coding. However, the
+compression rate targets CNN and image recognition.
+this work we target LSTM and speech recognition.
+method also diﬀers from the previously proposed ‘Deep Compression’ in that we proposed load-balance-aware pruning.
+During pruning, we enforce each row has the same amount
+of weight to enforce hardware load balancing. During quantization, we use linear quantization instead of non-linear
+quantization, which is simpler but has smaller compression
+We also eliminate the Huﬀman Coding step which
+introduces extra decoding overhead but marginal gain.
+CNN Accelerators Many custom accelerators have been
+proposed for CNNs.
+DianNao implements an array of
+multiply-add units to map large DNN onto its core architecture. Due to limited SRAM resource, the oﬀ-chip DRAM
+traﬃc dominates the energy consumption. DaDianNao 
+and ShiDianNao eliminate the DRAM access by having all weights on-chip (eDRAM or SRAM). However, these
+DianNao-series architectures are proposed to accelerate CNNs,
+and the weights are uncompressed and stored in the dense
+format. In this work, we target LSTM neural network and
+speech recognition, and data compression is also supported
+in our ESE architecture. Our work in this paper also distinguishes itself from Angel-Eye architecture, which also has
+the compression, compilation and acceleration, but it is accelerating CNNs, not LSTMs .
+EIE Accelerator The EIE architecture proposed by Han
+et al. can performs inference on compressed network
+model and accelerates the resulting sparse matrix-vector multiplication with weight sharing. With only 600mW power
+consumption, EIE can achieve 102 GOPS processing power
+on a compressed network corresponding to 3 TOPS/s on an
+uncompressed network, which is 24000× and 3400× more
+energy eﬃcient than a CPU and GPU respectively. EIE is a
+general building block for deep neural network, not specially
+designed for LSTM and speech recognition; ESE in this paper targets LSTM. ESE has diﬀerent design constrains on
+FPGA while EIE is for ASIC, which leads diﬀerent design
+considerations. Besides, EIE uses codebook-based quantization, which has better compression ratio; ESE uses linear
+Parameters Pruned Away
+with load balance
+without load balance
+6.2x speedup
+over dense
+5.5x speedup
+over dense
+Figure 15:
+Computation latency decreases as the
+sparsity increases. Running the sparse model is 4.2×
+faster over the dense model, both run on ESE. Load
+balance aware pruning helps speedup.
+quantization, which is easier to implement.
+Sparse Matrix-Vector Multiplication Accelerators
+To pursue a better computational eﬃciency on machine learning and deep learning, several recent works focus on using
+FPGA as an accelerator for Sparse Matrix-Vector Multiplication (SpMV). Zhuo et al. proposed an FPGA-based
+design on Virtex-II Pro for SpMV. Their design outperforms
+general-purpose processors.
+Fowers et al. proposed a
+novel sparse matrix encoding and an FPGA-optimized architecture for SPMV. With lower bandwidth, it achieves 2.6×
+and 2.3× higher power eﬃciency over CPU and GPU respectively while having lower performance due to lower memory
+bandwidth. Dorrance et al. proposed a scalable SMVM
+kernel on Virtex-5 FPGA. It outperforms CPU and GPU
+counterparts with >300× computational eﬃciency and has
+38-50× improvement in energy eﬃciency. For compressed
+deep networks, previously proposed SpMV accelerators can
+only exploit the static weight sparsity. In this paper, we use
+the relative indexed compressed sparse column (CSC) format for data storing, and we develop a scheduler which can
+map a complicate LSTM network on ESE accelerator.
+GRU on FPGA Nurvitadhi et al presented a hardware accelerator for Gated Recurrent Network (GRU) on
+Stratix V and Arria 10 FPGAs . This work shows that
+FPGA can provide superior performance/Watt over CPU
+and GPU. In our work, we present a FPGA accelerator
+for LSTM network. It also demonstrates a higher eﬃciency
+FPGA comparing with CPU and GPU. Diﬀerent from theirs,
+ESE is especially designed for accelerating sparse LSTM
+LSTM on FPGA In order to explore the parallelism for
+RNN/LSTM, Chang presented a hardware implementation
+of LSTM network on Zynq 7020 FPGA from Xilinx with
+2 layers and 128 hidden units in hardware . The implementation is 21 times faster than the ARM Cortex-A9 CPU
+embedded on the Zynq 7020 FPGA. Lee accelerated RNNs
+using massively parallel processing elements (PEs) for low
+latency and high throughput on FPGA . These implementations did not support sparse LSTM network, while our
+ESE can achieve more speed up by supporting sparse LSTM.
+CONCLUSION
+In this paper, we present Eﬃcient Speech Recognition Engine (ESE) that works directly on compressed sparse LSTM
+ESE is optimized across the algorithm-hardware
+boundary: we ﬁrst propose a method to compress the LSTM
+model by 20× without sacriﬁcing the prediction accuracy,
+which greatly saves the memory bandwidth of FPGA implementation.
+Then we design a scheduler that can map
+the complex LSTM operations on FPGA and achieve parallelism. Finally we propose a hardware architecture that
+eﬃciently deals with the irregularity caused by compression.
+Working directly on the compressed model enables
+ESE to achieve 282 GOPS (equivalent to 2.52 TOPS for
+dense LSTM) on Xilinx XCKU060 FPGA board. ESE outperforms Core i7 CPU and Pascal Titan X GPU by factors
+of 43× and 3× on speed, and it is 40× and 11.5× more
+energy eﬃcient than the CPU and GPU respectively.
+ACKNOWLEDGMENT
+This work was supported by National Natural Science
+Foundation of China (No.61373026, 61622403, 61261160501).
+We would like to thank Wei Chen, Zhongliang Liu, Guanzhe
+Huang, Yong Liu, Yanfeng Wang, Xiaochuan Wang and
+other researchers from Sogou for their suggestions and providing real-world speech data for model compression performance test.
